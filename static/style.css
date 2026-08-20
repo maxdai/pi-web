@@ -317,6 +317,49 @@ body {
   font-weight: 600;
 }
 
+#status {
+  display: none;
+  padding: 4px 12px;
+  border-top: 1px solid var(--border);
+}
+
+.status-indicator {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.status-indicator .spinner {
+  width: 12px;
+  height: 12px;
+  border: 2px solid rgba(138, 190, 183, 0.3);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.status-indicator.retry .spinner {
+  border-color: rgba(255, 255, 0, 0.3);
+  border-top-color: var(--warning);
+}
+
+.status-indicator.compaction .spinner {
+  border-color: rgba(138, 190, 183, 0.3);
+  border-top-color: var(--accent);
+}
+
+.status-indicator.branch .spinner {
+  border-color: rgba(138, 190, 183, 0.3);
+  border-top-color: var(--accent);
+}
+
 #footer {
   border-top: 1px solid var(--border);
   padding: 8px 12px;

@@ -6,6 +6,7 @@ class PiWebClient {
     this.ws = null;
     this.contentEl = document.getElementById('content');
     this.statusEl = document.getElementById('conn-status');
+    this.statusAreaEl = document.getElementById('status');
     this.footerEl = document.getElementById('footer-line');
     this.inputEl = document.getElementById('input');
 
@@ -23,6 +24,14 @@ class PiWebClient {
 
     // Last known state (model, autoCompaction, etc.) for stats rendering
     this.lastState = null;
+
+    // Status indicator state (working/retry/compaction/branch summary)
+    this.status = {
+      working: 0,
+      retry: null,
+      compaction: null,
+      branch: false,
+    };
 
     this.connect();
     this.bindInput();
@@ -318,6 +327,8 @@ class PiWebClient {
   renderEvent(ev) {
     switch (ev.type) {
       case 'agent_start':
+        this.status.working++;
+        this.updateStatusDisplay();
         break;
       case 'message_start':
         this.onMessageStart(ev.message);
@@ -339,6 +350,8 @@ class PiWebClient {
         break;
       case 'agent_settled':
         this.resetStreaming();
+        if (this.status.working > 0) this.status.working--;
+        this.updateStatusDisplay();
         break;
       case 'turn_start':
         break;
@@ -346,6 +359,38 @@ class PiWebClient {
         break;
       case 'agent_end':
         this.resetStreaming();
+        if (this.status.working > 0) this.status.working--;
+        this.updateStatusDisplay();
+        break;
+      case 'auto_retry_start':
+        this.status.retry = {
+          attempt: ev.attempt,
+          maxAttempts: ev.maxAttempts,
+          delayMs: ev.delayMs,
+        };
+        this.updateStatusDisplay();
+        break;
+      case 'auto_retry_end':
+        this.status.retry = null;
+        this.updateStatusDisplay();
+        break;
+      case 'compaction_start':
+        this.status.compaction = ev.reason || 'manual';
+        this.updateStatusDisplay();
+        break;
+      case 'compaction_end':
+        this.status.compaction = null;
+        this.updateStatusDisplay();
+        break;
+      case 'summarization_retry_attempt_start':
+        if (ev.source === 'branchSummary') {
+          this.status.branch = true;
+          this.updateStatusDisplay();
+        }
+        break;
+      case 'summarization_retry_finished':
+        this.status.branch = false;
+        this.updateStatusDisplay();
         break;
       default:
         break;
@@ -390,6 +435,43 @@ class PiWebClient {
 
   resetStreaming() {
     this.streaming = { active: false, el: null, role: 'assistant' };
+  }
+
+  // ------------------------------------------------------------------
+  // Status indicator
+  // ------------------------------------------------------------------
+
+  updateStatusDisplay() {
+    if (!this.statusAreaEl) return;
+
+    let kind = null;
+    let text = '';
+
+    if (this.status.compaction) {
+      kind = 'compaction';
+      text = this.status.compaction === 'manual' ? 'Compacting context...' : 'Auto-compacting...';
+    } else if (this.status.retry) {
+      kind = 'retry';
+      const secs = Math.ceil((this.status.retry.delayMs || 0) / 1000);
+      text = `Retrying (${this.status.retry.attempt}/${this.status.retry.maxAttempts}) in ${secs}s... (to cancel)`;
+    } else if (this.status.branch) {
+      kind = 'branch';
+      text = 'Summarizing branch... (to cancel)';
+    } else if (this.status.working > 0) {
+      kind = 'working';
+      text = 'Working...';
+    }
+
+    if (!kind) {
+      this.statusAreaEl.innerHTML = '';
+      this.statusAreaEl.style.display = 'none';
+      return;
+    }
+
+    this.statusAreaEl.style.display = 'block';
+    this.statusAreaEl.innerHTML =
+      `<div class="status-indicator ${kind}"><span class="spinner"></span><span class="status-text"></span></div>`;
+    this.statusAreaEl.querySelector('.status-text').textContent = text;
   }
 
   // ------------------------------------------------------------------
