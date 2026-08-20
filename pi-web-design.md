@@ -330,10 +330,25 @@ pi --session <id> --mode rpc
 - 服务端：增加 `extension_ui_response` 命令，把浏览器响应转发给 Pi RPC。
 - 前端：扩展现有 modal 组件，支持多种交互类型。
 
-### 6.16 暂不做（后续可加）
+### 6.16 待完善事项（暂不做，后续可加）
+
+#### RPC 模式限制导致的无法显示项
+
+Pi RPC 模式不支持「工厂函数 / 自定义组件」类 UI，导致以下 TUI 内容无法在 Web 端显示：
+
+- **`/ctx-status` 自定义弹窗**（magic-context）
+  - TUI 中通过 `ctx.ui.custom()` 显示 `StatusDialogComponent` 居中弹窗。
+  - RPC 模式 `custom()` 是 no-op，且 `hasUI` 误判为 true，导致内容既不弹窗也不走 fallback，完全丢失。
+- **`/todos` 常驻面板**（magic-context TodoOverlay）
+  - TUI 中通过 `ctx.ui.setWidget(key, factory, { placement: "aboveEditor" })` 显示常驻 todos 面板。
+  - RPC 模式 `setWidget` 只支持字符串数组，工厂函数被忽略，不发出任何事件。
+  - 注意：`/todos` 命令的一次性 notify 弹窗是正常支持的。
+
+> 解决方向：需 Pi 或 magic-context 支持在 RPC 模式下序列化这些自定义组件内容（例如让 `hasUI` 正确为 false 以走 fallback，或让 `custom()`/`setWidget()` 输出渲染文本）。
+
+#### 其他暂不做
 
 - `/login`、`/logout` 等认证命令（RPC 不支持，需在 TUI 中操作）
-- `ctx.ui.custom()` 自定义弹窗（RPC 模式不支持）
 - Context 文件列表 / Themes 展示
 - 多用户 / 鉴权
 - TUI 组件复用（TUI 是终端渲染，不能直接复用）
