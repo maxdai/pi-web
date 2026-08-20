@@ -305,9 +305,20 @@ pi --session <id> --mode rpc
   - 用户可选择命令插入输入框。
   - MVP 先只做提示/选择，暂不执行斜杠命令（后续再加）。
 
-### 6.14 暂不做（后续可加）
+### 6.14 内置斜杠命令支持（已确认）
 
-- 斜杠命令执行
+- `/` 菜单数据源 = `get_commands` 返回的扩展/prompt/skill 命令 + **内置命令列表**（前端内置）。
+- **可执行的内置命令**：
+  - `/model` → 打开模型选择面板（等同点击 footer 的 model）。
+  - `/thinking` → 打开 thinking 选择面板（等同点击 footer 的 thinking）。
+  - `/compact` → 发送 `compact` RPC 命令。
+  - `/name` → 提示输入名称并发送 `set_session_name`。
+- **暂不支持的内置命令**（如 `/login`、`/logout`、`/settings` 等）：在菜单中显示但标记"暂不支持"或隐藏。
+- 点击 footer 的 model / thinking 文字也打开对应选择面板。
+
+### 6.15 暂不做（后续可加）
+
+- `/login`、`/logout` 等认证命令（RPC 不支持，需在 TUI 中操作）
 - Context 文件列表 / Themes 展示
 - 多用户 / 鉴权
 - TUI 组件复用（TUI 是终端渲染，不能直接复用）
