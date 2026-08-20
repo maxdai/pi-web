@@ -273,6 +273,12 @@ class PiWebClient {
     for (const entry of items) {
       if (entry.type === 'message') {
         this.renderMessage(entry.message);
+      } else if (entry.type === 'branch_summary') {
+        this.renderBranchSummary(entry);
+      } else if (entry.type === 'compaction') {
+        this.renderCompaction(entry);
+      } else if (entry.type === 'custom' || entry.type === 'custom_message') {
+        this.renderCustom(entry);
       }
     }
     this.scrollToBottom();
@@ -318,6 +324,96 @@ class PiWebClient {
       this.setToolOutput(div, this.resultText(message));
       this.toolEls.delete(message.toolCallId);
     }
+  }
+
+  // ------------------------------------------------------------------
+  // Special message blocks (branch/compaction/custom)
+  // ------------------------------------------------------------------
+
+  renderBranchSummary(entry) {
+    const label = '[branch]';
+    const summary = entry.summary || '';
+    const div = this.createSpecialBlock(label);
+    this.updateSpecialBlock(div, {
+      collapsedText: 'Branch summary (click to expand)',
+      expandedHtml: this.renderMarkdown(`**Branch Summary**\n\n${summary}`),
+    });
+  }
+
+  renderCompaction(entry) {
+    const label = '[compaction]';
+    const summary = entry.summary || '';
+    const tokens = entry.tokensBefore ? entry.tokensBefore.toLocaleString() : '?';
+    const div = this.createSpecialBlock(label);
+    this.updateSpecialBlock(div, {
+      collapsedText: `Compacted from ${tokens} tokens (click to expand)`,
+      expandedHtml: this.renderMarkdown(`**Compacted from ${tokens} tokens**\n\n${summary}`),
+    });
+  }
+
+  renderCustom(entry) {
+    const customType = entry.customType || 'custom';
+    const label = `[${customType}]`;
+    const content = this.customEntryText(entry);
+    const div = this.createSpecialBlock(label);
+    this.updateSpecialBlock(div, {
+      collapsedText: `${customType} (click to expand)`,
+      expandedHtml: this.renderMarkdown(content),
+    });
+  }
+
+  customEntryText(entry) {
+    if (typeof entry.content === 'string') return entry.content;
+    if (Array.isArray(entry.content)) {
+      return entry.content
+        .filter((c) => c.type === 'text')
+        .map((c) => c.text)
+        .join('\n');
+    }
+    if (entry.data !== undefined) {
+      return JSON.stringify(entry.data, null, 2);
+    }
+    return '';
+  }
+
+  createSpecialBlock(label) {
+    const div = document.createElement('div');
+    div.className = 'special-block';
+    div.dataset.expanded = 'false';
+    const labelEl = document.createElement('div');
+    labelEl.className = 'special-label';
+    labelEl.textContent = label;
+    const body = document.createElement('div');
+    body.className = 'special-body';
+    div.appendChild(labelEl);
+    div.appendChild(body);
+    div.addEventListener('click', () => this.toggleSpecial(div));
+    this.contentEl.appendChild(div);
+    return div;
+  }
+
+  updateSpecialBlock(div, { collapsedText, expandedHtml }) {
+    div.dataset.collapsedText = collapsedText;
+    div.dataset.expandedHtml = expandedHtml;
+    this.applySpecialBlock(div);
+  }
+
+  applySpecialBlock(div) {
+    const body = div.querySelector('.special-body');
+    if (!body) return;
+    const expanded = div.dataset.expanded === 'true';
+    if (expanded) {
+      body.innerHTML = div.dataset.expandedHtml || '';
+    } else {
+      body.textContent = div.dataset.collapsedText || '';
+    }
+  }
+
+  toggleSpecial(div) {
+    const expanded = div.dataset.expanded === 'true';
+    div.dataset.expanded = expanded ? 'false' : 'true';
+    div.classList.toggle('expanded', !expanded);
+    this.applySpecialBlock(div);
   }
 
   clearContent() {

@@ -170,6 +170,35 @@ body {
   color: var(--warning, #ffff00);
 }
 
+.special-block {
+  background: #2d2838;
+  margin: 4px 0;
+  padding: 6px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.special-block .special-label {
+  color: #9575cd;
+  font-weight: bold;
+  font-size: 12px;
+  margin-bottom: 4px;
+}
+
+.special-block .special-body {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.special-block .special-body > *:first-child {
+  margin-top: 0;
+}
+
+.special-block .special-body > *:last-child {
+  margin-bottom: 0;
+}
+
 .thinking {
   color: var(--thinking);
   font-style: italic;
