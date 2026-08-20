@@ -19,8 +19,14 @@ class PiWebClient {
     // Tool call rendering state: map toolCallId -> element
     this.toolEls = new Map();
 
+    // Last known state (model, autoCompaction, etc.) for stats rendering
+    this.lastState = null;
+
     this.connect();
     this.bindInput();
+
+    // Periodically refresh token/context stats (TUI updates these live)
+    setInterval(() => this.getStats(), 5000);
   }
 
   connect() {
@@ -77,6 +83,9 @@ class PiWebClient {
       case 'history':
         this.renderHistory(data.data);
         break;
+      case 'stats':
+        this.renderStats(data.data, this.lastState);
+        break;
       case 'models':
         break;
       case 'thinking_levels':
@@ -102,6 +111,7 @@ class PiWebClient {
 
   renderState(state) {
     if (!state) return;
+    this.lastState = state;
 
     // First footer line: pwd (branch) • session name
     const pwd = state.cwd || '';
@@ -110,13 +120,18 @@ class PiWebClient {
     this.footerEl.textContent = `${pwd}${branch}${name}`;
 
     // Second footer line: TUI-like stats + model info
+    this.renderStats(state.sessionStats, state);
+  }
+
+  renderStats(stats, state) {
     const statsEl = document.getElementById('footer-stats');
     if (!statsEl) return;
+    if (!state) state = this.lastState;
+    if (!state) return;
 
     const parts = [];
 
     // Token/cost stats from sessionStats (if available)
-    const stats = state.sessionStats;
     if (stats && stats.tokens) {
       const t = stats.tokens;
       if (t.input) parts.push(`↑${this.formatTokens(t.input)}`);
@@ -155,6 +170,10 @@ class PiWebClient {
     }
 
     statsEl.textContent = parts.join(' ');
+  }
+
+  getStats() {
+    this.send({ type: 'get_stats' });
   }
 
   formatTokens(count) {
@@ -211,6 +230,7 @@ class PiWebClient {
         break;
       case 'agent_settled':
         this.resetStreaming();
+        this.getStats();
         break;
       case 'turn_start':
         break;
@@ -218,6 +238,7 @@ class PiWebClient {
         break;
       case 'agent_end':
         this.resetStreaming();
+        this.getStats();
         break;
       default:
         break;

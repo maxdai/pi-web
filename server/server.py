@@ -181,6 +181,9 @@ class Peripheral:
             self.commands.abort()
         elif cmd_type == "get_state":
             pass  # broadcast via client init; ignore
+        elif cmd_type == "get_stats":
+            stats = self.commands.get_session_stats().get("data", {})
+            self._broadcast({"type": "stats", "data": stats})
         elif cmd_type == "cycle_model":
             self.commands.cycle_model()
         elif cmd_type == "set_model":
