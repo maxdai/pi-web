@@ -1,6 +1,16 @@
 // pi-web browser client
 // Connects to the WebSocket, renders Pi RPC events into a TUI-like view.
 
+const BUILTIN_COMMANDS = [
+  { name: 'model', description: 'Select model (opens selector)', builtin: true, action: 'model' },
+  { name: 'thinking', description: 'Select thinking level', builtin: true, action: 'thinking' },
+  { name: 'compact', description: 'Manually compact the session context', builtin: true, action: 'compact' },
+  { name: 'name', description: 'Set session display name', builtin: true, action: 'name' },
+  { name: 'login', description: 'Configure provider authentication (not supported in web)', builtin: true, unsupported: true },
+  { name: 'logout', description: 'Remove provider authentication (not supported in web)', builtin: true, unsupported: true },
+  { name: 'settings', description: 'Open settings menu (not supported in web)', builtin: true, unsupported: true },
+];
+
 class PiWebClient {
   constructor() {
     this.ws = null;
@@ -14,6 +24,12 @@ class PiWebClient {
     this.inputEl = document.getElementById('input');
     this.sendBtn = document.getElementById('send-btn');
     this.commandMenuEl = document.getElementById('command-menu');
+    this.modalOverlay = document.getElementById('modal-overlay');
+    this.modalTitle = document.getElementById('modal-title');
+    this.modalSearch = document.getElementById('modal-search');
+    this.modalList = document.getElementById('modal-list');
+    this.modalClose = document.getElementById('modal-close');
+    this.modalMode = null; // 'model' | 'thinking'
     this.hasConnectedBefore = false;
 
     // Streaming state: current assistant message being built
@@ -111,8 +127,10 @@ class PiWebClient {
         this.renderBashResult(data);
         break;
       case 'models':
+        this.handleModels(data.data);
         break;
       case 'thinking_levels':
+        this.handleThinkingLevels(data.data);
         break;
       case 'error':
         this.appendError(data.error);
@@ -251,16 +269,33 @@ class PiWebClient {
       }
     }
 
-    // Model + thinking on the right
+    // Model + thinking on the right (clickable)
     if (state.model) {
       const provider = state.model.provider || '';
       const model = state.model.id || state.model.model || '';
       const modelLabel = provider ? `${provider}/${model}` : model;
       const thinking = state.thinkingLevel || 'off';
-      parts.push(`${modelLabel} · ${thinking}`);
+      const modelHtml = `<span class="clickable model-label" title="Click to change model">${this.escapeHtml(modelLabel)}</span>`;
+      const thinkingHtml = `<span class="clickable thinking-label" title="Click to change thinking">${this.escapeHtml(thinking)}</span>`;
+      parts.push(`${modelHtml} · ${thinkingHtml}`);
     }
 
-    statsEl.textContent = parts.join(' ');
+    statsEl.innerHTML = parts.join(' ');
+
+    const modelEl = statsEl.querySelector('.model-label');
+    if (modelEl) {
+      modelEl.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.openModelPicker();
+      });
+    }
+    const thinkingEl = statsEl.querySelector('.thinking-label');
+    if (thinkingEl) {
+      thinkingEl.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.openThinkingPicker();
+      });
+    }
   }
 
   getStats() {
@@ -1016,6 +1051,119 @@ class PiWebClient {
     if (this.sendBtn) {
       this.sendBtn.addEventListener('click', () => this.sendMessage());
     }
+
+    // Modal
+    if (this.modalClose) {
+      this.modalClose.addEventListener('click', () => this.closeModal());
+    }
+    if (this.modalOverlay) {
+      this.modalOverlay.addEventListener('click', (e) => {
+        if (e.target === this.modalOverlay) this.closeModal();
+      });
+    }
+    if (this.modalSearch) {
+      this.modalSearch.addEventListener('input', () => this.filterModalItems());
+    }
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && this.modalOverlay && this.modalOverlay.style.display !== 'none') {
+        this.closeModal();
+      }
+    });
+  }
+
+  // ------------------------------------------------------------------
+  // Modal (model/thinking picker)
+  // ------------------------------------------------------------------
+
+  openModal(title, mode) {
+    this.modalMode = mode;
+    this.modalTitle.textContent = title;
+    this.modalSearch.value = '';
+    this.modalList.innerHTML = '';
+    this.modalOverlay.style.display = 'flex';
+    this.modalSearch.focus();
+  }
+
+  closeModal() {
+    this.modalOverlay.style.display = 'none';
+    this.modalList.innerHTML = '';
+    this.modalSearch.value = '';
+    this.modalMode = null;
+    this.inputEl.focus();
+  }
+
+  openModelPicker() {
+    this.openModal('Select Model', 'model');
+    this.send({ type: 'get_available_models' });
+  }
+
+  openThinkingPicker() {
+    this.openModal('Select Thinking Level', 'thinking');
+    this.send({ type: 'get_available_thinking_levels' });
+  }
+
+  renderModalItems(items, onSelect) {
+    this.modalList.innerHTML = '';
+    this.modalItems = items;
+    this.modalOnSelect = onSelect;
+    this.filterModalItems();
+  }
+
+  filterModalItems() {
+    if (!this.modalItems) return;
+    const query = (this.modalSearch.value || '').toLowerCase();
+    const filtered = this.modalItems.filter((item) => {
+      const name = (item.name || item.id || '').toLowerCase();
+      return name.includes(query);
+    });
+    this.modalList.innerHTML = filtered
+      .map(
+        (item, i) =>
+          `<div class="modal-item" data-index="${i}">` +
+          `<span class="modal-item-name">${this.escapeHtml(item.name || item.id || '')}</span>` +
+          `<span class="modal-item-desc">${this.escapeHtml(item.desc || '')}</span>` +
+          `</div>`,
+      )
+      .join('');
+    this.modalList.querySelectorAll('.modal-item').forEach((el, i) => {
+      el.addEventListener('click', () => {
+        this.modalOnSelect(filtered[i]);
+        this.closeModal();
+      });
+    });
+  }
+
+  handleModels(models) {
+    if (this.modalMode !== 'model') return;
+    const items = (models || []).map((m) => ({
+      name: `${m.provider}/${m.id}`,
+      desc: m.reasoning ? 'reasoning' : '',
+      value: { provider: m.provider, id: m.id },
+    }));
+    this.renderModalItems(items, (item) => {
+      this.send({ type: 'set_model', provider: item.value.provider, modelId: item.value.id });
+    });
+  }
+
+  handleThinkingLevels(levels) {
+    if (this.modalMode !== 'thinking') return;
+    const descriptions = {
+      off: 'No reasoning',
+      minimal: 'Very brief reasoning (~1k tokens)',
+      low: 'Light reasoning (~2k tokens)',
+      medium: 'Moderate reasoning (~8k tokens)',
+      high: 'Deep reasoning (~16k tokens)',
+      xhigh: 'Extra-high reasoning (~32k tokens)',
+      max: 'Maximum reasoning',
+    };
+    const items = (levels || []).map((level) => ({
+      name: level,
+      desc: descriptions[level] || '',
+      value: level,
+    }));
+    this.renderModalItems(items, (item) => {
+      this.send({ type: 'set_thinking_level', level: item.value });
+    });
   }
 
   // ------------------------------------------------------------------
@@ -1031,10 +1179,14 @@ class PiWebClient {
     }
 
     const query = text.slice(1).toLowerCase();
-    const commands = (this.lastState && this.lastState.commands) || [];
+    const commands = [
+      ...((this.lastState && this.lastState.commands) || []),
+      ...BUILTIN_COMMANDS,
+    ];
     const filtered = commands.filter((c) => {
-      const name = c.name.replace(/^skill:/, '').toLowerCase();
-      return name.includes(query) || (c.source || '').includes(query);
+      const name = (c.name || '').replace(/^skill:/, '').toLowerCase();
+      const desc = (c.description || c.source || '').toLowerCase();
+      return name.includes(query) || desc.includes(query);
     });
 
     if (filtered.length === 0) {
@@ -1048,6 +1200,7 @@ class PiWebClient {
           `<div class="command-item" data-index="${i}">` +
           `<span class="command-name">/${this.escapeHtml(c.name.replace(/^skill:/, ''))}</span>` +
           `<span class="command-desc">${this.escapeHtml(c.description || c.source || '')}</span>` +
+          (c.unsupported ? `<span class="command-unsupported">not supported</span>` : '') +
           `</div>`,
       )
       .join('');
@@ -1060,6 +1213,35 @@ class PiWebClient {
 
   selectCommand(cmd) {
     if (!cmd) return;
+
+    // Builtin commands with actions
+    if (cmd.builtin && cmd.action && !cmd.unsupported) {
+      if (cmd.action === 'model') {
+        this.openModelPicker();
+      } else if (cmd.action === 'thinking') {
+        this.openThinkingPicker();
+      } else if (cmd.action === 'compact') {
+        this.send({ type: 'compact' });
+      } else if (cmd.action === 'name') {
+        const newName = window.prompt('Set session display name:', '');
+        if (newName && newName.trim()) {
+          this.send({ type: 'set_session_name', name: newName.trim() });
+        }
+      }
+      this.hideCommandMenu();
+      this.inputEl.value = '';
+      return;
+    }
+
+    // Unsupported builtin
+    if (cmd.builtin && cmd.unsupported) {
+      this.appendError(`/${cmd.name} is not supported in web mode`);
+      this.hideCommandMenu();
+      this.inputEl.value = '';
+      return;
+    }
+
+    // Regular commands: insert into input
     const name = cmd.name.replace(/^skill:/, '');
     this.inputEl.value = '/' + name + ' ';
     this.inputEl.focus();

@@ -344,3 +344,13 @@ class RpcCommands:
     def bash(self, command: str) -> dict:
         resp = self._c.send("bash", command=command)
         return resp.get("data", {})
+
+    def compact(self, custom_instructions: str | None = None) -> dict:
+        params = {}
+        if custom_instructions:
+            params["customInstructions"] = custom_instructions
+        resp = self._c.send("compact", **params)
+        return resp.get("data", {})
+
+    def set_session_name(self, name: str) -> None:
+        self._c.send("set_session_name", name=name)

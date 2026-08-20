@@ -258,6 +258,14 @@ class Peripheral:
         elif cmd_type == "get_available_thinking_levels":
             levels = self.commands.get_available_thinking_levels()
             self._broadcast({"type": "thinking_levels", "data": levels})
+        elif cmd_type == "compact":
+            custom_instructions = data.get("customInstructions")
+            self.commands.compact(custom_instructions)
+        elif cmd_type == "set_session_name":
+            name = data.get("name", "")
+            if not name:
+                raise RuntimeError("Missing 'name'")
+            self.commands.set_session_name(name)
         else:
             raise RuntimeError(f"Unsupported command: {cmd_type}")
 
