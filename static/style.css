@@ -377,8 +377,14 @@ body {
   margin-bottom: 4px;
 }
 
+.input-row {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+
 #input {
-  width: 100%;
+  flex: 1;
   background: transparent;
   border: 1px solid var(--border);
   color: var(--text);
@@ -393,4 +399,25 @@ body {
 
 #input:focus {
   border-color: var(--accent);
+}
+
+#send-btn {
+  background: transparent;
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  border-radius: 6px;
+  padding: 0 16px;
+  font-size: 14px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s, color 0.15s;
+}
+
+#send-btn:hover {
+  background: var(--accent);
+  color: #18181e;
+}
+
+#send-btn:active {
+  opacity: 0.8;
 }

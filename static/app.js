@@ -9,6 +9,8 @@ class PiWebClient {
     this.statusAreaEl = document.getElementById('status');
     this.footerEl = document.getElementById('footer-line');
     this.inputEl = document.getElementById('input');
+    this.sendBtn = document.getElementById('send-btn');
+    this.hasConnectedBefore = false;
 
     // Streaming state: current assistant message being built
     this.streaming = {
@@ -45,6 +47,13 @@ class PiWebClient {
     const ws = new WebSocket(url);
     ws.onopen = () => {
       this.setStatus('connected');
+      // If this is a reconnect (not the first load), reload the page so the
+      // full session history is fetched fresh.
+      if (this.hasConnectedBefore) {
+        location.reload();
+        return;
+      }
+      this.hasConnectedBefore = true;
     };
     ws.onmessage = (ev) => this.handleMessage(ev.data);
     ws.onclose = () => {
@@ -758,17 +767,23 @@ class PiWebClient {
   // Input
   // ------------------------------------------------------------------
 
+  sendMessage() {
+    const text = this.inputEl.value.trim();
+    if (!text) return;
+    this.send({ type: 'prompt', message: text });
+    this.inputEl.value = '';
+  }
+
   bindInput() {
     this.inputEl.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
-        const text = this.inputEl.value.trim();
-        if (text) {
-          this.send({ type: 'prompt', message: text });
-          this.inputEl.value = '';
-        }
+        this.sendMessage();
       }
     });
+    if (this.sendBtn) {
+      this.sendBtn.addEventListener('click', () => this.sendMessage());
+    }
   }
 }
 
