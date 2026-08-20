@@ -13,6 +13,7 @@ class PiWebClient {
     this.footerEl = document.getElementById('footer-line');
     this.inputEl = document.getElementById('input');
     this.sendBtn = document.getElementById('send-btn');
+    this.commandMenuEl = document.getElementById('command-menu');
     this.hasConnectedBefore = false;
 
     // Streaming state: current assistant message being built
@@ -105,6 +106,9 @@ class PiWebClient {
         break;
       case 'stats':
         this.renderStats(data.data, this.lastState);
+        break;
+      case 'bash_result':
+        this.renderBashResult(data);
         break;
       case 'models':
         break;
@@ -919,6 +923,32 @@ class PiWebClient {
     this.toolEls.delete(ev.toolCallId);
   }
 
+  renderBashResult(data) {
+    const div = this.createToolBlock('bash', { command: data.command }, 'bash-' + Date.now());
+    const result = data.data || {};
+    const output = result.output || '';
+    this.setToolOutput(div, output);
+
+    const isError = result.exitCode !== undefined && result.exitCode !== 0;
+    div.className = isError ? 'tool-block error' : 'tool-block success';
+
+    const durationEl = div.querySelector('.tool-duration');
+    if (durationEl) durationEl.remove();
+
+    if (result.truncated || result.fullOutputPath) {
+      const meta = div.querySelector('.tool-meta');
+      const warnings = [];
+      if (result.fullOutputPath) warnings.push(`Full output: ${result.fullOutputPath}`);
+      if (result.truncated) warnings.push('Output truncated');
+      const warn = document.createElement('div');
+      warn.className = 'tool-truncated';
+      warn.textContent = `[${warnings.join('. ')}]`;
+      meta.appendChild(warn);
+    }
+
+    this.scrollToBottom();
+  }
+
   resultText(result) {
     if (typeof result === 'string') return result;
     if (result && result.content) {
@@ -961,8 +991,16 @@ class PiWebClient {
   sendMessage() {
     const text = this.inputEl.value.trim();
     if (!text) return;
-    this.send({ type: 'prompt', message: text });
+    if (text.startsWith('!')) {
+      const command = text.slice(1).trim();
+      if (command) {
+        this.send({ type: 'bash', command: command });
+      }
+    } else {
+      this.send({ type: 'prompt', message: text });
+    }
     this.inputEl.value = '';
+    this.hideCommandMenu();
   }
 
   bindInput() {
@@ -970,10 +1008,68 @@ class PiWebClient {
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
         this.sendMessage();
+      } else if (e.key === 'Escape') {
+        this.hideCommandMenu();
       }
     });
+    this.inputEl.addEventListener('input', () => this.updateCommandMenu());
     if (this.sendBtn) {
       this.sendBtn.addEventListener('click', () => this.sendMessage());
+    }
+  }
+
+  // ------------------------------------------------------------------
+  // Slash command menu
+  // ------------------------------------------------------------------
+
+  updateCommandMenu() {
+    if (!this.commandMenuEl) return;
+    const text = this.inputEl.value;
+    if (!text.startsWith('/')) {
+      this.hideCommandMenu();
+      return;
+    }
+
+    const query = text.slice(1).toLowerCase();
+    const commands = (this.lastState && this.lastState.commands) || [];
+    const filtered = commands.filter((c) => {
+      const name = c.name.replace(/^skill:/, '').toLowerCase();
+      return name.includes(query) || (c.source || '').includes(query);
+    });
+
+    if (filtered.length === 0) {
+      this.hideCommandMenu();
+      return;
+    }
+
+    this.commandMenuEl.innerHTML = filtered
+      .map(
+        (c, i) =>
+          `<div class="command-item" data-index="${i}">` +
+          `<span class="command-name">/${this.escapeHtml(c.name.replace(/^skill:/, ''))}</span>` +
+          `<span class="command-desc">${this.escapeHtml(c.description || c.source || '')}</span>` +
+          `</div>`,
+      )
+      .join('');
+    this.commandMenuEl.style.display = 'block';
+
+    this.commandMenuEl.querySelectorAll('.command-item').forEach((el, i) => {
+      el.addEventListener('click', () => this.selectCommand(filtered[i]));
+    });
+  }
+
+  selectCommand(cmd) {
+    if (!cmd) return;
+    const name = cmd.name.replace(/^skill:/, '');
+    this.inputEl.value = '/' + name + ' ';
+    this.inputEl.focus();
+    this.hideCommandMenu();
+  }
+
+  hideCommandMenu() {
+    if (this.commandMenuEl) {
+      this.commandMenuEl.style.display = 'none';
+      this.commandMenuEl.innerHTML = '';
     }
   }
 }

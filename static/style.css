@@ -486,6 +486,42 @@ body {
   margin-bottom: 4px;
 }
 
+#command-menu {
+  display: none;
+  margin-bottom: 4px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #1e1e24;
+  max-height: 160px;
+  overflow-y: auto;
+}
+
+.command-item {
+  padding: 4px 8px;
+  cursor: pointer;
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  font-size: 12px;
+}
+
+.command-item:hover {
+  background: rgba(138, 190, 183, 0.1);
+}
+
+.command-name {
+  color: var(--accent);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.command-desc {
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .input-row {
   display: flex;
   gap: 8px;

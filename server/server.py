@@ -231,6 +231,12 @@ class Peripheral:
         elif cmd_type == "get_stats":
             stats = self.commands.get_session_stats().get("data", {})
             self._broadcast({"type": "stats", "data": stats})
+        elif cmd_type == "bash":
+            command = data.get("command", "")
+            if not command:
+                raise RuntimeError("Missing 'command'")
+            result = self.commands.bash(command)
+            self._broadcast({"type": "bash_result", "command": command, "data": result})
         elif cmd_type == "cycle_model":
             self.commands.cycle_model()
         elif cmd_type == "set_model":

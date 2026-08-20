@@ -340,3 +340,7 @@ class RpcCommands:
     def get_commands(self) -> list:
         resp = self._c.send("get_commands")
         return resp.get("data", {}).get("commands", [])
+
+    def bash(self, command: str) -> dict:
+        resp = self._c.send("bash", command=command)
+        return resp.get("data", {})
