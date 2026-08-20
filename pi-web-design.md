@@ -217,7 +217,19 @@ pi --session <id> --mode rpc
   - 模型切换（`set_model` / `cycle_model` / `get_available_models`）
   - thinking 切换（`set_thinking_level` / `cycle_thinking_level`）
 
-### 6.7 暂不做（后续可加）
+### 6.7 前端 Markdown 渲染（已确认）
+
+- 使用 **marked** 渲染 Markdown（与 TUI 使用的渲染库一致）。
+- 库文件放在本地 `static/vendor/`，**不依赖 CDN**（本地服务可能无外网）。
+- 具体方案：
+  - 复制 `marked.umd.js` 到 `static/vendor/marked.min.js`。
+  - 前端通过 `<script>` 引入。
+  - 用户消息、助手文本、thinking 等 Markdown 内容都用 marked 渲染。
+- **XSS 安全**：LLM 生成内容不可信，需要 sanitize（白名单过滤或禁用原始 HTML）。
+- **流式渲染**：`message_update` 时 Markdown 内容可能不完整，marked 应能容忍部分 Markdown 并持续更新。
+- 代码高亮（highlight.js）暂不做，后续需要再加。
+
+### 6.8 暂不做（后续可加）
 
 - compaction 状态
 - 多用户 / 鉴权
