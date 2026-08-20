@@ -18,6 +18,8 @@ class PiWebClient {
 
     // Tool call rendering state: map toolCallId -> element
     this.toolEls = new Map();
+    // Tool execution timers: map toolCallId -> interval id
+    this.toolTimers = new Map();
 
     // Last known state (model, autoCompaction, etc.) for stats rendering
     this.lastState = null;
@@ -284,17 +286,7 @@ class PiWebClient {
     // Create tool blocks for tool calls
     for (const block of message.content || []) {
       if (block.type === 'toolCall') {
-        const toolDiv = document.createElement('div');
-        toolDiv.className = 'tool-block pending';
-        const title = document.createElement('div');
-        title.className = 'tool-title';
-        title.textContent = block.name || 'tool';
-        const output = document.createElement('div');
-        output.className = 'tool-output';
-        output.textContent = JSON.stringify(block.arguments || {}, null, 2);
-        toolDiv.appendChild(title);
-        toolDiv.appendChild(output);
-        this.contentEl.appendChild(toolDiv);
+        const toolDiv = this.createToolBlock(block.name, block.arguments, block.id);
         this.toolEls.set(block.id, toolDiv);
       }
     }
@@ -304,16 +296,17 @@ class PiWebClient {
     const div = this.toolEls.get(message.toolCallId);
     if (div) {
       div.className = message.isError ? 'tool-block error' : 'tool-block success';
-      const out = div.querySelector('.tool-output');
-      if (out) {
-        out.textContent = this.resultText(message);
-      }
+      this.setToolOutput(div, this.resultText(message));
       this.toolEls.delete(message.toolCallId);
     }
   }
 
   clearContent() {
     this.contentEl.innerHTML = '';
+    for (const timer of this.toolTimers.values()) {
+      clearInterval(timer);
+    }
+    this.toolTimers.clear();
     this.toolEls.clear();
     this.streaming = { active: false, el: null, role: 'assistant' };
   }
@@ -475,42 +468,173 @@ class PiWebClient {
     }
   }
 
-  onToolStart(ev) {
+  createToolBlock(toolName, args, toolCallId) {
     const div = document.createElement('div');
     div.className = 'tool-block pending';
+    div.dataset.toolCallId = toolCallId || '';
+    div.dataset.toolName = toolName || '';
+    div.dataset.expanded = 'false';
+
+    const isBash = toolName === 'bash';
+
+    const top = document.createElement('div');
+    top.className = 'tool-border';
+    const content = document.createElement('div');
+    content.className = 'tool-content';
+    const bottom = document.createElement('div');
+    bottom.className = 'tool-border';
+
+    // Title
     const title = document.createElement('div');
     title.className = 'tool-title';
-    title.textContent = ev.toolName || 'tool';
+    if (isBash) {
+      const cmd = (args && args.command) || '';
+      title.textContent = `$ ${cmd}`;
+    } else {
+      title.textContent = toolName || 'tool';
+    }
+    content.appendChild(title);
+
+    // Args (non-bash)
+    if (!isBash) {
+      const argsEl = document.createElement('div');
+      argsEl.className = 'tool-args';
+      argsEl.textContent = JSON.stringify(args || {}, null, 2);
+      content.appendChild(argsEl);
+    }
+
+    // Output
     const output = document.createElement('div');
     output.className = 'tool-output';
-    output.textContent = JSON.stringify(ev.args || {}, null, 2);
-    div.appendChild(title);
-    div.appendChild(output);
+    content.appendChild(output);
+
+    // Meta (duration / truncation)
+    const meta = document.createElement('div');
+    meta.className = 'tool-meta';
+    const duration = document.createElement('span');
+    duration.className = 'tool-duration';
+    meta.appendChild(duration);
+    content.appendChild(meta);
+
+    div.appendChild(top);
+    div.appendChild(content);
+    div.appendChild(bottom);
+
+    // Click to expand/collapse
+    div.addEventListener('click', () => this.toggleToolExpand(div));
+
     this.contentEl.appendChild(div);
+    return div;
+  }
+
+  setToolOutput(div, text) {
+    const out = div.querySelector('.tool-output');
+    if (!out) return;
+    div.dataset.fullOutput = text || '';
+    this.applyToolPreview(div);
+  }
+
+  applyToolPreview(div) {
+    const out = div.querySelector('.tool-output');
+    if (!out) return;
+    const full = div.dataset.fullOutput || '';
+    const expanded = div.dataset.expanded === 'true';
+    const isBash = div.dataset.toolName === 'bash';
+    const limit = isBash ? 5 : 10;
+    const lines = full.split('\n');
+    if (!expanded && lines.length > limit) {
+      const visible = lines.slice(0, limit).join('\n');
+      const hidden = lines.length - limit;
+      out.textContent = visible + `\n... (${hidden} more lines, click to expand)`;
+    } else {
+      out.textContent = full;
+    }
+  }
+
+  toggleToolExpand(div) {
+    const expanded = div.dataset.expanded === 'true';
+    div.dataset.expanded = expanded ? 'false' : 'true';
+    div.classList.toggle('expanded', !expanded);
+    this.applyToolPreview(div);
+  }
+
+  onToolStart(ev) {
+    const div = this.createToolBlock(ev.toolName, ev.args, ev.toolCallId);
     this.toolEls.set(ev.toolCallId, div);
+
+    // Start elapsed timer
+    const start = Date.now();
+    div.dataset.startTime = start;
+    const durationEl = div.querySelector('.tool-duration');
+    if (durationEl) durationEl.textContent = 'Running...';
+    const timer = setInterval(() => {
+      if (!div.isConnected) {
+        clearInterval(timer);
+        return;
+      }
+      const dur = ((Date.now() - start) / 1000).toFixed(1);
+      const el = div.querySelector('.tool-duration');
+      if (el) el.textContent = `Elapsed ${dur}s`;
+    }, 1000);
+    this.toolTimers.set(ev.toolCallId, timer);
   }
 
   onToolUpdate(ev) {
     const div = this.toolEls.get(ev.toolCallId);
-    if (div) {
-      const out = div.querySelector('.tool-output');
-      if (out && ev.partialResult) {
-        out.textContent = JSON.stringify(ev.partialResult, null, 2);
-      }
+    if (!div) return;
+    if (ev.partialResult !== undefined && ev.partialResult !== null) {
+      this.setToolOutput(div, this.resultText(ev.partialResult));
     }
   }
 
   onToolEnd(ev) {
     const div = this.toolEls.get(ev.toolCallId);
-    if (div) {
-      div.className = ev.isError ? 'tool-block error' : 'tool-block success';
-      const out = div.querySelector('.tool-output');
-      if (out && ev.result) {
-        const text = this.resultText(ev.result);
-        out.textContent = text;
-      }
-      this.toolEls.delete(ev.toolCallId);
+    if (!div) return;
+    div.className = ev.isError ? 'tool-block error' : 'tool-block success';
+
+    if (ev.result) {
+      this.setToolOutput(div, this.resultText(ev.result));
     }
+
+    // Stop elapsed timer and show final duration
+    const timer = this.toolTimers.get(ev.toolCallId);
+    if (timer) {
+      clearInterval(timer);
+      this.toolTimers.delete(ev.toolCallId);
+    }
+    const start = parseInt(div.dataset.startTime || '0', 10);
+    const durationEl = div.querySelector('.tool-duration');
+    if (durationEl && start) {
+      const dur = ((Date.now() - start) / 1000).toFixed(1);
+      durationEl.textContent = `Took ${dur}s`;
+    }
+
+    // Truncation / full output warning
+    const result = ev.result;
+    if (result && result.details) {
+      const details = result.details;
+      const warnings = [];
+      if (details.fullOutputPath) {
+        warnings.push(`Full output: ${details.fullOutputPath}`);
+      }
+      if (details.truncation && details.truncation.truncated) {
+        const tr = details.truncation;
+        if (tr.truncatedBy === 'lines') {
+          warnings.push(`Truncated: showing ${tr.outputLines} of ${tr.totalLines} lines`);
+        } else {
+          warnings.push(`Truncated: ${tr.outputLines} lines shown`);
+        }
+      }
+      if (warnings.length > 0) {
+        const meta = div.querySelector('.tool-meta');
+        const warn = document.createElement('div');
+        warn.className = 'tool-truncated';
+        warn.textContent = `[${warnings.join('. ')}]`;
+        meta.appendChild(warn);
+      }
+    }
+
+    this.toolEls.delete(ev.toolCallId);
   }
 
   resultText(result) {

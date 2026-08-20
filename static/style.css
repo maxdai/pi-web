@@ -11,6 +11,8 @@
   --error: #cc6666;
   --border: #666666;
   --thinking: #808080;
+  --bash-mode: #b5bd68;
+  --warning: #ffff00;
 }
 
 * {
@@ -102,10 +104,10 @@ body {
 
 .tool-block {
   background: var(--tool-pending-bg);
-  border-radius: 6px;
-  padding: 6px 12px;
   margin: 4px 0;
   font-size: 13px;
+  cursor: pointer;
+  user-select: none;
 }
 
 .tool-block.success {
@@ -116,9 +118,31 @@ body {
   background: var(--tool-error-bg);
 }
 
+.tool-border {
+  height: 1px;
+  background: var(--border);
+  opacity: 0.5;
+}
+
+.tool-content {
+  padding: 6px 12px;
+}
+
 .tool-block .tool-title {
   font-weight: bold;
   color: var(--text);
+}
+
+.tool-block[data-tool-name="bash"] .tool-title {
+  color: var(--bash-mode, #b5bd68);
+}
+
+.tool-block .tool-args {
+  color: var(--muted);
+  margin-top: 4px;
+  white-space: pre-wrap;
+  font-family: monospace;
+  font-size: 12px;
 }
 
 .tool-block .tool-output {
@@ -127,6 +151,23 @@ body {
   white-space: pre-wrap;
   font-family: monospace;
   font-size: 12px;
+}
+
+.tool-block .tool-meta {
+  margin-top: 4px;
+  color: var(--dim);
+  font-size: 11px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.tool-block .tool-duration {
+  color: var(--dim);
+}
+
+.tool-block .tool-truncated {
+  color: var(--warning, #ffff00);
 }
 
 .thinking {
