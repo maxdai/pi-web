@@ -54,10 +54,51 @@ body {
   font-size: 16px;
 }
 
+#version {
+  color: var(--dim);
+  font-size: 12px;
+}
+
 #conn-status {
   font-size: 12px;
   padding: 2px 8px;
   border-radius: 4px;
+  margin-left: auto;
+}
+
+#loaded-resources {
+  margin-bottom: 8px;
+}
+
+.resources-block {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 10px;
+  cursor: pointer;
+  user-select: none;
+  font-size: 12px;
+}
+
+.resources-header {
+  color: var(--dim);
+}
+
+.resources-body {
+  margin-top: 6px;
+  color: var(--muted);
+}
+
+.resources-section {
+  margin: 2px 0;
+}
+
+.resources-section-title {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.resources-section-items {
+  color: var(--muted);
 }
 
 #conn-status.connected {

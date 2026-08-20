@@ -336,3 +336,7 @@ class RpcCommands:
 
     def cycle_thinking_level(self) -> dict:
         return self._c.send("cycle_thinking_level")
+
+    def get_commands(self) -> list:
+        resp = self._c.send("get_commands")
+        return resp.get("data", {}).get("commands", [])

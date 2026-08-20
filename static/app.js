@@ -8,6 +8,8 @@ class PiWebClient {
     this.statusEl = document.getElementById('conn-status');
     this.statusAreaEl = document.getElementById('status');
     this.pendingEl = document.getElementById('pending');
+    this.versionEl = document.getElementById('version');
+    this.loadedResourcesEl = document.getElementById('loaded-resources');
     this.footerEl = document.getElementById('footer-line');
     this.inputEl = document.getElementById('input');
     this.sendBtn = document.getElementById('send-btn');
@@ -131,6 +133,14 @@ class PiWebClient {
     if (!state) return;
     this.lastState = state;
 
+    // Header version
+    if (this.versionEl && state.version) {
+      this.versionEl.textContent = `v${state.version}`;
+    }
+
+    // Loaded resources
+    this.renderLoadedResources(state.commands);
+
     // First footer line: pwd (branch) • session name
     const pwd = state.cwd || '';
     const branch = state.gitBranch ? ` (${state.gitBranch})` : '';
@@ -139,6 +149,63 @@ class PiWebClient {
 
     // Second footer line: TUI-like stats + model info
     this.renderStats(state.sessionStats, state);
+  }
+
+  renderLoadedResources(commands) {
+    if (!this.loadedResourcesEl) return;
+    if (!commands || commands.length === 0) {
+      this.loadedResourcesEl.innerHTML = '';
+      return;
+    }
+
+    const groups = { skill: [], prompt: [], extension: [] };
+    for (const cmd of commands) {
+      const source = cmd.source;
+      if (source === 'skill') groups.skill.push(cmd);
+      else if (source === 'prompt') groups.prompt.push(cmd);
+      else groups.extension.push(cmd);
+    }
+
+    const div = document.createElement('div');
+    div.className = 'resources-block';
+    div.dataset.expanded = 'false';
+
+    const header = document.createElement('div');
+    header.className = 'resources-header';
+    header.textContent = 'Loaded Resources (click to expand)';
+
+    const body = document.createElement('div');
+    body.className = 'resources-body';
+    body.style.display = 'none';
+
+    const sections = [];
+    if (groups.skill.length > 0) {
+      sections.push(this.resourceSection('Skills', groups.skill.map((c) => c.name)));
+    }
+    if (groups.prompt.length > 0) {
+      sections.push(this.resourceSection('Prompts', groups.prompt.map((c) => c.name)));
+    }
+    if (groups.extension.length > 0) {
+      sections.push(this.resourceSection('Extensions', groups.extension.map((c) => c.name)));
+    }
+    body.innerHTML = sections.join('');
+
+    div.appendChild(header);
+    div.appendChild(body);
+    div.addEventListener('click', () => {
+      const expanded = div.dataset.expanded === 'true';
+      div.dataset.expanded = expanded ? 'false' : 'true';
+      body.style.display = expanded ? 'none' : 'block';
+      header.textContent = expanded ? 'Loaded Resources (click to expand)' : 'Loaded Resources (click to collapse)';
+    });
+
+    this.loadedResourcesEl.innerHTML = '';
+    this.loadedResourcesEl.appendChild(div);
+  }
+
+  resourceSection(name, items) {
+    const list = items.map((item) => this.escapeHtml(item)).join(', ');
+    return `<div class="resources-section"><span class="resources-section-title">${this.escapeHtml(name)}</span>: <span class="resources-section-items">${list}</span></div>`;
   }
 
   renderStats(stats, state) {

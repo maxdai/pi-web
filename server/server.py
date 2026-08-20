@@ -42,6 +42,7 @@ class Peripheral:
         self._clients: set[WebSocketConnection] = set()
         self._clients_lock = threading.Lock()
         self._exit_error: Optional[str] = None
+        self._version = self._get_pi_version()
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -131,11 +132,30 @@ class Peripheral:
             data["cwd"] = self._format_cwd_for_footer(self.cwd)
             data["gitBranch"] = self._get_git_branch()
             data["sessionStats"] = self.commands.get_session_stats().get("data", {})
+            data["version"] = self._version
+            data["commands"] = self.commands.get_commands()
             conn.send_json({"type": "state", "data": data})
 
             self._send_history(conn)
         except RuntimeError as e:
             conn.send_json({"type": "error", "error": str(e)})
+
+    def _get_pi_version(self) -> str:
+        """Get the installed pi version once."""
+        try:
+            import subprocess
+
+            result = subprocess.run(
+                ["pi", "--version"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if result.returncode == 0:
+                return result.stdout.strip()
+        except Exception:
+            pass
+        return ""
 
     def _format_cwd_for_footer(self, cwd: str) -> str:
         """Show home directory as ~ like the TUI footer."""
