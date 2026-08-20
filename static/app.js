@@ -204,8 +204,10 @@ class PiWebClient {
   }
 
   resourceSection(name, items) {
-    const list = items.map((item) => this.escapeHtml(item)).join(', ');
-    return `<div class="resources-section"><span class="resources-section-title">${this.escapeHtml(name)}</span>: <span class="resources-section-items">${list}</span></div>`;
+    const listItems = items
+      .map((item) => `<li class="resources-item" title="${this.escapeHtml(item)}">${this.escapeHtml(item)}</li>`)
+      .join('');
+    return `<div class="resources-section"><div class="resources-section-title">${this.escapeHtml(name)}</div><ul class="resources-list">${listItems}</ul></div>`;
   }
 
   renderStats(stats, state) {
