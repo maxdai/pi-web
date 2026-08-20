@@ -109,16 +109,60 @@ class PiWebClient {
     const name = state.sessionName ? ` • ${state.sessionName}` : '';
     this.footerEl.textContent = `${pwd}${branch}${name}`;
 
-    // Second footer line: model · thinking · msgs
+    // Second footer line: TUI-like stats + model info
+    const statsEl = document.getElementById('footer-stats');
+    if (!statsEl) return;
+
+    const parts = [];
+
+    // Token/cost stats from sessionStats (if available)
+    const stats = state.sessionStats;
+    if (stats && stats.tokens) {
+      const t = stats.tokens;
+      if (t.input) parts.push(`↑${this.formatTokens(t.input)}`);
+      if (t.output) parts.push(`↓${this.formatTokens(t.output)}`);
+      if (t.cacheRead) parts.push(`R${this.formatTokens(t.cacheRead)}`);
+      if (t.cacheWrite) parts.push(`W${this.formatTokens(t.cacheWrite)}`);
+      if ((t.cacheRead > 0 || t.cacheWrite > 0)) {
+        const promptTokens = t.input + t.cacheRead + t.cacheWrite;
+        if (promptTokens > 0) {
+          const hitRate = (t.cacheRead / promptTokens) * 100;
+          parts.push(`CH${hitRate.toFixed(1)}%`);
+        }
+      }
+      if (stats.cost) parts.push(`$${stats.cost.toFixed(3)}`);
+    }
+
+    // Context usage: percent/contextWindow (auto)
+    if (stats && stats.contextUsage && stats.contextUsage.contextWindow) {
+      const cu = stats.contextUsage;
+      const ctxWindow = this.formatTokens(cu.contextWindow);
+      const auto = state.autoCompactionEnabled ? ' (auto)' : '';
+      if (cu.percent !== null && cu.percent !== undefined) {
+        parts.push(`${cu.percent.toFixed(1)}%/${ctxWindow}${auto}`);
+      } else {
+        parts.push(`?/${ctxWindow}${auto}`);
+      }
+    }
+
+    // Model + thinking on the right
     if (state.model) {
       const provider = state.model.provider || '';
       const model = state.model.id || state.model.model || '';
       const modelLabel = provider ? `${provider}/${model}` : model;
-      const statsEl = document.getElementById('footer-stats');
-      if (statsEl) {
-        statsEl.textContent = `model: ${modelLabel} · thinking: ${state.thinkingLevel || 'off'} · msgs: ${state.messageCount}`;
-      }
+      const thinking = state.thinkingLevel || 'off';
+      parts.push(`${modelLabel} · ${thinking}`);
     }
+
+    statsEl.textContent = parts.join(' ');
+  }
+
+  formatTokens(count) {
+    if (count < 1000) return count.toString();
+    if (count < 10000) return `${(count / 1000).toFixed(1)}k`;
+    if (count < 1000000) return `${Math.round(count / 1000)}k`;
+    if (count < 10000000) return `${(count / 1000000).toFixed(1)}M`;
+    return `${Math.round(count / 1000000)}M`;
   }
 
   renderHistory(entries) {

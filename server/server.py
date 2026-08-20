@@ -101,13 +101,27 @@ class Peripheral:
         try:
             state = self.commands.get_state()
             data = state.get("data", {})
-            data["cwd"] = self.cwd
+            data["cwd"] = self._format_cwd_for_footer(self.cwd)
             data["gitBranch"] = self._get_git_branch()
+            data["sessionStats"] = self.commands.get_session_stats().get("data", {})
             conn.send_json({"type": "state", "data": data})
 
             self._send_history(conn)
         except RuntimeError as e:
             conn.send_json({"type": "error", "error": str(e)})
+
+    def _format_cwd_for_footer(self, cwd: str) -> str:
+        """Show home directory as ~ like the TUI footer."""
+        home = os.path.expanduser("~")
+        try:
+            rel = os.path.relpath(cwd, home)
+            if rel == ".":
+                return "~"
+            if not rel.startswith(".."):
+                return f"~/{rel}"
+        except Exception:
+            pass
+        return cwd
 
     def _get_git_branch(self) -> str | None:
         """Return the current git branch of the session cwd, if any."""

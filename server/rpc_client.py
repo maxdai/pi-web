@@ -297,6 +297,9 @@ class RpcCommands:
     def get_state(self) -> dict:
         return self._c.send("get_state")
 
+    def get_session_stats(self) -> dict:
+        return self._c.send("get_session_stats")
+
     def get_messages(self) -> list:
         resp = self._c.send("get_messages")
         return resp.get("data", {}).get("messages", [])
