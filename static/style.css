@@ -674,3 +674,24 @@ body {
 #send-btn:active {
   opacity: 0.8;
 }
+
+#abort-btn {
+  background: transparent;
+  border: 1px solid var(--error);
+  color: var(--error);
+  border-radius: 6px;
+  padding: 0 16px;
+  font-size: 14px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s, color 0.15s;
+}
+
+#abort-btn:hover {
+  background: var(--error);
+  color: #18181e;
+}
+
+#abort-btn:active {
+  opacity: 0.8;
+}

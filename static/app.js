@@ -23,6 +23,7 @@ class PiWebClient {
     this.footerEl = document.getElementById('footer-line');
     this.inputEl = document.getElementById('input');
     this.sendBtn = document.getElementById('send-btn');
+    this.abortBtn = document.getElementById('abort-btn');
     this.commandMenuEl = document.getElementById('command-menu');
     this.modalOverlay = document.getElementById('modal-overlay');
     this.modalTitle = document.getElementById('modal-title');
@@ -682,6 +683,7 @@ class PiWebClient {
     if (!kind) {
       this.statusAreaEl.innerHTML = '';
       this.statusAreaEl.style.display = 'none';
+      if (this.abortBtn) this.abortBtn.style.display = 'none';
       return;
     }
 
@@ -689,6 +691,9 @@ class PiWebClient {
     this.statusAreaEl.innerHTML =
       `<div class="status-indicator ${kind}"><span class="spinner"></span><span class="status-text"></span></div>`;
     this.statusAreaEl.querySelector('.status-text').textContent = text;
+
+    // Show Abort button while any operation is running
+    if (this.abortBtn) this.abortBtn.style.display = 'inline-block';
   }
 
   updatePendingMessages(ev) {
@@ -1050,6 +1055,12 @@ class PiWebClient {
     this.inputEl.addEventListener('input', () => this.updateCommandMenu());
     if (this.sendBtn) {
       this.sendBtn.addEventListener('click', () => this.sendMessage());
+    }
+    if (this.abortBtn) {
+      this.abortBtn.addEventListener('click', () => {
+        this.send({ type: 'abort' });
+        this.abortBtn.style.display = 'none';
+      });
     }
 
     // Modal
