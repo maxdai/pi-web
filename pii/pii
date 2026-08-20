@@ -106,9 +106,17 @@ def cmd_resume(name, web=False, port=None):
             print(f"Web server not found: {server_script}", file=sys.stderr)
             sys.exit(1)
         cmd = [sys.executable, str(server_script), target["id"], target["cwd"], "--port", str(port or 4080)]
-        sys.exit(subprocess.call(cmd))
+        try:
+            sys.exit(subprocess.call(cmd))
+        except KeyboardInterrupt:
+            print()
+            sys.exit(130)
     else:
-        sys.exit(subprocess.call(["pi", "--session", target["id"]]))
+        try:
+            sys.exit(subprocess.call(["pi", "--session", target["id"]]))
+        except KeyboardInterrupt:
+            print()
+            sys.exit(130)
 
 
 def confirm(prompt):
