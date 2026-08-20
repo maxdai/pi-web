@@ -24,9 +24,6 @@ class PiWebClient {
 
     this.connect();
     this.bindInput();
-
-    // Periodically refresh token/context stats (TUI updates these live)
-    setInterval(() => this.getStats(), 5000);
   }
 
   connect() {
@@ -230,7 +227,6 @@ class PiWebClient {
         break;
       case 'agent_settled':
         this.resetStreaming();
-        this.getStats();
         break;
       case 'turn_start':
         break;
@@ -238,7 +234,6 @@ class PiWebClient {
         break;
       case 'agent_end':
         this.resetStreaming();
-        this.getStats();
         break;
       default:
         break;

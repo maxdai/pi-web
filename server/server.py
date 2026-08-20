@@ -84,8 +84,35 @@ class Peripheral:
     # RPC event -> broadcast
     # ------------------------------------------------------------------
 
+    # Events after which footer stats should be refreshed (TUI does this too)
+    _STATS_REFRESH_EVENTS = {
+        "agent_settled",
+        "turn_end",
+        "tool_execution_end",
+        "compaction_end",
+        "entry_appended",
+        "session_info_changed",
+        "thinking_level_changed",
+    }
+
     def _on_rpc_event(self, data: dict) -> None:
         self._broadcast(data)
+        if data.get("type") in self._STATS_REFRESH_EVENTS:
+            self._schedule_stats_refresh()
+
+    def _schedule_stats_refresh(self) -> None:
+        """Fetch and broadcast latest session stats in a background thread.
+
+        This must not run in the RPC read-loop thread, because get_session_stats
+        is a synchronous command that would deadlock if issued from there.
+        """
+        def run() -> None:
+            try:
+                stats = self.commands.get_session_stats().get("data", {})
+                self._broadcast({"type": "stats", "data": stats})
+            except Exception:
+                pass
+        threading.Thread(target=run, daemon=True).start()
 
     def _on_rpc_exit(self, code: int | None) -> None:
         logging.warning("Pi RPC process exited with code=%s stderr=%s", code, self.client._stderr_lines[-5:])
