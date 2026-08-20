@@ -395,20 +395,30 @@ pii delete <name>
 ### 9.3 实现细节（已确认）
 
 - pii 脚本放在项目 `pii/pii`（受 Git 管理），可软链/复制到 `/usr/local/bin`。
-- 项目路径基于 pii 脚本位置解析：`Path(__file__).resolve().parent.parent`。
+- **项目路径解析规则**（按优先级）：
+  1. 环境变量 `PI_WEB_DIR`（若设置，则使用该路径）。
+  2. 脚本位于项目内（`<项目>/pii/pii`，父目录含 `server/`）→ 推导为父目录。
+  3. 全局安装时 fallback 到 `~/pi-web`（若存在 `server/`）。
 - Web 模式：pii 解析出 session_id + cwd 后，通过 `subprocess.call([python, server.py, session_id, cwd, "--port", port])` 启动 Web 服务。
 - server.py 路径：`<项目根>/server/server.py`。
 - pii 常驻等待 server.py 退出；Ctrl+C 时向子进程转发信号。
 
-### 9.4 参数解析建议规则
+### 9.4 安装方式
+
+- 项目内：直接运行 `python3 pii/pii ...`。
+- 全局安装：复制/软链到 `/usr/local/bin/pii`。
+- 全局安装时依赖路径解析规则（`PI_WEB_DIR` 或 `~/pi-web` fallback）。
+
+### 9.5 参数解析规则（已确认）
 
 ```text
 pii r <name> --web [port]
 ```
 
 - 找到 `--web`。
-- 若其后是数字 → 作为端口。
+- 若其后紧跟数字 → 作为端口。
 - 否则 → 默认 4080。
+- 端口必须是 1–65535，非法 → 报错退出。
 
 ## 10. 目录结构（提议）
 
@@ -447,6 +457,9 @@ pii r <name> --web [port]
 | 是否改 Pi | 不改，控制逻辑在 `pii` |
 | 启动方式 | 通过 `pii r <name>` 增加 `--web` |
 | pii 改造原则 | 不影响原有 TUI 功能（无 `--web` 时保持原样） |
+| pii 脚本位置 | 项目 `pii/pii`（受 Git 管理），可复制/软链到 `/usr/local/bin` |
+| pii 项目路径解析 | `PI_WEB_DIR` 环境变量 → 项目内推导 → `~/pi-web` fallback |
+| pii Web 启动 | 解析 session 后调用 `server.py <session_id> <cwd> --port <port>` |
 | 默认 UI | TUI（`pii r <name>`） |
 | Web 语法 | `pii r <name> --web [port]` |
 | 默认端口 | `4080` |
