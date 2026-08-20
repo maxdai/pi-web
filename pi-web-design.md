@@ -176,24 +176,49 @@ pi --session <id> --mode rpc
 
 - 绑定 `127.0.0.1:<port>` 提供 HTTP。
 - 提供静态页面（HTML/CSS/JS）。
-- 提供浏览器与 Pi 之间的实时通道：
-  - WebSocket（推荐，双向）
-  - 或 SSE（仅服务端到浏览器）+ HTTP POST 输入
-- 转播 Pi 的 Agent 事件给浏览器。
+- 提供浏览器与 Pi 之间的实时通道：**WebSocket（双向）**。
+- 转播 Pi 的 Agent 事件给浏览器（**方案 A：事件中转**）。
 - 把浏览器用户输入转成 RPC 命令发送给 Pi。
 
-### 6.3 MVP 页面功能
+### 6.3 实时通道：WebSocket（已确认）
 
-- 消息列表（user / assistant / 可选 tool 状态）
-- 输入框 + 发送按钮
+- 使用 **WebSocket** 作为浏览器与 Web 服务之间的双向实时通道。
+- 与 Pi RPC 的全双工特性（stdin 输入命令 + stdout 输出事件）天然匹配。
+- MVP 阶段可用 Python 标准库手写简单 WebSocket，或引入轻量实现；以简单可行为准。
+
+### 6.4 事件处理：方案 A（事件中转，已确认）
+
+- **Web 服务只负责事件中转**：把 Pi RPC 输出的事件（`message_start` / `message_update` / `message_end` / `tool_execution_*` / `agent_settled` 等）**原样通过 WebSocket 推送给浏览器**。
+- **前端 JS 负责渲染**：把事件翻译成 TUI 风格的界面（用户消息色块、助手消息、thinking、工具执行块等）。
+- 优点：服务端逻辑简单、灵活，前端能更逼真地复刻 TUI 的交互与展示效果。
+- 若后续发现 A 方案效果不佳，再评估转向 B（服务端整理数据）。
+
+### 6.5 历史加载
+
+- 浏览器首次打开时：Web 服务向 Pi 发 `get_entries`，返回 session 全部历史（含 user / assistant / tool 消息）。
+- 随后订阅实时事件增量。
+- 目标：**与 TUI fullscreen 的消息流布局同等效果**（关闭时保留 transcript、重新打开完整还原历史 + 继续增量）。
+
+### 6.6 MVP 页面功能与交互
+
+- 消息列表（还原 TUI fullscreen 展示）：
+  - 用户消息：带背景色块（`userMessageBg #343541`）
+  - 助手消息：无背景，Markdown 渲染
+    - 文本：正常 markdown
+    - thinking：灰色斜体（`thinkingText #808080`）
+  - 工具执行块：独立背景色块（pending `#282832` / success `#283228` / error `#3c2828`）
+- 输入框 + 发送按钮（多行、回车发送）
 - 加载已有 session 历史
 - 连接状态显示（Connected / Disconnected）
 - 页面刷新后重连同一个 session
+- **支持的操作**：
+  - `prompt`：发送用户消息
+  - `abort`：中止当前操作
+  - 模型切换（`set_model` / `cycle_model` / `get_available_models`）
+  - thinking 切换（`set_thinking_level` / `cycle_thinking_level`）
 
-### 6.4 暂不做（后续可加）
+### 6.7 暂不做（后续可加）
 
-- 模型切换
-- thinking 详细展示
 - compaction 状态
 - 多用户 / 鉴权
 - TUI 组件复用（TUI 是终端渲染，不能直接复用）
@@ -262,8 +287,10 @@ pii delete <name>
 ### 9.2 改造点
 
 - `cmd_resume` 增加 `--web [port]` 解析。
-- 无 `--web`：保持现有 `pi --session <id>` 行为。
-- 有 `--web`：走 Web 分支，启动 Pi RPC 后端 + Python Web 服务，常驻等待信号。
+- **不影响原有功能**：
+  - 无 `--web`：严格保持现有 `pi --session <id>` 行为（TUI 模式，原样不变）。
+  - 有 `--web`：新增 Web 分支，启动 Pi RPC 后端 + Python Web 服务，常驻等待信号。
+- 所有改动必须在**保留原有 TUI 功能完全不受影响**的前提下进行。
 
 ### 9.3 参数解析建议规则
 
@@ -296,16 +323,14 @@ pii r <name> --web [port]
 
 ## 11. 后续待细化 & 开放问题
 
-1. Python Web 服务用标准库还是第三方框架（如 FastAPI / aiohttp）？
-   - MVP 可先用标准库 `http.server` + 简单 WebSocket。
-2. WebSocket 实现：
-   - 手写简单 WebSocket，还是引一个库？
-   - MVP 若想最简，也可以用 SSE + POST。
-3. `pii` 与 Pi RPC 的事件订阅如何关联请求 ID？
-4. 是否需要在 Web 界面显示 tool 调用？
-   - MVP 可以先只显示 user / assistant 文本。
-5. `pii web` 退出时如何干净地杀掉 Pi RPC 子进程？
+1. Python Web 服务的 WebSocket 实现方式：
+   - 用标准库手写简单 WebSocket，还是引轻量第三方库？
+   - 当前倾向：MVP 先用标准库手写（依赖少、可控）。
+2. 浏览器前端渲染 Markdown 的具体方案（是否引 marked/highlight.js 等，或自实现简化版）。
+3. `pii` 与 Pi RPC 的事件订阅如何关联请求 ID（前端发起命令时如何匹配响应与事件流）。
+4. `pii web` 退出时如何干净地杀掉 Pi RPC 子进程？
    - 建议：先发关闭命令，再 `terminate()`，最后兜底 `kill()`。
+5. Web 服务在 `pii` 内嵌入运行，还是作为独立进程由 `pii` 启动？
 
 ## 12. 已确认的设计决策（摘要）
 
@@ -313,6 +338,7 @@ pii r <name> --web [port]
 |----|------|
 | 是否改 Pi | 不改，控制逻辑在 `pii` |
 | 启动方式 | 通过 `pii r <name>` 增加 `--web` |
+| pii 改造原则 | 不影响原有 TUI 功能（无 `--web` 时保持原样） |
 | 默认 UI | TUI（`pii r <name>`） |
 | Web 语法 | `pii r <name> --web [port]` |
 | 默认端口 | `4080` |
@@ -320,14 +346,20 @@ pii r <name> --web [port]
 | 生命周期 | Web 模式常驻，直到 Ctrl+C / kill |
 | Pi 后端 | `pi --session <id> --mode rpc` |
 | Web 服务 | Python 实现 |
+| 实时通道 | **WebSocket（双向）** |
+| 事件处理 | **方案 A：事件中转**（Web 服务只中转事件，前端负责渲染） |
+| 历史加载 | 首次打开用 `get_entries` 加载历史，随后订阅增量 |
+| 前端效果 | **尽量复刻 TUI fullscreen 的消息流布局**（用户色块、工具块、thinking 等） |
+| 支持操作 | prompt、abort、模型切换、thinking 切换 |
 | 浏览器断线 | 不影响 Pi，可重连 |
 | 端口占用/非法 | 报错退出 |
+| 开发顺序 | 先实现 Web 服务（不依赖 pii），再在保留原有功能基础上改造 pii |
 
 ## 13. 下一步建议
 
-按顺序细化：
+按顺序推进：
 
-1. RPC 模式下 Pi 与 `pii` 的具体 JSON line 协议。
-2. Web 服务事件转播设计（WebSocket vs SSE）。
-3. 浏览器页面历史加载与增量事件去重。
-4. `pii` 的进程生命周期/信号处理细节。
+1. **先实现 Web 服务**（Python，独立可运行），暂不改 `pii`。
+2. 让 Web 服务能真正接通 Pi RPC，浏览器可对话。
+3. 前端按 TUI fullscreen 风格渲染（方案 A）。
+4. 验证效果后，再在不影响原有 TUI 功能基础上改造 `pii` 接入 Web 模式。
