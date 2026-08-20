@@ -317,6 +317,18 @@ body {
   font-weight: 600;
 }
 
+#pending {
+  display: none;
+  padding: 4px 12px;
+  border-top: 1px solid var(--border);
+  color: var(--dim);
+  font-size: 13px;
+}
+
+.pending-line {
+  margin: 2px 0;
+}
+
 #status {
   display: none;
   padding: 4px 12px;

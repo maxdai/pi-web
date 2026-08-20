@@ -7,6 +7,7 @@ class PiWebClient {
     this.contentEl = document.getElementById('content');
     this.statusEl = document.getElementById('conn-status');
     this.statusAreaEl = document.getElementById('status');
+    this.pendingEl = document.getElementById('pending');
     this.footerEl = document.getElementById('footer-line');
     this.inputEl = document.getElementById('input');
     this.sendBtn = document.getElementById('send-btn');
@@ -401,6 +402,9 @@ class PiWebClient {
         this.status.branch = false;
         this.updateStatusDisplay();
         break;
+      case 'queue_update':
+        this.updatePendingMessages(ev);
+        break;
       default:
         break;
     }
@@ -481,6 +485,28 @@ class PiWebClient {
     this.statusAreaEl.innerHTML =
       `<div class="status-indicator ${kind}"><span class="spinner"></span><span class="status-text"></span></div>`;
     this.statusAreaEl.querySelector('.status-text').textContent = text;
+  }
+
+  updatePendingMessages(ev) {
+    if (!this.pendingEl) return;
+    const steering = ev.steering || [];
+    const followUp = ev.followUp || [];
+
+    if (steering.length === 0 && followUp.length === 0) {
+      this.pendingEl.innerHTML = '';
+      this.pendingEl.style.display = 'none';
+      return;
+    }
+
+    this.pendingEl.style.display = 'block';
+    const lines = [];
+    for (const msg of steering) {
+      lines.push(`<div class="pending-line steering">Steering: ${this.escapeHtml(msg)}</div>`);
+    }
+    for (const msg of followUp) {
+      lines.push(`<div class="pending-line follow-up">Follow-up: ${this.escapeHtml(msg)}</div>`);
+    }
+    this.pendingEl.innerHTML = lines.join('');
   }
 
   // ------------------------------------------------------------------
