@@ -229,7 +229,30 @@ pi --session <id> --mode rpc
 - **流式渲染**：`message_update` 时 Markdown 内容可能不完整，marked 应能容忍部分 Markdown 并持续更新。
 - 代码高亮（highlight.js）暂不做，后续需要再加。
 
-### 6.8 暂不做（后续可加）
+### 6.8 工具执行块展示（已确认，尽量仿照 TUI）
+
+- **区分 bash 和其他工具**：
+  - bash：显示 `$ command`（加粗、绿色 `bashMode`），输出预览 5 行。
+  - 其他工具：显示工具名（加粗）+ 参数 JSON，输出预览 10 行。
+- **背景色状态**：
+  - pending：`#282832`
+  - success：`#283228`
+  - error：`#3c2828`
+- **输出预览 + 展开/收起**：
+  - 默认截断预览，超出行数时显示 `... (N more lines, to expand)`。
+  - 点击工具块可展开/收起完整输出。
+- **耗时显示**：
+  - 从 `tool_execution_start` 开始计时。
+  - 完成时显示 `Took X.Xs`，进行中显示 `Elapsed X.Xs`。
+- **截断警告**：
+  - 若 result.details 中有 `truncation` / `fullOutputPath`，显示 `[Truncated: ...]` 和 `Full output: path`。
+- **数据来源**：
+  - `tool_execution_start`（toolName、args）→ 创建工具块、开始计时。
+  - `tool_execution_update`（partialResult）→ 更新输出。
+  - `tool_execution_end`（result、isError）→ 完成状态、最终输出、耗时、截断警告。
+  - 历史加载：assistant 消息中的 toolCall 创建工具块，toolResult 消息更新结果。
+
+### 6.9 暂不做（后续可加）
 
 - compaction 状态
 - 多用户 / 鉴权
