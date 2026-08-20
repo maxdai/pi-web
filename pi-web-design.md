@@ -271,7 +271,16 @@ pi --session <id> --mode rpc
   - 无队列时隐藏区域。
 - 当前 Web 版暂不提供编辑队列的快捷键（后续可加）。
 
-### 6.11 暂不做（后续可加）
+### 6.11 特殊消息展示（已确认，仿照 TUI）
+
+- 在历史加载和实时事件中处理非 message 的 session entry：
+  - `branch_summary` → `[branch]` 标签 + 紫色背景 + summary（可展开）
+  - `compaction` → `[compaction]` 标签 + 紫色背景 + token 数 + summary（可展开）
+  - `custom` / `custom_message` → `[customType]` 标签 + 紫色背景 + 内容
+- 紫色背景：`customMessageBg #2d2838`，标签色 `customMessageLabel #9575cd`，文字色 `customMessageText`。
+- 支持点击展开/收起（长内容默认收起）。
+
+### 6.12 暂不做（后续可加）
 
 - 多用户 / 鉴权
 - TUI 组件复用（TUI 是终端渲染，不能直接复用）
