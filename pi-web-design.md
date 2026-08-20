@@ -261,7 +261,17 @@ pi --session <id> --mode rpc
 - **Branch Summary**：`summarization_retry_attempt_start`（source=branchSummary）时显示 `Summarizing branch...`，`summarization_retry_finished` 时隐藏。
 - 样式：spinner 用 CSS 动画，文字灰色。
 
-### 6.10 暂不做（后续可加）
+### 6.10 Pending Messages（已确认，仿照 TUI）
+
+- 显示在消息流与状态指示器之间（`#pending` 区域）。
+- 数据来源：Pi RPC 的 `queue_update` 事件（`steering: string[]` / `followUp: string[]`）。
+- 显示内容：
+  - `Steering: <message>`（灰色）
+  - `Follow-up: <message>`（灰色）
+  - 无队列时隐藏区域。
+- 当前 Web 版暂不提供编辑队列的快捷键（后续可加）。
+
+### 6.11 暂不做（后续可加）
 
 - 多用户 / 鉴权
 - TUI 组件复用（TUI 是终端渲染，不能直接复用）
