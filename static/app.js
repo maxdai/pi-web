@@ -257,6 +257,61 @@ class PiWebClient {
     this.scrollToBottom();
   }
 
+  renderMessage(message) {
+    if (!message) return;
+    if (message.role === 'user') {
+      this.appendUserMessage(message);
+    } else if (message.role === 'assistant') {
+      this.renderHistoryAssistantMessage(message);
+    } else if (message.role === 'toolResult') {
+      this.renderHistoryToolResult(message);
+    }
+  }
+
+  renderHistoryAssistantMessage(message) {
+    const div = document.createElement('div');
+    div.className = 'message assistant';
+    const role = document.createElement('div');
+    role.className = 'role';
+    role.textContent = 'Assistant';
+    const body = document.createElement('div');
+    body.className = 'body';
+    div.appendChild(role);
+    div.appendChild(body);
+    this.contentEl.appendChild(div);
+    this.renderAssistantContent(message, body);
+
+    // Create tool blocks for tool calls
+    for (const block of message.content || []) {
+      if (block.type === 'toolCall') {
+        const toolDiv = document.createElement('div');
+        toolDiv.className = 'tool-block pending';
+        const title = document.createElement('div');
+        title.className = 'tool-title';
+        title.textContent = block.name || 'tool';
+        const output = document.createElement('div');
+        output.className = 'tool-output';
+        output.textContent = JSON.stringify(block.arguments || {}, null, 2);
+        toolDiv.appendChild(title);
+        toolDiv.appendChild(output);
+        this.contentEl.appendChild(toolDiv);
+        this.toolEls.set(block.id, toolDiv);
+      }
+    }
+  }
+
+  renderHistoryToolResult(message) {
+    const div = this.toolEls.get(message.toolCallId);
+    if (div) {
+      div.className = message.isError ? 'tool-block error' : 'tool-block success';
+      const out = div.querySelector('.tool-output');
+      if (out) {
+        out.textContent = this.resultText(message);
+      }
+      this.toolEls.delete(message.toolCallId);
+    }
+  }
+
   clearContent() {
     this.contentEl.innerHTML = '';
     this.toolEls.clear();
