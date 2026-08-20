@@ -252,9 +252,17 @@ pi --session <id> --mode rpc
   - `tool_execution_end`（result、isError）→ 完成状态、最终输出、耗时、截断警告。
   - 历史加载：assistant 消息中的 toolCall 创建工具块，toolResult 消息更新结果。
 
-### 6.9 暂不做（后续可加）
+### 6.9 Status 指示器（已确认，四种都做）
 
-- compaction 状态
+- 在消息流与输入框之间显示状态指示区域。
+- **Working**：`agent_start` / `turn_start` 时显示，`agent_settled` / `agent_end` 时隐藏。带 spinner 动画。
+- **Retry**：`auto_retry_start` 时显示 `Retrying (attempt/maxAttempts) in Xs... (to cancel)`，`auto_retry_end` 时隐藏。
+- **Compaction**：`compaction_start` 时显示 `Auto-compacting...` / `Compacting context...`，`compaction_end` 时隐藏。
+- **Branch Summary**：`summarization_retry_attempt_start`（source=branchSummary）时显示 `Summarizing branch...`，`summarization_retry_finished` 时隐藏。
+- 样式：spinner 用 CSS 动画，文字灰色。
+
+### 6.10 暂不做（后续可加）
+
 - 多用户 / 鉴权
 - TUI 组件复用（TUI 是终端渲染，不能直接复用）
 
