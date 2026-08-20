@@ -100,7 +100,7 @@ class RpcClient:
         self,
         timeout: float = 40.0,
         interval: float = 2.0,
-        post_ready_delay: float = 5.0,
+        post_ready_delay: float = 0.5,
     ) -> None:
         """
         Wait until the pi RPC process is ready to accept commands.
