@@ -41,7 +41,25 @@ pii r <name> --web <port>   # Web 服务，使用指定端口
 - 统一绑定 `127.0.0.1`
 - 端口非法或占用 → 报错退出（不做自动换端口）
 
-## 3. Git 使用原则（重要）
+## 3. 开发流程（三阶段，重要）
+
+任何设计或修改都应遵循以下三阶段流程，**顺序不可跳过**：
+
+### 阶段 1：讨论
+- 通过讨论确定如何进行设计或修改。
+- **此阶段不进行代码的实际修改**。
+- 充分沟通目标、方案、边界、不确定性。
+
+### 阶段 2：生成或更新设计文件
+- 根据讨论结果，**生成或更新设计文件**（如 `pi-web-design.md` 或针对性的设计说明）。
+- 把讨论达成的结论以书面形式固化下来。
+
+### 阶段 3：开发 / 修改
+- **根据讨论结果及设计文件**，进行相应的开发和修改。
+
+> 注意：不要在没有讨论和设计文件的铺垫下直接动手改代码。
+
+## 4. Git 使用原则（重要）
 
 ### 基本规则
 
@@ -59,7 +77,7 @@ pii r <name> --web <port>   # Web 服务，使用指定端口
 - 提交信息应**简洁、描述性**，说明改动内容。
 - 一个提交尽量聚焦一个改动点。
 
-## 4. 目录结构（提议，以实际为准）
+## 5. 目录结构（提议，以实际为准）
 
 ```text
 ~/pi-web/
@@ -78,7 +96,7 @@ pii r <name> --web <port>   # Web 服务，使用指定端口
 └── README.md
 ```
 
-## 5. 相关源码位置
+## 6. 相关源码位置
 
 - **Pi 源码**：`~/research/pi/`
 - **Pi RPC 模式**：`~/research/pi/packages/coding-agent/src/modes/rpc/`
@@ -90,7 +108,7 @@ pii r <name> --web <port>   # Web 服务，使用指定端口
   - `~/research/pi/packages/coding-agent/src/modes/interactive/components/`
   - 深色主题：`~/research/pi/packages/coding-agent/src/modes/interactive/theme/dark.json`
 
-## 6. RPC 协议速查
+## 7. RPC 协议速查
 
 - **发送命令（stdin）**：JSON line，`{"id": "...", "type": "prompt", "message": "..."}`
 - **接收响应（stdout）**：`{"id": "...", "type": "response", "command": "prompt", "success": true, "data": {...}}`
@@ -113,7 +131,7 @@ pii r <name> --web <port>   # Web 服务，使用指定端口
 | `switch_session` | 切换 session |
 | `fork` / `clone` | 分支 / 克隆 |
 
-## 7. TUI 展示结构参考（Web UI 还原目标）
+## 8. TUI 展示结构参考（Web UI 还原目标）
 
 从上到下布局：
 
@@ -135,7 +153,7 @@ footer：
   · model name · thinking level
 ```
 
-## 8. 编码注意事项
+## 9. 编码注意事项
 
 - `pii` 使用 **Python 标准库**（当前实现零第三方依赖，尽量保持）。
 - Web 服务 MVP 阶段优先考虑标准库。
