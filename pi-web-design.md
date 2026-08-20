@@ -280,8 +280,23 @@ pi --session <id> --mode rpc
 - 紫色背景：`customMessageBg #2d2838`，标签色 `customMessageLabel #9575cd`，文字色 `customMessageText`。
 - 支持点击展开/收起（长内容默认收起）。
 
-### 6.12 暂不做（后续可加）
+### 6.12 Header / Loaded Resources（已确认，简化版）
 
+- **Header**：
+  - 显示 `pi v<version>`（版本号）。
+  - 不显示终端快捷键提示（Web 端不适用）。
+  - 当前 session 名称/模型已由 footer 展示，header 保持简洁。
+- **Loaded Resources**（可展开/收起区域，位于消息流上方）：
+  - 数据来源：`get_commands` 命令。
+  - Skills：`source=skill` 的项。
+  - Prompts：`source=prompt` 的项。
+  - Extensions：`source=extension` 的项。
+  - Context 文件列表 / Themes 暂不做（无 RPC 命令）。
+- 默认收起，点击展开显示列表。
+
+### 6.13 暂不做（后续可加）
+
+- Context 文件列表 / Themes 展示
 - 多用户 / 鉴权
 - TUI 组件复用（TUI 是终端渲染，不能直接复用）
 
