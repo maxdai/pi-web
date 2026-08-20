@@ -239,23 +239,23 @@ class PiWebClient {
     if (!state) state = this.lastState;
     if (!state) return;
 
-    const parts = [];
+    const leftParts = [];
 
     // Token/cost stats from sessionStats (if available)
     if (stats && stats.tokens) {
       const t = stats.tokens;
-      if (t.input) parts.push(`↑${this.formatTokens(t.input)}`);
-      if (t.output) parts.push(`↓${this.formatTokens(t.output)}`);
-      if (t.cacheRead) parts.push(`R${this.formatTokens(t.cacheRead)}`);
-      if (t.cacheWrite) parts.push(`W${this.formatTokens(t.cacheWrite)}`);
+      if (t.input) leftParts.push(`↑${this.formatTokens(t.input)}`);
+      if (t.output) leftParts.push(`↓${this.formatTokens(t.output)}`);
+      if (t.cacheRead) leftParts.push(`R${this.formatTokens(t.cacheRead)}`);
+      if (t.cacheWrite) leftParts.push(`W${this.formatTokens(t.cacheWrite)}`);
       if ((t.cacheRead > 0 || t.cacheWrite > 0)) {
         const promptTokens = t.input + t.cacheRead + t.cacheWrite;
         if (promptTokens > 0) {
           const hitRate = (t.cacheRead / promptTokens) * 100;
-          parts.push(`CH${hitRate.toFixed(1)}%`);
+          leftParts.push(`CH${hitRate.toFixed(1)}%`);
         }
       }
-      if (stats.cost) parts.push(`$${stats.cost.toFixed(3)}`);
+      if (stats.cost) leftParts.push(`$${stats.cost.toFixed(3)}`);
     }
 
     // Context usage: percent/contextWindow (auto)
@@ -264,13 +264,14 @@ class PiWebClient {
       const ctxWindow = this.formatTokens(cu.contextWindow);
       const auto = state.autoCompactionEnabled ? ' (auto)' : '';
       if (cu.percent !== null && cu.percent !== undefined) {
-        parts.push(`${cu.percent.toFixed(1)}%/${ctxWindow}${auto}`);
+        leftParts.push(`${cu.percent.toFixed(1)}%/${ctxWindow}${auto}`);
       } else {
-        parts.push(`?/${ctxWindow}${auto}`);
+        leftParts.push(`?/${ctxWindow}${auto}`);
       }
     }
 
-    // Model + thinking on the right (clickable)
+    // Model + thinking on the right (clickable, right-aligned)
+    let rightHtml = '';
     if (state.model) {
       const provider = state.model.provider || '';
       const model = state.model.id || state.model.model || '';
@@ -278,10 +279,10 @@ class PiWebClient {
       const thinking = state.thinkingLevel || 'off';
       const modelHtml = `<span class="clickable model-label" title="Click to change model">${this.escapeHtml(modelLabel)}</span>`;
       const thinkingHtml = `<span class="clickable thinking-label" title="Click to change thinking">${this.escapeHtml(thinking)}</span>`;
-      parts.push(`${modelHtml} · ${thinkingHtml}`);
+      rightHtml = `${modelHtml} · ${thinkingHtml}`;
     }
 
-    statsEl.innerHTML = parts.join(' ');
+    statsEl.innerHTML = `<span class="stats-left">${leftParts.join(' ')}</span><span class="stats-right">${rightHtml}</span>`;
 
     const modelEl = statsEl.querySelector('.model-label');
     if (modelEl) {

@@ -481,9 +481,24 @@ body {
 }
 
 #footer-stats {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
   color: var(--dim);
   font-size: 12px;
   margin-bottom: 4px;
+}
+
+.stats-left {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stats-right {
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .clickable {
