@@ -102,8 +102,10 @@ class PiWebClient {
 
   renderState(state) {
     if (state && state.model) {
+      const provider = state.model.provider || '';
       const model = state.model.id || state.model.model || '';
-      this.footerEl.textContent = `model: ${model} · thinking: ${state.thinkingLevel || 'off'} · msgs: ${state.messageCount}`;
+      const modelLabel = provider ? `${provider}/${model}` : model;
+      this.footerEl.textContent = `model: ${modelLabel} · thinking: ${state.thinkingLevel || 'off'} · msgs: ${state.messageCount}`;
     }
   }
 
