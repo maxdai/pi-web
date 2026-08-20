@@ -173,6 +173,70 @@ class PiWebClient {
     this.send({ type: 'get_stats' });
   }
 
+  // ------------------------------------------------------------------
+  // Markdown rendering
+  // ------------------------------------------------------------------
+
+  renderMarkdown(text) {
+    if (!text) return '';
+    try {
+      const raw = marked.parse(text, { breaks: true, gfm: true });
+      return this.sanitizeHtml(raw);
+    } catch {
+      return this.escapeHtml(text);
+    }
+  }
+
+  escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+  }
+
+  sanitizeHtml(html) {
+    const template = document.createElement('template');
+    template.innerHTML = html;
+
+    const allowed = new Set([
+      'P', 'BR', 'STRONG', 'EM', 'CODE', 'PRE', 'BLOCKQUOTE',
+      'UL', 'OL', 'LI', 'A', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6',
+      'TABLE', 'THEAD', 'TBODY', 'TR', 'TH', 'TD', 'HR', 'SPAN', 'DEL', 'DIV',
+    ]);
+    const badTags = ['SCRIPT', 'STYLE', 'IFRAME', 'OBJECT', 'EMBED', 'LINK', 'META', 'FORM', 'INPUT', 'BUTTON', 'TEXTAREA', 'SELECT', 'OPTION'];
+
+    for (const el of [...template.content.querySelectorAll('*')]) {
+      if (badTags.includes(el.tagName)) {
+        el.remove();
+        continue;
+      }
+      if (!allowed.has(el.tagName)) {
+        el.replaceWith(...el.childNodes);
+        continue;
+      }
+      // Clean attributes: only keep safe href/src, remove event handlers
+      for (const attr of [...el.attributes]) {
+        const name = attr.name.toLowerCase();
+        if (name.startsWith('on')) {
+          el.removeAttribute(attr.name);
+          continue;
+        }
+        if (name === 'href' || name === 'src') {
+          const val = attr.value.trim().toLowerCase();
+          const ok = val.startsWith('http://') || val.startsWith('https://') ||
+            val.startsWith('mailto:') || val.startsWith('#') || val.startsWith('/') ||
+            val.startsWith('./') || val.startsWith('../');
+          if (!ok) {
+            el.removeAttribute(attr.name);
+          }
+        } else if (name !== 'class' && name !== 'id' && name !== 'colspan' && name !== 'rowspan' && name !== 'align') {
+          el.removeAttribute(attr.name);
+        }
+      }
+    }
+
+    return template.innerHTML;
+  }
+
   formatTokens(count) {
     if (count < 1000) return count.toString();
     if (count < 10000) return `${(count / 1000).toFixed(1)}k`;
@@ -293,7 +357,7 @@ class PiWebClient {
     role.textContent = 'You';
     const body = document.createElement('div');
     body.className = 'body';
-    body.textContent = text;
+    body.innerHTML = this.renderMarkdown(text);
     div.appendChild(role);
     div.appendChild(body);
     this.contentEl.appendChild(div);
@@ -332,18 +396,17 @@ class PiWebClient {
   }
 
   renderAssistantContent(message, body) {
-    // Simple render: concatenate thinking + text blocks
     body.innerHTML = '';
     for (const block of message.content || []) {
       if (block.type === 'thinking') {
         const p = document.createElement('div');
         p.className = 'thinking';
-        p.textContent = block.thinking;
+        p.innerHTML = this.renderMarkdown(block.thinking);
         body.appendChild(p);
       } else if (block.type === 'text') {
         const p = document.createElement('div');
         p.className = 'body-text';
-        p.textContent = block.text;
+        p.innerHTML = this.renderMarkdown(block.text);
         body.appendChild(p);
       }
     }

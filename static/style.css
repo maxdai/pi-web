@@ -134,6 +134,148 @@ body {
   font-style: italic;
 }
 
+/* Markdown content inside messages */
+.body-text, .message.user .body {
+  line-height: 1.6;
+}
+
+.body-text > *:first-child,
+.message.user .body > *:first-child {
+  margin-top: 0;
+}
+
+.body-text > *:last-child,
+.message.user .body > *:last-child {
+  margin-bottom: 0;
+}
+
+.body-text h1,
+.body-text h2,
+.body-text h3,
+.body-text h4,
+.body-text h5,
+.body-text h6,
+.message.user .body h1,
+.message.user .body h2,
+.message.user .body h3,
+.message.user .body h4,
+.message.user .body h5,
+.message.user .body h6 {
+  color: #f0c674;
+  margin: 0.8em 0 0.4em;
+  font-weight: 600;
+}
+
+.body-text h1,
+.message.user .body h1 {
+  font-size: 1.4em;
+}
+
+.body-text h2,
+.message.user .body h2 {
+  font-size: 1.25em;
+}
+
+.body-text h3,
+.message.user .body h3 {
+  font-size: 1.1em;
+}
+
+.body-text p,
+.message.user .body p {
+  margin: 0.4em 0;
+}
+
+.body-text ul,
+.body-text ol,
+.message.user .body ul,
+.message.user .body ol {
+  margin: 0.4em 0;
+  padding-left: 1.6em;
+}
+
+.body-text li,
+.message.user .body li {
+  margin: 0.2em 0;
+}
+
+.body-text code,
+.message.user .body code {
+  background: rgba(128, 128, 128, 0.15);
+  color: var(--accent);
+  padding: 0.1em 0.35em;
+  border-radius: 3px;
+  font-family: monospace;
+  font-size: 0.9em;
+}
+
+.body-text pre,
+.message.user .body pre {
+  background: #1e1e24;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 12px;
+  overflow-x: auto;
+  margin: 0.6em 0;
+}
+
+.body-text pre code,
+.message.user .body pre code {
+  background: transparent;
+  color: #b5bd68;
+  padding: 0;
+  font-size: 0.9em;
+  line-height: 1.5;
+  white-space: pre;
+}
+
+.body-text blockquote,
+.message.user .body blockquote {
+  border-left: 3px solid var(--muted);
+  color: var(--muted);
+  margin: 0.6em 0;
+  padding: 0.1em 1em;
+}
+
+.body-text a,
+.message.user .body a {
+  color: #81a2be;
+  text-decoration: none;
+}
+
+.body-text a:hover,
+.message.user .body a:hover {
+  text-decoration: underline;
+}
+
+.body-text hr,
+.message.user .body hr {
+  border: none;
+  border-top: 1px solid var(--muted);
+  margin: 1em 0;
+}
+
+.body-text table,
+.message.user .body table {
+  border-collapse: collapse;
+  margin: 0.6em 0;
+  font-size: 0.95em;
+}
+
+.body-text th,
+.body-text td,
+.message.user .body th,
+.message.user .body td {
+  border: 1px solid var(--border);
+  padding: 4px 10px;
+}
+
+.body-text th,
+.message.user .body th {
+  background: rgba(128, 128, 128, 0.1);
+  font-weight: 600;
+}
+
 #footer {
   border-top: 1px solid var(--border);
   padding: 8px 12px;
