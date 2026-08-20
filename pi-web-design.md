@@ -316,9 +316,24 @@ pi --session <id> --mode rpc
 - **暂不支持的内置命令**（如 `/login`、`/logout`、`/settings` 等）：在菜单中显示但标记"暂不支持"或隐藏。
 - 点击 footer 的 model / thinking 文字也打开对应选择面板。
 
-### 6.15 暂不做（后续可加）
+### 6.15 通用弹窗 UI 机制（已确认）
+
+- 处理 Pi RPC 的 `extension_ui_request` 事件，把 TUI 原本弹窗显示的内容在 Web 端以模态框呈现。
+- 支持类型：
+  - `select` → 弹窗选项列表，用户选择后发送 `extension_ui_response`（value）。
+  - `confirm` → 弹窗确认/取消，回传 `confirmed` 或 `cancelled`。
+  - `input` → 弹窗输入框，回传 `value` 或 `cancelled`。
+  - `editor` → 弹窗多行编辑器，回传 `value` 或 `cancelled`。
+  - `notify` → 通知弹窗（可手动关闭）。
+  - `setWidget` → 组件面板（侧边栏或弹窗显示）。
+  - `setStatus` → 状态栏显示（已有，保持）。
+- 服务端：增加 `extension_ui_response` 命令，把浏览器响应转发给 Pi RPC。
+- 前端：扩展现有 modal 组件，支持多种交互类型。
+
+### 6.16 暂不做（后续可加）
 
 - `/login`、`/logout` 等认证命令（RPC 不支持，需在 TUI 中操作）
+- `ctx.ui.custom()` 自定义弹窗（RPC 模式不支持）
 - Context 文件列表 / Themes 展示
 - 多用户 / 鉴权
 - TUI 组件复用（TUI 是终端渲染，不能直接复用）
