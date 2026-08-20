@@ -140,7 +140,7 @@ class PiWebClient {
         this.appendError(data.error);
         break;
       case 'extension_ui_request':
-        // Ignore UI requests for now (or render minimally in footer)
+        this.handleExtensionUIRequest(data);
         break;
       default:
         // Agent session event -> render
@@ -1100,7 +1100,9 @@ class PiWebClient {
     this.modalOverlay.style.display = 'none';
     this.modalList.innerHTML = '';
     this.modalSearch.value = '';
+    this.modalSearch.style.display = 'block';
     this.modalMode = null;
+    this.currentExtRequest = null;
     this.inputEl.focus();
   }
 
@@ -1143,6 +1145,116 @@ class PiWebClient {
         this.closeModal();
       });
     });
+  }
+
+  handleExtensionUIRequest(req) {
+    const method = req.method;
+    if (method === 'select') {
+      this.openExtensionSelect(req);
+    } else if (method === 'confirm') {
+      this.openExtensionConfirm(req);
+    } else if (method === 'input') {
+      this.openExtensionInput(req);
+    } else if (method === 'editor') {
+      this.openExtensionEditor(req);
+    } else if (method === 'notify') {
+      this.openExtensionNotify(req);
+    } else if (method === 'setWidget') {
+      // Render widget lines as a simple notification/popup for now
+      const text = (req.widgetLines || []).join('\n');
+      this.openExtensionNotify({ ...req, title: req.widgetKey || 'Widget', message: text });
+    }
+    // setStatus / setTitle / set_editor_text are handled elsewhere or ignored
+  }
+
+  openExtensionSelect(req) {
+    this.openModal(req.title || 'Select', 'extension-select');
+    this.currentExtRequest = req;
+    this.modalSearch.style.display = 'block';
+    const items = (req.options || []).map((opt) => ({ name: opt, desc: '', value: opt }));
+    this.renderModalItems(items, (item) => {
+      this.send({ type: 'extension_ui_response', id: req.id, value: item.value });
+    });
+  }
+
+  openExtensionConfirm(req) {
+    this.openModal(req.title || 'Confirm', 'extension-confirm');
+    this.currentExtRequest = req;
+    this.modalSearch.style.display = 'none';
+    this.modalList.innerHTML = `
+      <div class="modal-message">${this.escapeHtml(req.message || '')}</div>
+      <div class="modal-actions">
+        <button class="modal-btn confirm-btn">Confirm</button>
+        <button class="modal-btn cancel-btn">Cancel</button>
+      </div>`;
+    this.modalList.querySelector('.confirm-btn').addEventListener('click', () => {
+      this.send({ type: 'extension_ui_response', id: req.id, confirmed: true });
+      this.closeModal();
+    });
+    this.modalList.querySelector('.cancel-btn').addEventListener('click', () => {
+      this.send({ type: 'extension_ui_response', id: req.id, cancelled: true });
+      this.closeModal();
+    });
+  }
+
+  openExtensionInput(req) {
+    this.openModal(req.title || 'Input', 'extension-input');
+    this.currentExtRequest = req;
+    this.modalSearch.style.display = 'none';
+    this.modalList.innerHTML = `
+      <div class="modal-message">${this.escapeHtml(req.message || '')}</div>
+      <input class="modal-input" type="text" placeholder="${this.escapeHtml(req.placeholder || '')}">
+      <div class="modal-actions">
+        <button class="modal-btn ok-btn">OK</button>
+        <button class="modal-btn cancel-btn">Cancel</button>
+      </div>`;
+    const input = this.modalList.querySelector('.modal-input');
+    input.focus();
+    this.modalList.querySelector('.ok-btn').addEventListener('click', () => {
+      this.send({ type: 'extension_ui_response', id: req.id, value: input.value });
+      this.closeModal();
+    });
+    this.modalList.querySelector('.cancel-btn').addEventListener('click', () => {
+      this.send({ type: 'extension_ui_response', id: req.id, cancelled: true });
+      this.closeModal();
+    });
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        this.send({ type: 'extension_ui_response', id: req.id, value: input.value });
+        this.closeModal();
+      }
+    });
+  }
+
+  openExtensionEditor(req) {
+    this.openModal(req.title || 'Editor', 'extension-editor');
+    this.currentExtRequest = req;
+    this.modalSearch.style.display = 'none';
+    this.modalList.innerHTML = `
+      <div class="modal-message">${this.escapeHtml(req.title || '')}</div>
+      <textarea class="modal-editor" rows="10">${this.escapeHtml(req.prefill || '')}</textarea>
+      <div class="modal-actions">
+        <button class="modal-btn ok-btn">OK</button>
+        <button class="modal-btn cancel-btn">Cancel</button>
+      </div>`;
+    const editor = this.modalList.querySelector('.modal-editor');
+    editor.focus();
+    this.modalList.querySelector('.ok-btn').addEventListener('click', () => {
+      this.send({ type: 'extension_ui_response', id: req.id, value: editor.value });
+      this.closeModal();
+    });
+    this.modalList.querySelector('.cancel-btn').addEventListener('click', () => {
+      this.send({ type: 'extension_ui_response', id: req.id, cancelled: true });
+      this.closeModal();
+    });
+  }
+
+  openExtensionNotify(req) {
+    this.openModal(req.title || 'Notification', 'extension-notify');
+    this.currentExtRequest = req;
+    this.modalSearch.style.display = 'none';
+    this.modalList.innerHTML = `<div class="modal-message">${this.escapeHtml(req.message || '')}</div>`;
+    // Close button in modal footer is enough
   }
 
   handleModels(models) {

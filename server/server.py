@@ -266,6 +266,13 @@ class Peripheral:
             if not name:
                 raise RuntimeError("Missing 'name'")
             self.commands.set_session_name(name)
+        elif cmd_type == "extension_ui_response":
+            response_id = data.get("id")
+            if not response_id:
+                raise RuntimeError("Missing 'id'")
+            # Pass through all remaining fields (value/confirmed/cancelled)
+            extra = {k: v for k, v in data.items() if k not in ("type", "id")}
+            self.commands.extension_ui_response(response_id, **extra)
         else:
             raise RuntimeError(f"Unsupported command: {cmd_type}")
 

@@ -609,6 +609,79 @@ body {
   color: var(--text);
 }
 
+.modal-message {
+  color: var(--text);
+  font-size: 13px;
+  margin-bottom: 10px;
+  white-space: pre-wrap;
+  line-height: 1.5;
+}
+
+.modal-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 10px;
+}
+
+.modal-btn {
+  background: transparent;
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  border-radius: 6px;
+  padding: 6px 16px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.modal-btn:hover {
+  background: var(--accent);
+  color: #18181e;
+}
+
+.modal-btn.cancel-btn {
+  border-color: var(--error);
+  color: var(--error);
+}
+
+.modal-btn.cancel-btn:hover {
+  background: var(--error);
+  color: #18181e;
+}
+
+.modal-input {
+  width: 100%;
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 13px;
+  outline: none;
+}
+
+.modal-input:focus {
+  border-color: var(--accent);
+}
+
+.modal-editor {
+  width: 100%;
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 13px;
+  font-family: monospace;
+  outline: none;
+  resize: vertical;
+}
+
+.modal-editor:focus {
+  border-color: var(--accent);
+}
+
 #command-menu {
   display: none;
   margin-bottom: 4px;

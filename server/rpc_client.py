@@ -354,3 +354,8 @@ class RpcCommands:
 
     def set_session_name(self, name: str) -> None:
         self._c.send("set_session_name", name=name)
+
+    def extension_ui_response(self, response_id: str, **data) -> None:
+        """Send a response to a pending extension UI request (select/confirm/input/editor)."""
+        payload = {"type": "extension_ui_response", "id": response_id, **data}
+        self._c._write(payload)
