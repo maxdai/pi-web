@@ -145,6 +145,12 @@ body {
   margin-bottom: 4px;
 }
 
+#footer-stats {
+  color: var(--dim);
+  font-size: 12px;
+  margin-bottom: 4px;
+}
+
 #input {
   width: 100%;
   background: transparent;

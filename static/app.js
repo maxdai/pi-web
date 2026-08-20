@@ -101,11 +101,23 @@ class PiWebClient {
   // ------------------------------------------------------------------
 
   renderState(state) {
-    if (state && state.model) {
+    if (!state) return;
+
+    // First footer line: pwd (branch) • session name
+    const pwd = state.cwd || '';
+    const branch = state.gitBranch ? ` (${state.gitBranch})` : '';
+    const name = state.sessionName ? ` • ${state.sessionName}` : '';
+    this.footerEl.textContent = `${pwd}${branch}${name}`;
+
+    // Second footer line: model · thinking · msgs
+    if (state.model) {
       const provider = state.model.provider || '';
       const model = state.model.id || state.model.model || '';
       const modelLabel = provider ? `${provider}/${model}` : model;
-      this.footerEl.textContent = `model: ${modelLabel} · thinking: ${state.thinkingLevel || 'off'} · msgs: ${state.messageCount}`;
+      const statsEl = document.getElementById('footer-stats');
+      if (statsEl) {
+        statsEl.textContent = `model: ${modelLabel} · thinking: ${state.thinkingLevel || 'off'} · msgs: ${state.messageCount}`;
+      }
     }
   }
 

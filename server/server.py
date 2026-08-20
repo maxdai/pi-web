@@ -100,11 +100,33 @@ class Peripheral:
         """Send history + state to a newly connected browser client."""
         try:
             state = self.commands.get_state()
-            conn.send_json({"type": "state", "data": state.get("data", {})})
+            data = state.get("data", {})
+            data["cwd"] = self.cwd
+            data["gitBranch"] = self._get_git_branch()
+            conn.send_json({"type": "state", "data": data})
 
             self._send_history(conn)
         except RuntimeError as e:
             conn.send_json({"type": "error", "error": str(e)})
+
+    def _get_git_branch(self) -> str | None:
+        """Return the current git branch of the session cwd, if any."""
+        try:
+            import subprocess
+
+            result = subprocess.run(
+                ["git", "branch", "--show-current"],
+                cwd=self.cwd,
+                capture_output=True,
+                text=True,
+                timeout=3,
+            )
+            if result.returncode == 0:
+                branch = result.stdout.strip()
+                return branch or None
+        except Exception:
+            pass
+        return None
 
     def _send_history(self, conn: WebSocketConnection) -> None:
         try:
