@@ -392,7 +392,15 @@ pii delete <name>
   - 有 `--web`：新增 Web 分支，启动 Pi RPC 后端 + Python Web 服务，常驻等待信号。
 - 所有改动必须在**保留原有 TUI 功能完全不受影响**的前提下进行。
 
-### 9.3 参数解析建议规则
+### 9.3 实现细节（已确认）
+
+- pii 脚本放在项目 `pii/pii`（受 Git 管理），可软链/复制到 `/usr/local/bin`。
+- 项目路径基于 pii 脚本位置解析：`Path(__file__).resolve().parent.parent`。
+- Web 模式：pii 解析出 session_id + cwd 后，通过 `subprocess.call([python, server.py, session_id, cwd, "--port", port])` 启动 Web 服务。
+- server.py 路径：`<项目根>/server/server.py`。
+- pii 常驻等待 server.py 退出；Ctrl+C 时向子进程转发信号。
+
+### 9.4 参数解析建议规则
 
 ```text
 pii r <name> --web [port]
