@@ -20,3 +20,4 @@ node_modules/
 
 # pi-sdk-web build output
 pi-sdk-web/dist/
+pi-sdk-web/static/

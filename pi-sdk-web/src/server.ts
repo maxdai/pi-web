@@ -9,6 +9,7 @@
  *   - Client msgs: prompt/abort/get_stats/bash/cycle_model/set_model/... -> session methods
  */
 import { execFileSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { dirname, join, resolve } from "node:path";
@@ -26,9 +27,12 @@ import { WebSocket, WebSocketServer } from "ws";
 import { WebUIContext } from "./ui-context.ts";
 
 const DEFAULT_PORT = 4080;
-// src/server.ts -> pi-sdk-web/src/../../static = pi-web/static
-// dist/server.js -> pi-sdk-web/dist/../../static = pi-web/static
-const STATIC_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "../../static");
+// Static frontend: prefer the in-package copy (built by `npm run build` for
+// global installs), fall back to the repo-root static/ during development.
+const PACKAGE_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const STATIC_DIR =
+  [resolve(PACKAGE_DIR, "static"), resolve(PACKAGE_DIR, "..", "static")].find((p) => existsSync(p)) ??
+  resolve(PACKAGE_DIR, "..", "static");
 
 // Events after which footer stats should be refreshed (TUI does this too)
 const STATS_REFRESH_EVENTS = new Set([
