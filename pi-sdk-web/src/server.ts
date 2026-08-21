@@ -367,12 +367,43 @@ export class PiWebServer {
    *
    * The context reports `hasUI: false` so extensions that offer a TUI dialog
    * fall back to text output (e.g. magic-context's /ctx-status writes a custom
-   * session entry, which flows to the browser via entry_appended).
+   * session entry, which flows to the browser via entry_appended). Custom
+   * entries produced by the command are additionally shown as a browser
+   * modal (mirroring the TUI dialog behavior).
    */
   private async executeCommand(name: string, args: string): Promise<void> {
     const cmd = this.session.extensionRunner.getCommand(name);
     if (!cmd) throw new Error(`Unknown command: ${name}`);
-    await cmd.handler(args, this.buildCommandContext());
+
+    // Capture custom entries appended while the command runs
+    const captured: Array<{ customType: string; data: unknown }> = [];
+    const listener = (event: unknown) => {
+      const ev = event as { type: string; entry?: { type: string; customType?: string; data?: unknown } };
+      if (ev.type === "entry_appended" && ev.entry?.type === "custom") {
+        captured.push({ customType: ev.entry.customType ?? "custom", data: ev.entry.data });
+      }
+    };
+    const unsubscribe = this.session.subscribe(listener);
+    try {
+      await cmd.handler(args, this.buildCommandContext());
+    } finally {
+      unsubscribe();
+    }
+
+    // Show command output as a modal (TUI-like). The session entry remains
+    // for history; the modal is the transient presentation.
+    for (const entry of captured) {
+      const data = entry.data as { title?: string; text?: string } | undefined;
+      const message = data?.text ?? (data !== undefined ? JSON.stringify(data, null, 2) : "");
+      this.broadcast({
+        type: "extension_ui_request",
+        id: crypto.randomUUID(),
+        method: "notify",
+        title: data?.title ?? `/${name}`,
+        message,
+        notifyType: "info",
+      });
+    }
   }
 
   private buildCommandContext(): ExtensionCommandContext {

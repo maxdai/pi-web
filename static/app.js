@@ -1292,7 +1292,8 @@ class PiWebClient {
     this.openModal(req.title || 'Notification', 'extension-notify');
     this.currentExtRequest = req;
     this.modalSearch.style.display = 'none';
-    this.modalList.innerHTML = `<div class="modal-message">${this.escapeHtml(req.message || '')}</div>`;
+    // Render as markdown (sanitized) so command outputs (/ctx-status etc.) look right
+    this.modalList.innerHTML = `<div class="modal-message body-text">${this.renderMarkdown(req.message || '')}</div>`;
     // Close button in modal footer is enough
   }
 

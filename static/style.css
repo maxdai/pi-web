@@ -617,6 +617,46 @@ body {
   line-height: 1.5;
 }
 
+/* Markdown-rendered modal content (e.g. /ctx-status command output) */
+.modal-message.body-text {
+  white-space: normal;
+}
+
+.modal-message.body-text h1,
+.modal-message.body-text h2,
+.modal-message.body-text h3,
+.modal-message.body-text h4,
+.modal-message.body-text h5,
+.modal-message.body-text h6 {
+  color: #f0c674;
+  margin: 0.8em 0 0.4em;
+  font-weight: 600;
+}
+
+.modal-message.body-text pre {
+  background: #1e1e24;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 12px;
+  overflow-x: auto;
+  margin: 0.6em 0;
+}
+
+.modal-message.body-text code {
+  background: rgba(128, 128, 128, 0.15);
+  color: var(--accent);
+  padding: 0.1em 0.35em;
+  border-radius: 3px;
+  font-family: monospace;
+  font-size: 0.9em;
+}
+
+.modal-message.body-text ul,
+.modal-message.body-text ol {
+  margin: 0.4em 0;
+  padding-left: 1.6em;
+}
+
 .modal-actions {
   display: flex;
   gap: 8px;
