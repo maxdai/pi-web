@@ -19,6 +19,7 @@
     "node": ">=20"
   },
   "dependencies": {
+    "@earendil-works/pi-agent-core": "^0.84.2",
     "@earendil-works/pi-coding-agent": "^0.84.2",
     "ws": "^8.18.0"
   },
