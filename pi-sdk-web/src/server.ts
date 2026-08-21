@@ -14,9 +14,11 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  ModelRegistry,
   VERSION,
   type AgentSession,
   type AgentSessionEvent,
+  type ExtensionCommandContext,
   type SessionStats,
 } from "@earendil-works/pi-coding-agent";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
@@ -347,8 +349,65 @@ export class PiWebServer {
         this.uiContext.respond(id, extra);
         break;
       }
+      case "command": {
+        const name = typeof data.name === "string" ? data.name : "";
+        const args = typeof data.args === "string" ? data.args : "";
+        if (!name) throw new Error("Missing 'name'");
+        await this.executeCommand(name, args);
+        break;
+      }
       default:
         throw new Error(`Unsupported command: ${cmdType}`);
     }
+  }
+
+  /**
+   * Execute an extension slash command (e.g. /ctx-status) by invoking its
+   * registered handler with a command context.
+   *
+   * The context reports `hasUI: false` so extensions that offer a TUI dialog
+   * fall back to text output (e.g. magic-context's /ctx-status writes a custom
+   * session entry, which flows to the browser via entry_appended).
+   */
+  private async executeCommand(name: string, args: string): Promise<void> {
+    const cmd = this.session.extensionRunner.getCommand(name);
+    if (!cmd) throw new Error(`Unknown command: ${name}`);
+    await cmd.handler(args, this.buildCommandContext());
+  }
+
+  private buildCommandContext(): ExtensionCommandContext {
+    const sm = this.session.sessionManager;
+    return {
+      ui: this.uiContext,
+      // No dialog-capable UI: extension commands fall back to text output
+      mode: "print",
+      hasUI: false,
+      cwd: sm.getCwd(),
+      sessionManager: sm,
+      modelRegistry: new ModelRegistry(this.session.modelRuntime),
+      model: this.session.model,
+      scopedModels: [],
+      thinkingLevel: this.session.thinkingLevel,
+      isIdle: () => this.session.isIdle,
+      isProjectTrusted: () => true,
+      signal: undefined,
+      abort: () => {
+        void this.session.abort();
+      },
+      hasPendingMessages: () => this.session.pendingMessageCount > 0,
+      shutdown: () => {},
+      getContextUsage: () => this.session.getContextUsage(),
+      compact: (options) => {
+        void this.session.compact(options?.customInstructions);
+      },
+      getSystemPrompt: () => this.session.systemPrompt,
+      getSystemPromptOptions: () => ({} as never),
+      waitForIdle: () => this.session.waitForIdle(),
+      newSession: async () => ({ cancelled: true }),
+      fork: async () => ({ cancelled: true }),
+      navigateTree: async () => ({ cancelled: true }),
+      switchSession: async () => ({ cancelled: true }),
+      reload: async () => {},
+    };
   }
 }

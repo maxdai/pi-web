@@ -379,19 +379,23 @@ class PiWebClient {
   renderHistory(entries) {
     this.clearContent();
     if (!entries || !entries.entries) return;
-    const items = entries.entries;
-    for (const entry of items) {
-      if (entry.type === 'message') {
-        this.renderMessage(entry.message);
-      } else if (entry.type === 'branch_summary') {
-        this.renderBranchSummary(entry);
-      } else if (entry.type === 'compaction') {
-        this.renderCompaction(entry);
-      } else if (entry.type === 'custom' || entry.type === 'custom_message') {
-        this.renderCustom(entry);
-      }
+    for (const entry of entries.entries) {
+      this.renderEntry(entry);
     }
     this.scrollToBottom();
+  }
+
+  renderEntry(entry) {
+    if (!entry) return;
+    if (entry.type === 'message') {
+      this.renderMessage(entry.message);
+    } else if (entry.type === 'branch_summary') {
+      this.renderBranchSummary(entry);
+    } else if (entry.type === 'compaction') {
+      this.renderCompaction(entry);
+    } else if (entry.type === 'custom' || entry.type === 'custom_message') {
+      this.renderCustom(entry);
+    }
   }
 
   renderMessage(message) {
@@ -481,6 +485,8 @@ class PiWebClient {
         .join('\n');
     }
     if (entry.data !== undefined) {
+      // magic-context style: {title, text, ...} - prefer the text field
+      if (typeof entry.data.text === 'string') return entry.data.text;
       return JSON.stringify(entry.data, null, 2);
     }
     return '';
@@ -610,6 +616,10 @@ class PiWebClient {
         break;
       case 'queue_update':
         this.updatePendingMessages(ev);
+        break;
+      case 'entry_appended':
+        // Extension custom entries (e.g. magic-context /ctx-status) arrive live
+        this.renderEntry(ev.entry);
         break;
       default:
         break;
@@ -1037,11 +1047,40 @@ class PiWebClient {
       if (command) {
         this.send({ type: 'bash', command: command });
       }
+    } else if (text.startsWith('/')) {
+      // Slash command: builtins are handled locally, everything else is
+      // executed as an extension command by the server.
+      const m = text.slice(1).match(/^(\S+)\s*(.*)$/);
+      const name = (m ? m[1] : text.slice(1)).replace(/^skill:/, '');
+      const args = m ? m[2] : '';
+      const builtin = BUILTIN_COMMANDS.find((c) => c.name === name);
+      if (builtin && builtin.action && !builtin.unsupported) {
+        this.runBuiltinCommand(builtin);
+      } else if (builtin && builtin.unsupported) {
+        this.appendError(`/${name} is not supported in web mode`);
+      } else {
+        this.send({ type: 'command', name: name, args: args });
+      }
     } else {
       this.send({ type: 'prompt', message: text });
     }
     this.inputEl.value = '';
     this.hideCommandMenu();
+  }
+
+  runBuiltinCommand(cmd) {
+    if (cmd.action === 'model') {
+      this.openModelPicker();
+    } else if (cmd.action === 'thinking') {
+      this.openThinkingPicker();
+    } else if (cmd.action === 'compact') {
+      this.send({ type: 'compact' });
+    } else if (cmd.action === 'name') {
+      const newName = window.prompt('Set session display name:', '');
+      if (newName && newName.trim()) {
+        this.send({ type: 'set_session_name', name: newName.trim() });
+      }
+    }
   }
 
   bindInput() {
@@ -1340,18 +1379,7 @@ class PiWebClient {
 
     // Builtin commands with actions
     if (cmd.builtin && cmd.action && !cmd.unsupported) {
-      if (cmd.action === 'model') {
-        this.openModelPicker();
-      } else if (cmd.action === 'thinking') {
-        this.openThinkingPicker();
-      } else if (cmd.action === 'compact') {
-        this.send({ type: 'compact' });
-      } else if (cmd.action === 'name') {
-        const newName = window.prompt('Set session display name:', '');
-        if (newName && newName.trim()) {
-          this.send({ type: 'set_session_name', name: newName.trim() });
-        }
-      }
+      this.runBuiltinCommand(cmd);
       this.hideCommandMenu();
       this.inputEl.value = '';
       return;
