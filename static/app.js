@@ -736,6 +736,41 @@ class PiWebClient {
   }
 
   // ------------------------------------------------------------------
+  // Persistent widget panel (extension setWidget, e.g. magic-context todos)
+  // ------------------------------------------------------------------
+
+  renderWidget(req) {
+    const widgetsEl = document.getElementById('widgets');
+    if (!widgetsEl) return;
+    const key = req.widgetKey || 'widget';
+
+    if (req.widgetLines === undefined || req.widgetLines === null) {
+      // Clear this widget
+      const el = widgetsEl.querySelector(`[data-widget-key="${CSS.escape(key)}"]`);
+      if (el) el.remove();
+      if (widgetsEl.children.length === 0) widgetsEl.style.display = 'none';
+      return;
+    }
+
+    let el = widgetsEl.querySelector(`[data-widget-key="${CSS.escape(key)}"]`);
+    if (!el) {
+      el = document.createElement('div');
+      el.className = 'widget-block';
+      el.dataset.widgetKey = key;
+      const title = document.createElement('div');
+      title.className = 'widget-title';
+      const body = document.createElement('div');
+      body.className = 'widget-body';
+      el.appendChild(title);
+      el.appendChild(body);
+      widgetsEl.appendChild(el);
+    }
+    el.querySelector('.widget-title').textContent = key;
+    el.querySelector('.widget-body').textContent = (req.widgetLines || []).join('\n');
+    widgetsEl.style.display = 'block';
+  }
+
+  // ------------------------------------------------------------------
   // Rendering helpers
   // ------------------------------------------------------------------
 
@@ -1215,9 +1250,8 @@ class PiWebClient {
     } else if (method === 'notify') {
       this.openExtensionNotify(req);
     } else if (method === 'setWidget') {
-      // Render widget lines as a simple notification/popup for now
-      const text = (req.widgetLines || []).join('\n');
-      this.openExtensionNotify({ ...req, title: req.widgetKey || 'Widget', message: text });
+      // Persistent widget panel (TUI: above/below editor). Not a popup.
+      this.renderWidget(req);
     }
     // setStatus / setTitle / set_editor_text are handled elsewhere or ignored
   }
@@ -1372,9 +1406,14 @@ class PiWebClient {
   renderScopedModelsList() {
     if (this.modalMode !== 'scoped-models') return;
     const query = (this.modalSearch.value || '').toLowerCase();
-    const items = (this.scopedModelsAll || []).filter((m) =>
-      `${m.provider}/${m.id}`.toLowerCase().includes(query),
-    );
+    const items = (this.scopedModelsAll || [])
+      .filter((m) => `${m.provider}/${m.id}`.toLowerCase().includes(query))
+      .sort((a, b) => {
+        // Selected models first, preserving original order within each group
+        const aSel = this.scopedModelsSelected.has(`${a.provider}/${a.id}`) ? 0 : 1;
+        const bSel = this.scopedModelsSelected.has(`${b.provider}/${b.id}`) ? 0 : 1;
+        return aSel - bSel;
+      });
     const rows = items
       .map((m) => {
         const key = `${m.provider}/${m.id}`;

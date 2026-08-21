@@ -432,6 +432,32 @@ body {
   border-top: 1px solid var(--border);
 }
 
+/* Persistent extension widgets (setWidget, e.g. magic-context todos) */
+#widgets {
+  display: none;
+  padding: 4px 12px;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+}
+
+.widget-block {
+  margin: 2px 0;
+}
+
+.widget-title {
+  color: var(--accent);
+  font-weight: 600;
+  margin-bottom: 2px;
+}
+
+.widget-body {
+  color: var(--muted);
+  white-space: pre-wrap;
+  font-family: monospace;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
 .status-indicator {
   display: flex;
   align-items: center;
