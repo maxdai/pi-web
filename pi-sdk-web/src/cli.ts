@@ -8,7 +8,7 @@
  *   pi-web help                       Show this help
  */
 import { createAgentSession } from "@earendil-works/pi-coding-agent";
-import { findSessionByName, listSessions } from "./session.ts";
+import { createResourceLoader, findSessionByName, listSessions } from "./session.ts";
 import { PiWebServer } from "./server.ts";
 
 const DEFAULT_PORT = 4080;
@@ -46,7 +46,10 @@ async function cmdResume(name: string, port: number): Promise<void> {
     process.chdir(sessionManager.getCwd());
   }
 
-  const { session } = await createAgentSession({ sessionManager });
+  // Include Pi's built-in extensions (llama.cpp etc.), which the SDK does not
+  // load by default. createAgentSession accepts a pre-built resource loader.
+  const resourceLoader = await createResourceLoader(sessionManager.getCwd());
+  const { session } = await createAgentSession({ sessionManager, resourceLoader });
 
   const server = new PiWebServer(session, { port });
   await server.start();
