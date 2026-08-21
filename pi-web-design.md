@@ -515,9 +515,11 @@ pii r <name> --web [port]
 3. 前端按 TUI fullscreen 风格渲染（方案 A）。
 4. 验证效果后，再在不影响原有 TUI 功能基础上改造 `pii` 接入 Web 模式。
 
-## 14. 备选方案：Pi 内置 Web 模式（WebMode，待评估）
+## 14. 备选方案：独立 pi-web 模块（SDK 客户端，主推）
 
 > 本节是 2025-08 的讨论结论，记录为**备选方案**，尚未决定实施。当前已实现并运行的仍是 RPC 桥接方案（§6）。
+>
+> **方案演进**：本节初稿记录的是「Pi 内置 WebMode」（改 Pi 源码）。后续调研发现 Pi 以**公开 npm 包 + SDK**形式发布，因此主推方案调整为「**独立 pi-web npm 包（SDK 客户端）**」——不改 Pi 本体，安装 pi-web 后接管 TUI 场景的职责。「改 Pi 内置 WebMode」降为次选（见 §14.5）。
 
 ### 14.1 动机
 
@@ -532,64 +534,80 @@ pii r <name> --web [port]
 | `@earendil-works/pi-tui`（`packages/tui/`） | 终端 UI **组件库**（terminal/layout/markdown/editor 等渲染原语） | 不需要，只是工具库 |
 | `InteractiveMode`（`packages/coding-agent/src/modes/interactive/interactive-mode.ts`，约 6500 行） | 把 TUI 组件 + AgentSession 组装成完整交互体验的**模式** | 这才是要替代/并列的对象 |
 
-所以方案的本质是：**在 Pi 内新增一个 `WebMode`（如 `modes/web/`），与 `InteractiveMode` 并列，替代其在浏览器场景下的角色**，而不是通过 RPC 子进程桥接。
+**关键补充**：Pi 的插件（extension）机制**不能**接管主 UI。`ExtensionUIContext` 只提供弹窗/widget/status/title/editor 文本等**局部** UI 能力；消息流、输入框、footer 是 `InteractiveMode` 硬编码的。因此「通过 Pi 插件机制接管 pi-tui」在技术上不成立；正确的形态是 **pi-web 作为 SDK 客户端，自己实现完整的 UI 宿主层**，与 `InteractiveMode` 平级——用户安装 pi-web 后用它作为入口，`pi` 命令原样保留。
 
-### 14.3 可行性依据（源码核实）
+### 14.3 关键事实：Pi 以公开 npm 包 + SDK 形式发布（源码 + registry 核实）
 
-- **模式分派点清晰**（`coding-agent/src/main.ts` 末尾）：
-  ```ts
-  if (appMode === "rpc") { await runRpcMode(runtime); }
-  else if (appMode === "interactive") { await new InteractiveMode(runtime, {...}).run(); }
-  else { await runPrintMode(...); }
-  ```
-  新增 web 分支只需：`cli/args.ts` 的 `Mode` 枚举加 `"web"` + `resolveAppMode()` 加判断 + `main.ts` 加一行分派。
-- **进程内运行已有先例**：`runRpcMode(runtime)` 就是"进程内持有 session、不依赖 TUI"的范例，只做三件事：
-  1. `session.bindExtensions({ uiContext, mode: "rpc", commandContextActions: {...} })`
-  2. `session.subscribe((event) => output(toJsonEvent(event)))`
-  3. stdin 命令循环 → `session.prompt/abort/compact/...`
-- **核心 API 足够**（`AgentSessionRuntime`）：`session`（prompt/abort/compact/setModel/steer + subscribe + sessionManager.getEntries() + getSessionStats()）、`rebindSession`、`newSession`、`fork`、`switchSession`、`dispose`。
+- `@earendil-works/pi-coding-agent` **0.84.2 已发布到 npm registry**（非 private），官方入口 `index.ts` 导出**完整 SDK**：
+  - `createAgentSession()` / `createAgentSessionRuntime()` / `createAgentSessionServices()` —— 编程式创建会话
+  - `AgentSession` / `AgentSessionRuntime` —— 会话对象（`subscribe` / `prompt` / `abort` / `setModel` / `bindExtensions` / `sessionManager.getEntries()` / `getSessionStats()` 等全部公开）
+  - `ExtensionRunner` / `ExtensionUIContext` / `ExtensionFactory` —— 完整扩展系统
+  - 甚至 `runRpcMode` / `InteractiveMode` 也导出
+- `@earendil-works/pi-agent-core`、`@earendil-works/pi-ai`、`@earendil-works/pi-tui` 均为独立发布的公开包。
 
-### 14.4 WebMode 方案草图
+**结论**：任何第三方包都可以像 Pi 自己一样，用 SDK 创建并驱动一个完整的 AgentSession，只替换 UI 层。pi-web 模块方案由此成立。
+
+### 14.4 独立模块方案（主推）
 
 ```text
-pi --session <id> --mode web [--port 4080]
-  -> main.ts 分派 -> WebMode(runtime)
-  -> HTTP + WebSocket 服务（TypeScript，Node 内置 http + 轻量 WebSocket）
-  -> session.subscribe(event)  -> WS 广播给浏览器
-  -> 浏览器 WS 消息             -> 直接调用 session.prompt/abort/setModel/...
-  -> session.bindExtensions({ uiContext: WebUIContext })  // 真正的 Web UI context
-  -> 静态文件复用 pi-web 项目的 static/（index.html/style.css/app.js）
+pi-web（独立 npm 包，全局安装）
+  ├── 依赖: @earendil-works/pi-coding-agent（SDK）、@earendil-works/pi-ai
+  ├── 不依赖: @earendil-works/pi-tui        ← 关键：UI 层完全自实现
+  ├── bin: pi-web                            ← 用户入口，替代 TUI 场景
+  ├── 内部:
+  │     createAgentSessionRuntime()          → 复用 Pi 全部核心
+  │     session.subscribe(event)             → WS 推给浏览器（对象直接透传）
+  │     浏览器输入                            → session.prompt/abort/setModel/...
+  │     bindExtensions({ uiContext: WebUIContext })  → 扩展 UI 直接映射浏览器 DOM
+  └── static/ 前端（现有 index.html/style.css/app.js 直接复用）
 ```
 
 关键点：
 
-- **无 JSON line 序列化边界**：消息对象、工具结果、事件原样透传。
-- **Web UI context**：`select/confirm/input/editor/notify/setWidget` 直接映射浏览器 DOM，§6.16 的 RPC 限制天然消失（如 `/ctx-status` 弹窗、`/todos` 常驻面板可正常显示）。
+- **零修改 Pi**：纯 npm 依赖，不 fork、不 patch，完全符合项目核心原则。
+- **无 JSON line 序列化边界**：消息对象、工具结果、事件原样透传；§6.16 的 RPC 限制天然消失（`/ctx-status` 弹窗、`/todos` 常驻面板可正常显示）。
+- **Web UI context**：`select/confirm/input/editor/notify/setWidget/custom` 直接映射浏览器 DOM。
+- **单进程**：不需要 Python 服务 + Pi 子进程两套编排；`pii` 退役或简化为 pi-web 的薄包装。
 - **同步能力**：浏览器请求可直接读 `session.model`、`session.thinkingLevel` 等内部状态，无需 `get_state` 往返。
 
-### 14.5 对比评估
+### 14.5 与「改 Pi 内置 WebMode」对比（次选）
 
-| 维度 | 当前方案（RPC 桥接） | 备选方案（Pi 内置 WebMode） |
-|------|---------------------|---------------------------|
-| 改 Pi 本体 | 不改（核心原则） | **必须改**（新增 mode + args + 分派 + Web 服务） |
-| 扩展 UI 完整性 | 受 RPC 序列化限制（§6.16） | 完整（可自定义 Web UI context） |
+两方案能力接近（都直接持有 session），差异在**修改边界与维护方式**：
+
+| 维度 | 改 Pi 内置 WebMode（次选） | 独立 SDK 客户端模块（主推） |
+|------|---------------------------|---------------------------|
+| Pi 本体 | **必须改**（新增 mode + args + 分派） | **零修改**（纯依赖公开 SDK） |
+| 安装方式 | 需重装/重建 Pi | `npm install -g` 即可 |
+| 升级维护 | 跟随 Pi 源码演进，需持续 patch | 跟随公开 npm 包版本，SDK 契约内适配 |
+| CLI 层复用 | 复用 main.ts 的 session 选择/信任流程 | 需自建（session 选择、信任提示等，见 §14.8） |
+| 回退 | 需还原 Pi 源码 | 卸载 pi-web 即回退 |
+
+### 14.6 与当前 RPC 桥接方案对比
+
+| 维度 | 现状（RPC 桥接） | 独立 SDK 客户端模块（主推） |
+|------|-----------------|---------------------------|
+| 改 Pi 本体 | 不改 | 不改 |
+| 扩展 UI 完整性 | 受 RPC 序列化限制（§6.16） | 完整（Web UI context） |
 | 事件/数据开销 | JSON line 编解码 + partial 剥离 | 零序列化，对象直接透传 |
-| 进程模型 | pii 编排 Python 服务 + Pi 子进程 | 单进程（`pi --mode web`） |
-| Web 服务语言 | Python（标准库） | TypeScript（与 Pi 同进程） |
+| 进程模型 | pii 编排 Python 服务 + Pi 子进程 | 单进程（pi-web 内部） |
+| Web 服务语言 | Python（标准库） | TypeScript（与 Pi SDK 同语言） |
 | 前端 static/ | 复用 | 复用（纯静态文件与后端语言无关） |
 | server.py/rpc_client.py/websocket.py | 核心 | 可退役 |
-| pii 脚本 | 编排两个进程 | 简化为直接调用 `pi --mode web` |
-| 维护成本 | 跟随 RPC 协议演进 | **跟随 Pi 版本演进**（改 Pi 需持续跟进） |
+| pii 脚本 | 编排两个进程 | 退役或包装 pi-web |
+| 维护成本 | 跟随 RPC 协议演进 | 跟随 pi-coding-agent SDK 版本 |
 
-### 14.6 本次讨论已确认的方向（尚未实施）
+### 14.7 本次讨论已确认的方向（尚未实施）
 
-1. **先只讨论设计**：本节仅记录方案与评估，不立即实施；待进一步评估后再决定。
-2. **Web 服务用 TypeScript**：若实施，Web 服务与 Pi 同进程同语言（Node 内置 http + 轻量 WebSocket），不做跨语言桥接。
-3. **独立新模块，先不动现有**：若实施，`WebMode` 作为 Pi 的实验性模式先跑通；pi-web 现有 RPC 方案（server/ + pii）保持不动作为对照。
+1. **独立模块替代方式**：pi-web 作为独立安装的模块（npm 包），接管 pi-tui/TUI 场景的 UI 职责；Pi 本体零修改，`pi` 命令原样保留。
+2. **实现语言 TypeScript**：Web 服务在 pi-web 包内实现（Node 内置 http + 轻量 WebSocket），与 Pi SDK 同语言，不做跨语言桥接。
+3. **独立新模块，先不动现有**：pi-web 模块先独立跑通；现有 RPC 方案（server/ + pii）保持不动作为对照。
+4. **仍处讨论/设计阶段**：本节仅记录方案与评估，不立即实施。
 
-### 14.7 待决策 / 开放问题
+### 14.8 待决策 / 开放问题
 
-1. 是否接受打破「不改 Pi 本体」原则？（Pi 源码在本机 `~/research/pi`，改动可本地维护，但 Pi 升级需跟进）
-2. 新增 mode 的上游归属：本地 fork 维护，还是贡献回 Pi 上游？
-3. `WebMode` 与现有 `pi-web` 项目的最终关系（前端复用范围、Python 后端退役时机）。
-4. Node 内置 WebSocket 实现选型：手写（参考现有 `websocket.py` 的 RFC 6455 实现）还是引入轻量依赖。
+1. **npm 包名**：`pi-web` 是否在 npm 可用？不可用则用 `@maxdai/pi-web` 等作用域名。
+2. **CLI 形态**：pi-web 的命令集设计（如 `pi-web r <name> [--port]` / `pi-web list`），与现有 `pii` 的关系（退役 / 包装 / 并存）。
+3. **CLI 层逻辑自建**：`main.ts` 中的 session 选择、项目信任提示、首次设置等交互，在 SDK 方案下需要 pi-web 自己实现或简化（`createAgentSession` 已封装大部分；trust 流程需自行接入）。
+4. **session 管理**：`pii list`/`delete` 等价功能（读取 session 目录）归属 pi-web 还是保留 pii。
+5. **WebSocket 实现选型**：手写（参考现有 `websocket.py` 的 RFC 6455 实现）还是引入轻量依赖。
+6. **SDK 版本策略**：锁定 pi-coding-agent 版本，还是跟随 latest（需适配 SDK 演进）。
