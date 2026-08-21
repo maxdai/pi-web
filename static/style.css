@@ -771,6 +771,14 @@ body {
   background: rgba(138, 190, 183, 0.1);
 }
 
+.command-item.selected {
+  background: rgba(138, 190, 183, 0.2);
+}
+
+.command-item.selected .command-name {
+  color: var(--accent);
+}
+
 .command-name {
   color: var(--accent);
   font-weight: 600;

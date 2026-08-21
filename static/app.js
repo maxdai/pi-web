@@ -35,6 +35,7 @@ class PiWebClient {
     this.modalClose = document.getElementById('modal-close');
     this.modalMode = null; // 'model' | 'thinking'
     this.hasConnectedBefore = false;
+    this.commandMenuIndex = -1;
 
     // Streaming state: current assistant message being built
     this.streaming = {
@@ -1133,6 +1134,22 @@ class PiWebClient {
 
   bindInput() {
     this.inputEl.addEventListener('keydown', (e) => {
+      const menuOpen = this.commandMenuEl && this.commandMenuEl.style.display !== 'none';
+      if (menuOpen && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+        e.preventDefault();
+        this.moveCommandMenu(e.key === 'ArrowDown' ? 1 : -1);
+        return;
+      }
+      if (menuOpen && e.key === 'Enter' && !e.shiftKey) {
+        // Enter picks the highlighted item, or the first one if none highlighted
+        e.preventDefault();
+        const items = this.commandMenuEl.querySelectorAll('.command-item');
+        if (items.length > 0) {
+          const idx = this.commandMenuIndex >= 0 ? this.commandMenuIndex : 0;
+          items[idx].click();
+        }
+        return;
+      }
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
         this.sendMessage();
@@ -1506,10 +1523,29 @@ class PiWebClient {
       )
       .join('');
     this.commandMenuEl.style.display = 'block';
+    this.commandMenuIndex = -1;
 
     this.commandMenuEl.querySelectorAll('.command-item').forEach((el, i) => {
       el.addEventListener('click', () => this.selectCommand(filtered[i]));
+      el.addEventListener('mouseenter', () => this.setCommandMenuIndex(i));
     });
+  }
+
+  moveCommandMenu(delta) {
+    const items = this.commandMenuEl.querySelectorAll('.command-item');
+    if (items.length === 0) return;
+    let idx = this.commandMenuIndex < 0 ? (delta > 0 ? 0 : items.length - 1) : this.commandMenuIndex + delta;
+    idx = (idx + items.length) % items.length;
+    this.setCommandMenuIndex(idx);
+  }
+
+  setCommandMenuIndex(idx) {
+    this.commandMenuIndex = idx;
+    const items = this.commandMenuEl.querySelectorAll('.command-item');
+    items.forEach((el, i) => el.classList.toggle('selected', i === idx));
+    if (idx >= 0 && items[idx]) {
+      items[idx].scrollIntoView({ block: 'nearest' });
+    }
   }
 
   selectCommand(cmd) {
@@ -1539,6 +1575,7 @@ class PiWebClient {
   }
 
   hideCommandMenu() {
+    this.commandMenuIndex = -1;
     if (this.commandMenuEl) {
       this.commandMenuEl.style.display = 'none';
       this.commandMenuEl.innerHTML = '';
