@@ -263,10 +263,19 @@ export class PiWebServer {
 
   private getCommands(): unknown[] {
     try {
-      // Extension commands; skills/prompts may be added later
-      return this.session.extensionRunner
-        .getRegisteredCommands()
-        .map((c) => ({ name: c.invocationName, description: c.description, source: "extension", sourceInfo: c.sourceInfo }));
+      // Mirror Pi's get_commands RPC response: extension commands, prompt
+      // templates, and skills (source: extension | prompt | skill)
+      const commands: unknown[] = [];
+      for (const c of this.session.extensionRunner.getRegisteredCommands()) {
+        commands.push({ name: c.invocationName, description: c.description, source: "extension", sourceInfo: c.sourceInfo });
+      }
+      for (const t of this.session.promptTemplates) {
+        commands.push({ name: t.name, description: t.description, source: "prompt", sourceInfo: t.sourceInfo });
+      }
+      for (const s of this.session.resourceLoader.getSkills().skills) {
+        commands.push({ name: `skill:${s.name}`, description: s.description, source: "skill", sourceInfo: s.sourceInfo });
+      }
+      return commands;
     } catch {
       return [];
     }
