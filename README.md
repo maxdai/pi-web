@@ -67,6 +67,12 @@ pii 按以下优先级定位 Web 服务路径：
 2. 项目内运行时自动推导
 3. 全局安装时 fallback 到 `~/pi-web`
 
+如果项目不在 `~/pi-web`，可以通过 `PI_WEB_DIR` 指定：
+
+```bash
+PI_WEB_DIR=/path/to/pi-web pii r <name> --web
+```
+
 ## 使用
 
 ### TUI 模式（原有行为，不变）
