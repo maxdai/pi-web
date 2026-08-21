@@ -514,3 +514,82 @@ pii r <name> --web [port]
 2. 让 Web 服务能真正接通 Pi RPC，浏览器可对话。
 3. 前端按 TUI fullscreen 风格渲染（方案 A）。
 4. 验证效果后，再在不影响原有 TUI 功能基础上改造 `pii` 接入 Web 模式。
+
+## 14. 备选方案：Pi 内置 Web 模式（WebMode，待评估）
+
+> 本节是 2025-08 的讨论结论，记录为**备选方案**，尚未决定实施。当前已实现并运行的仍是 RPC 桥接方案（§6）。
+
+### 14.1 动机
+
+当前 RPC 桥接方案的根因限制（见 §6.16）：Pi RPC 模式对「工厂函数 / 自定义组件」类 UI 不支持，导致 `custom()`、`setWidget(factory)` 等扩展 UI 无法在 Web 端呈现。这些限制的根源是 **JSON line 序列化边界**——事件和 UI 请求必须可序列化，且 RPC 模式刻意移除了 TUI 相关的 UI 能力。
+
+### 14.2 概念澄清（重要）
+
+"pi-tui 模块"容易混淆，实际指两个不同东西：
+
+| 名字 | 实际是什么 | 是否需要替代 |
+|------|-----------|-------------|
+| `@earendil-works/pi-tui`（`packages/tui/`） | 终端 UI **组件库**（terminal/layout/markdown/editor 等渲染原语） | 不需要，只是工具库 |
+| `InteractiveMode`（`packages/coding-agent/src/modes/interactive/interactive-mode.ts`，约 6500 行） | 把 TUI 组件 + AgentSession 组装成完整交互体验的**模式** | 这才是要替代/并列的对象 |
+
+所以方案的本质是：**在 Pi 内新增一个 `WebMode`（如 `modes/web/`），与 `InteractiveMode` 并列，替代其在浏览器场景下的角色**，而不是通过 RPC 子进程桥接。
+
+### 14.3 可行性依据（源码核实）
+
+- **模式分派点清晰**（`coding-agent/src/main.ts` 末尾）：
+  ```ts
+  if (appMode === "rpc") { await runRpcMode(runtime); }
+  else if (appMode === "interactive") { await new InteractiveMode(runtime, {...}).run(); }
+  else { await runPrintMode(...); }
+  ```
+  新增 web 分支只需：`cli/args.ts` 的 `Mode` 枚举加 `"web"` + `resolveAppMode()` 加判断 + `main.ts` 加一行分派。
+- **进程内运行已有先例**：`runRpcMode(runtime)` 就是"进程内持有 session、不依赖 TUI"的范例，只做三件事：
+  1. `session.bindExtensions({ uiContext, mode: "rpc", commandContextActions: {...} })`
+  2. `session.subscribe((event) => output(toJsonEvent(event)))`
+  3. stdin 命令循环 → `session.prompt/abort/compact/...`
+- **核心 API 足够**（`AgentSessionRuntime`）：`session`（prompt/abort/compact/setModel/steer + subscribe + sessionManager.getEntries() + getSessionStats()）、`rebindSession`、`newSession`、`fork`、`switchSession`、`dispose`。
+
+### 14.4 WebMode 方案草图
+
+```text
+pi --session <id> --mode web [--port 4080]
+  -> main.ts 分派 -> WebMode(runtime)
+  -> HTTP + WebSocket 服务（TypeScript，Node 内置 http + 轻量 WebSocket）
+  -> session.subscribe(event)  -> WS 广播给浏览器
+  -> 浏览器 WS 消息             -> 直接调用 session.prompt/abort/setModel/...
+  -> session.bindExtensions({ uiContext: WebUIContext })  // 真正的 Web UI context
+  -> 静态文件复用 pi-web 项目的 static/（index.html/style.css/app.js）
+```
+
+关键点：
+
+- **无 JSON line 序列化边界**：消息对象、工具结果、事件原样透传。
+- **Web UI context**：`select/confirm/input/editor/notify/setWidget` 直接映射浏览器 DOM，§6.16 的 RPC 限制天然消失（如 `/ctx-status` 弹窗、`/todos` 常驻面板可正常显示）。
+- **同步能力**：浏览器请求可直接读 `session.model`、`session.thinkingLevel` 等内部状态，无需 `get_state` 往返。
+
+### 14.5 对比评估
+
+| 维度 | 当前方案（RPC 桥接） | 备选方案（Pi 内置 WebMode） |
+|------|---------------------|---------------------------|
+| 改 Pi 本体 | 不改（核心原则） | **必须改**（新增 mode + args + 分派 + Web 服务） |
+| 扩展 UI 完整性 | 受 RPC 序列化限制（§6.16） | 完整（可自定义 Web UI context） |
+| 事件/数据开销 | JSON line 编解码 + partial 剥离 | 零序列化，对象直接透传 |
+| 进程模型 | pii 编排 Python 服务 + Pi 子进程 | 单进程（`pi --mode web`） |
+| Web 服务语言 | Python（标准库） | TypeScript（与 Pi 同进程） |
+| 前端 static/ | 复用 | 复用（纯静态文件与后端语言无关） |
+| server.py/rpc_client.py/websocket.py | 核心 | 可退役 |
+| pii 脚本 | 编排两个进程 | 简化为直接调用 `pi --mode web` |
+| 维护成本 | 跟随 RPC 协议演进 | **跟随 Pi 版本演进**（改 Pi 需持续跟进） |
+
+### 14.6 本次讨论已确认的方向（尚未实施）
+
+1. **先只讨论设计**：本节仅记录方案与评估，不立即实施；待进一步评估后再决定。
+2. **Web 服务用 TypeScript**：若实施，Web 服务与 Pi 同进程同语言（Node 内置 http + 轻量 WebSocket），不做跨语言桥接。
+3. **独立新模块，先不动现有**：若实施，`WebMode` 作为 Pi 的实验性模式先跑通；pi-web 现有 RPC 方案（server/ + pii）保持不动作为对照。
+
+### 14.7 待决策 / 开放问题
+
+1. 是否接受打破「不改 Pi 本体」原则？（Pi 源码在本机 `~/research/pi`，改动可本地维护，但 Pi 升级需跟进）
+2. 新增 mode 的上游归属：本地 fork 维护，还是贡献回 Pi 上游？
+3. `WebMode` 与现有 `pi-web` 项目的最终关系（前端复用范围、Python 后端退役时机）。
+4. Node 内置 WebSocket 实现选型：手写（参考现有 `websocket.py` 的 RFC 6455 实现）还是引入轻量依赖。
