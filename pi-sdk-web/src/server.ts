@@ -363,6 +363,50 @@ export class PiWebServer {
         await this.session.reload();
         this.broadcastState();
         break;
+      case "export": {
+        const path = typeof data.path === "string" && data.path ? data.path : undefined;
+        const exportedPath = path?.endsWith(".jsonl")
+          ? this.session.exportToJsonl(path)
+          : await this.session.exportToHtml(path);
+        this.broadcast({
+          type: "extension_ui_request",
+          id: crypto.randomUUID(),
+          method: "notify",
+          title: "/export",
+          message: `Session exported to: ${exportedPath}`,
+          notifyType: "info",
+        });
+        break;
+      }
+      case "get_scoped_models":
+        this.broadcast({
+          type: "scoped_models",
+          data: {
+            scoped: this.session.scopedModels.map((s) => ({
+              provider: s.model.provider,
+              id: s.model.id,
+              thinkingLevel: s.thinkingLevel,
+            })),
+            available: this.session.modelRuntime.getAvailableSnapshot(),
+          },
+        });
+        break;
+      case "set_scoped_models": {
+        const models = Array.isArray(data.models) ? (data.models as Array<Record<string, unknown>>) : [];
+        const resolved: Array<{ model: unknown; thinkingLevel?: unknown }> = [];
+        for (const m of models) {
+          const provider = m.provider as string | undefined;
+          const modelId = m.modelId as string | undefined;
+          if (!provider || !modelId) continue;
+          const model = this.session.modelRuntime
+            .getAvailableSnapshot()
+            .find((x) => x.provider === provider && x.id === modelId);
+          if (model) resolved.push({ model, thinkingLevel: m.thinkingLevel });
+        }
+        this.session.setScopedModels(resolved as never);
+        this.broadcastState();
+        break;
+      }
       case "set_session_name": {
         const name = typeof data.name === "string" ? data.name : "";
         if (!name) throw new Error("Missing 'name'");

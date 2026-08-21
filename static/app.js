@@ -4,8 +4,10 @@
 const BUILTIN_COMMANDS = [
   { name: 'model', description: 'Select model (opens selector)', builtin: true, action: 'model' },
   { name: 'thinking', description: 'Select thinking level', builtin: true, action: 'thinking' },
+  { name: 'scoped-models', description: 'Select models available for cycling', builtin: true, action: 'scoped-models' },
   { name: 'compact', description: 'Manually compact the session context', builtin: true, action: 'compact' },
   { name: 'reload', description: 'Reload session resources and extensions', builtin: true, action: 'reload' },
+  { name: 'export', description: 'Export session to HTML (or .jsonl)', builtin: true, action: 'export' },
   { name: 'name', description: 'Set session display name', builtin: true, action: 'name' },
   { name: 'login', description: 'Configure provider authentication (not supported in web)', builtin: true, unsupported: true },
   { name: 'logout', description: 'Remove provider authentication (not supported in web)', builtin: true, unsupported: true },
@@ -133,6 +135,9 @@ class PiWebClient {
         break;
       case 'thinking_levels':
         this.handleThinkingLevels(data.data);
+        break;
+      case 'scoped_models':
+        this.handleScopedModels(data.data);
         break;
       case 'error':
         this.appendError(data.error);
@@ -1056,7 +1061,7 @@ class PiWebClient {
       const args = m ? m[2] : '';
       const builtin = BUILTIN_COMMANDS.find((c) => c.name === name);
       if (builtin && builtin.action && !builtin.unsupported) {
-        this.runBuiltinCommand(builtin);
+        this.runBuiltinCommand(builtin, args);
       } else if (builtin && builtin.unsupported) {
         this.appendError(`/${name} is not supported in web mode`);
       } else {
@@ -1069,15 +1074,20 @@ class PiWebClient {
     this.hideCommandMenu();
   }
 
-  runBuiltinCommand(cmd) {
+  runBuiltinCommand(cmd, args) {
     if (cmd.action === 'model') {
       this.openModelPicker();
     } else if (cmd.action === 'thinking') {
       this.openThinkingPicker();
+    } else if (cmd.action === 'scoped-models') {
+      this.openScopedModelsPicker();
     } else if (cmd.action === 'compact') {
       this.send({ type: 'compact' });
     } else if (cmd.action === 'reload') {
       this.send({ type: 'reload' });
+    } else if (cmd.action === 'export') {
+      const path = (args || '').trim();
+      this.send({ type: 'export', path: path });
     } else if (cmd.action === 'name') {
       const newName = window.prompt('Set session display name:', '');
       if (newName && newName.trim()) {
@@ -1116,7 +1126,10 @@ class PiWebClient {
       });
     }
     if (this.modalSearch) {
-      this.modalSearch.addEventListener('input', () => this.filterModalItems());
+      this.modalSearch.addEventListener('input', () => {
+        if (this.modalMode === 'scoped-models') this.renderScopedModelsList();
+        else this.filterModalItems();
+      });
     }
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape' && this.modalOverlay && this.modalOverlay.style.display !== 'none') {
@@ -1334,6 +1347,88 @@ class PiWebClient {
   }
 
   // ------------------------------------------------------------------
+  // Scoped models picker (multi-select: models available for cycling)
+  // ------------------------------------------------------------------
+
+  openScopedModelsPicker() {
+    this.openModal('Select Scoped Models (empty = all available)', 'scoped-models');
+    this.scopedModelsAll = [];
+    this.scopedModelsSelected = new Set();
+    this.scopedModelsData = null;
+    this.modalList.innerHTML = '<div class="modal-message">Loading models...</div>';
+    this.send({ type: 'get_scoped_models' });
+  }
+
+  handleScopedModels(data) {
+    if (this.modalMode !== 'scoped-models') return;
+    this.scopedModelsAll = data.available || [];
+    this.scopedModelsData = data;
+    this.scopedModelsSelected = new Set(
+      (data.scoped || []).map((s) => `${s.provider}/${s.id}`),
+    );
+    this.renderScopedModelsList();
+  }
+
+  renderScopedModelsList() {
+    if (this.modalMode !== 'scoped-models') return;
+    const query = (this.modalSearch.value || '').toLowerCase();
+    const items = (this.scopedModelsAll || []).filter((m) =>
+      `${m.provider}/${m.id}`.toLowerCase().includes(query),
+    );
+    const rows = items
+      .map((m) => {
+        const key = `${m.provider}/${m.id}`;
+        const checked = this.scopedModelsSelected.has(key);
+        return (
+          `<div class="modal-item scoped-model ${checked ? 'selected' : ''}" data-key="${key}">` +
+          `<span class="modal-check">${checked ? '☑' : '☐'}</span>` +
+          `<span class="modal-item-name">${this.escapeHtml(key)}</span>` +
+          `</div>`
+        );
+      })
+      .join('');
+    this.modalList.innerHTML =
+      rows +
+      `<div class="modal-actions">
+         <button class="modal-btn ok-btn">Apply</button>
+         <button class="modal-btn cancel-btn">Cancel</button>
+       </div>`;
+    this.modalList.querySelectorAll('.scoped-model').forEach((el) => {
+      el.addEventListener('click', () => {
+        const key = el.dataset.key;
+        if (this.scopedModelsSelected.has(key)) this.scopedModelsSelected.delete(key);
+        else this.scopedModelsSelected.add(key);
+        const checked = this.scopedModelsSelected.has(key);
+        el.classList.toggle('selected', checked);
+        el.querySelector('.modal-check').textContent = checked ? '☑' : '☐';
+      });
+    });
+    const okBtn = this.modalList.querySelector('.ok-btn');
+    if (okBtn) {
+      okBtn.addEventListener('click', () => {
+        const models = [];
+        for (const m of this.scopedModelsAll || []) {
+          const key = `${m.provider}/${m.id}`;
+          if (this.scopedModelsSelected.has(key)) {
+            const scopedInfo = (this.scopedModelsData?.scoped || []).find(
+              (s) => `${s.provider}/${s.id}` === key,
+            );
+            models.push({
+              provider: m.provider,
+              modelId: m.id,
+              thinkingLevel: scopedInfo?.thinkingLevel,
+            });
+          }
+        }
+        this.send({ type: 'set_scoped_models', models });
+        this.closeModal();
+      });
+    }
+    const cancelBtn = this.modalList.querySelector('.cancel-btn');
+    if (cancelBtn) cancelBtn.addEventListener('click', () => this.closeModal());
+  }
+
+  // ------------------------------------------------------------------
   // Slash command menu
   // ------------------------------------------------------------------
 
@@ -1383,7 +1478,7 @@ class PiWebClient {
 
     // Builtin commands with actions
     if (cmd.builtin && cmd.action && !cmd.unsupported) {
-      this.runBuiltinCommand(cmd);
+      this.runBuiltinCommand(cmd, '');
       this.hideCommandMenu();
       this.inputEl.value = '';
       return;
