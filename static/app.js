@@ -636,7 +636,7 @@ class PiWebClient {
     if (!this.streaming.active || !this.streaming.el) {
       this.startAssistantMessage(msg);
     }
-    if (aev.type === 'test_delta' || aev.type === 'text_delta') {
+    if (aev.type === 'text_delta') {
       // Update the assistant text content
       this.updateAssistantText(msg);
     } else if (aev.type === 'thinking_delta') {
