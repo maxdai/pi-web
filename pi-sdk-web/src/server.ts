@@ -258,7 +258,14 @@ export class PiWebServer {
 
   private getGitBranch(cwd: string): string | null {
     try {
-      const stdout = execFileSync("git", ["branch", "--show-current"], { cwd, timeout: 3000, encoding: "utf8" });
+      const stdout = execFileSync("git", ["branch", "--show-current"], {
+        cwd,
+        timeout: 3000,
+        encoding: "utf8",
+        // execFileSync prints child stderr to our stderr on failure (e.g.
+        // "fatal: not a git repository" in non-git dirs) - suppress it
+        stdio: ["ignore", "pipe", "ignore"],
+      });
       return stdout.trim() || null;
     } catch {
       return null;
