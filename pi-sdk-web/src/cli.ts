@@ -7,7 +7,13 @@
  *   pi-web list                       List all sessions (name, id, cwd), newest first
  *   pi-web help                       Show this help
  */
-import { createAgentSession } from "@earendil-works/pi-coding-agent";
+import {
+  ModelRuntime,
+  SettingsManager,
+  createAgentSession,
+  getAgentDir,
+  resolveModelScopeWithDiagnostics,
+} from "@earendil-works/pi-coding-agent";
 import { createResourceLoader, findSessionByName, listSessions } from "./session.ts";
 import { PiWebServer } from "./server.ts";
 
@@ -49,7 +55,26 @@ async function cmdResume(name: string, port: number): Promise<void> {
   // Include Pi's built-in extensions (llama.cpp etc.), which the SDK does not
   // load by default. createAgentSession accepts a pre-built resource loader.
   const resourceLoader = await createResourceLoader(sessionManager.getCwd());
-  const { session } = await createAgentSession({ sessionManager, resourceLoader });
+  const agentDir = getAgentDir();
+  const settingsManager = SettingsManager.create(sessionManager.getCwd(), agentDir);
+  const modelRuntime = await ModelRuntime.create();
+  // Resolve enabledModels (settings) into scopedModels, matching Pi's CLI
+  const enabledModels = settingsManager.getEnabledModels();
+  const scopedModels =
+    enabledModels && enabledModels.length > 0
+      ? (
+          await resolveModelScopeWithDiagnostics(enabledModels, modelRuntime, {
+            signal: AbortSignal.timeout(15_000),
+          })
+        ).scopedModels
+      : [];
+  const { session } = await createAgentSession({
+    sessionManager,
+    resourceLoader,
+    settingsManager,
+    modelRuntime,
+    scopedModels,
+  });
 
   const server = new PiWebServer(session, { port });
   await server.start();
