@@ -609,10 +609,10 @@ pi-sdk-web（独立 npm 包，位于 pi-web 仓库 pi-sdk-web/ 子目录）
 7. **session 解析**：`pi-web r <name>` 用 SDK 的 `SessionManager.list/open` 实现，不依赖 pii 的 Python 逻辑。
 8. **开发顺序**：pi-sdk-web 作为独立新模块先跑通；现有 RPC 方案保持不动作为对照。
 
-### 14.8 待决策 / 开放问题
+### 14.8 开放问题决策（已确认）
 
-1. **CLI 层逻辑自建**：`main.ts` 中的 session 选择、项目信任提示、首次设置等交互，在 SDK 方案下需要 pi-sdk-web 自己实现或简化（`createAgentSession` 已封装大部分；trust 流程需自行接入）。
-2. **session 管理命令**：`pi-web list`/`delete` 等（读取 session 目录）是否实现、与 `pii` 的职责划分。
-3. **WebSocket 实现选型**：手写（参考现有 `websocket.py` 的 RFC 6455 实现）还是引入轻量依赖。
-4. **SDK 版本策略**：锁定 pi-coding-agent 版本，还是跟随 latest（需适配 SDK 演进）。
-5. **发布/安装路径**：pi-sdk-web 发布到 npm registry，还是仅本地 `npm install -g <repo>/pi-sdk-web`（考虑仓库是否公开）。
+1. **CLI 层逻辑：MVP 简化**——不做 trust 弹窗/首次设置，默认信任加载（与本机单用户场景匹配，与 pii 现状一致）；`pi-web r <name>` 用 `SessionManager.list` 按名字匹配（与 pii 逻辑一致）。注：SDK 未导出 `resolveProjectTrusted`/`createProjectTrustContext`（CLI 内部实现），但 `ProjectTrustStore`、`hasTrustRequiringProjectResources` 已导出，未来需要完整 trust 流程时可自建。
+2. **session 管理命令**：MVP 提供 `pi-web r` + `pi-web list`（`SessionManager.listAll` 公开可用）；**`delete` 不做**（破坏性操作，由 pii 负责，职责划分清晰）。
+3. **WebSocket 实现**：**`ws` 包**——Node 无内置 WebSocket 服务端（内置是客户端），`ws` 是事实标准、成熟、零原生依赖；不手写。
+4. **SDK 版本策略**：**`^0.84.2`**——npm 对 0.x 的 `^` 语义自动锁定 minor（等效 `~`）；SDK 演进时手动验证后升版本，流程为「Pi 升级 → 验证 SDK API → 升版本」。
+5. **发布/安装路径**：**MVP 不发布 npm**——开发期 `npm link` / 本地安装（`npm install -g ./pi-sdk-web`）；功能稳定后再视需要发布（`pi-sdk-web` 包名已确认可用，未被占用）。
