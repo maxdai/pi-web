@@ -550,7 +550,7 @@ pii r <name> --web [port]
 ### 14.4 独立模块方案（主推）
 
 ```text
-pi-web（独立 npm 包，全局安装）
+pi-sdk-web（独立 npm 包，位于 pi-web 仓库 pi-sdk-web/ 子目录）
   ├── 依赖: @earendil-works/pi-coding-agent（SDK）、@earendil-works/pi-ai
   ├── 不依赖: @earendil-works/pi-tui        ← 关键：UI 层完全自实现
   ├── bin: pi-web                            ← 用户入口，替代 TUI 场景
@@ -559,7 +559,7 @@ pi-web（独立 npm 包，全局安装）
   │     session.subscribe(event)             → WS 推给浏览器（对象直接透传）
   │     浏览器输入                            → session.prompt/abort/setModel/...
   │     bindExtensions({ uiContext: WebUIContext })  → 扩展 UI 直接映射浏览器 DOM
-  └── static/ 前端（现有 index.html/style.css/app.js 直接复用）
+  └── static/ 前端（复用仓库根 static/，构建时打包进包内，保证独立发布）
 ```
 
 关键点：
@@ -567,7 +567,7 @@ pi-web（独立 npm 包，全局安装）
 - **零修改 Pi**：纯 npm 依赖，不 fork、不 patch，完全符合项目核心原则。
 - **无 JSON line 序列化边界**：消息对象、工具结果、事件原样透传；§6.16 的 RPC 限制天然消失（`/ctx-status` 弹窗、`/todos` 常驻面板可正常显示）。
 - **Web UI context**：`select/confirm/input/editor/notify/setWidget/custom` 直接映射浏览器 DOM。
-- **单进程**：不需要 Python 服务 + Pi 子进程两套编排；`pii` 退役或简化为 pi-web 的薄包装。
+- **单进程**：不需要 Python 服务 + Pi 子进程两套编排。
 - **同步能力**：浏览器请求可直接读 `session.model`、`session.thinkingLevel` 等内部状态，无需 `get_state` 往返。
 
 ### 14.5 与「改 Pi 内置 WebMode」对比（次选）
@@ -584,30 +584,35 @@ pi-web（独立 npm 包，全局安装）
 
 ### 14.6 与当前 RPC 桥接方案对比
 
-| 维度 | 现状（RPC 桥接） | 独立 SDK 客户端模块（主推） |
+> 最终关系：**两方案并存，用户按需选择**。pii（RPC 桥接）保留不动，pi-sdk-web（SDK 客户端）为并行方案。
+
+| 维度 | 现状（RPC 桥接，pii） | 独立 SDK 客户端模块（pi-sdk-web） |
 |------|-----------------|---------------------------|
 | 改 Pi 本体 | 不改 | 不改 |
 | 扩展 UI 完整性 | 受 RPC 序列化限制（§6.16） | 完整（Web UI context） |
 | 事件/数据开销 | JSON line 编解码 + partial 剥离 | 零序列化，对象直接透传 |
-| 进程模型 | pii 编排 Python 服务 + Pi 子进程 | 单进程（pi-web 内部） |
+| 进程模型 | pii 编排 Python 服务 + Pi 子进程 | 单进程（pi-sdk-web 内部） |
 | Web 服务语言 | Python（标准库） | TypeScript（与 Pi SDK 同语言） |
-| 前端 static/ | 复用 | 复用（纯静态文件与后端语言无关） |
-| server.py/rpc_client.py/websocket.py | 核心 | 可退役 |
-| pii 脚本 | 编排两个进程 | 退役或包装 pi-web |
+| 前端 static/ | 复用 | 复用（构建时打包进包） |
+| server.py/rpc_client.py/websocket.py | 核心 | 不涉及 |
+| pii 脚本 | 编排两个进程 | 不涉及（平级，互不影响） |
 | 维护成本 | 跟随 RPC 协议演进 | 跟随 pi-coding-agent SDK 版本 |
 
-### 14.7 本次讨论已确认的方向（尚未实施）
+### 14.7 已确认的设计决策（尚未实施）
 
-1. **独立模块替代方式**：pi-web 作为独立安装的模块（npm 包），接管 pi-tui/TUI 场景的 UI 职责；Pi 本体零修改，`pi` 命令原样保留。
-2. **实现语言 TypeScript**：Web 服务在 pi-web 包内实现（Node 内置 http + 轻量 WebSocket），与 Pi SDK 同语言，不做跨语言桥接。
-3. **独立新模块，先不动现有**：pi-web 模块先独立跑通；现有 RPC 方案（server/ + pii）保持不动作为对照。
-4. **仍处讨论/设计阶段**：本节仅记录方案与评估，不立即实施。
+1. **独立模块方案**：pi-sdk-web 作为独立 npm 包，位于当前 pi-web 仓库的 `pi-sdk-web/` 子目录；接管 TUI 场景的 UI 职责；Pi 本体零修改，`pi` 命令原样保留。
+2. **包名**：`pi-sdk-web`（npm 包名），bin 命令名 `pi-web`。
+3. **CLI 形态**：`pi-web r <name> [--port]`，与 `pii` 并列；默认端口 `4080`（与 pii 一致，两方案不会同时跑）。
+4. **pii 保留**：原有 RPC 桥接方案（pii + server/）功能保留、不动；两种方式并存，用户最终可选择用哪种来跑。
+5. **实现语言 TypeScript**：Web 服务在 pi-sdk-web 包内实现（Node 内置 http + 轻量 WebSocket），与 Pi SDK 同语言，不做跨语言桥接。
+6. **前端复用**：仓库根 `static/` 为唯一前端源，pi-sdk-web 构建时打包进包内，保证独立发布（避免两份前端漂移）。
+7. **session 解析**：`pi-web r <name>` 用 SDK 的 `SessionManager.list/open` 实现，不依赖 pii 的 Python 逻辑。
+8. **开发顺序**：pi-sdk-web 作为独立新模块先跑通；现有 RPC 方案保持不动作为对照。
 
 ### 14.8 待决策 / 开放问题
 
-1. **npm 包名**：`pi-web` 是否在 npm 可用？不可用则用 `@maxdai/pi-web` 等作用域名。
-2. **CLI 形态**：pi-web 的命令集设计（如 `pi-web r <name> [--port]` / `pi-web list`），与现有 `pii` 的关系（退役 / 包装 / 并存）。
-3. **CLI 层逻辑自建**：`main.ts` 中的 session 选择、项目信任提示、首次设置等交互，在 SDK 方案下需要 pi-web 自己实现或简化（`createAgentSession` 已封装大部分；trust 流程需自行接入）。
-4. **session 管理**：`pii list`/`delete` 等价功能（读取 session 目录）归属 pi-web 还是保留 pii。
-5. **WebSocket 实现选型**：手写（参考现有 `websocket.py` 的 RFC 6455 实现）还是引入轻量依赖。
-6. **SDK 版本策略**：锁定 pi-coding-agent 版本，还是跟随 latest（需适配 SDK 演进）。
+1. **CLI 层逻辑自建**：`main.ts` 中的 session 选择、项目信任提示、首次设置等交互，在 SDK 方案下需要 pi-sdk-web 自己实现或简化（`createAgentSession` 已封装大部分；trust 流程需自行接入）。
+2. **session 管理命令**：`pi-web list`/`delete` 等（读取 session 目录）是否实现、与 `pii` 的职责划分。
+3. **WebSocket 实现选型**：手写（参考现有 `websocket.py` 的 RFC 6455 实现）还是引入轻量依赖。
+4. **SDK 版本策略**：锁定 pi-coding-agent 版本，还是跟随 latest（需适配 SDK 演进）。
+5. **发布/安装路径**：pi-sdk-web 发布到 npm registry，还是仅本地 `npm install -g <repo>/pi-sdk-web`（考虑仓库是否公开）。
