@@ -154,6 +154,15 @@ export class PiWebServer {
     }
   }
 
+  /** Broadcast the full state (model/thinking/session name) after mutations. */
+  private broadcastState(): void {
+    try {
+      this.broadcast({ type: "state", data: this.buildState() });
+    } catch {
+      // state unavailable - skip
+    }
+  }
+
   // ------------------------------------------------------------------
   // HTTP: static files
   // ------------------------------------------------------------------
@@ -306,6 +315,7 @@ export class PiWebServer {
       }
       case "cycle_model":
         await this.session.cycleModel();
+        this.broadcastState();
         break;
       case "set_model": {
         const provider = data.provider as string | undefined;
@@ -314,6 +324,7 @@ export class PiWebServer {
         const model = this.session.modelRuntime.getAvailableSnapshot().find((m) => m.provider === provider && m.id === modelId);
         if (!model) throw new Error(`Model not found: ${provider}/${modelId}`);
         await this.session.setModel(model);
+        this.broadcastState();
         break;
       }
       case "get_available_models":
@@ -321,11 +332,13 @@ export class PiWebServer {
         break;
       case "cycle_thinking_level":
         this.session.cycleThinkingLevel();
+        this.broadcastState();
         break;
       case "set_thinking_level": {
         const level = data.level as ThinkingLevel | undefined;
         if (!level) throw new Error("Missing 'level'");
         this.session.setThinkingLevel(level);
+        this.broadcastState();
         break;
       }
       case "get_available_thinking_levels":
@@ -338,6 +351,7 @@ export class PiWebServer {
         const name = typeof data.name === "string" ? data.name : "";
         if (!name) throw new Error("Missing 'name'");
         this.session.setSessionName(name);
+        this.broadcastState();
         break;
       }
       case "extension_ui_response": {

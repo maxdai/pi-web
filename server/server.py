@@ -127,18 +127,28 @@ class Peripheral:
     def _send_initial_state(self, conn: WebSocketConnection) -> None:
         """Send history + state to a newly connected browser client."""
         try:
-            state = self.commands.get_state()
-            data = state.get("data", {})
-            data["cwd"] = self._format_cwd_for_footer(self.cwd)
-            data["gitBranch"] = self._get_git_branch()
-            data["sessionStats"] = self.commands.get_session_stats().get("data", {})
-            data["version"] = self._version
-            data["commands"] = self.commands.get_commands()
-            conn.send_json({"type": "state", "data": data})
-
+            conn.send_json({"type": "state", "data": self._build_state()})
             self._send_history(conn)
         except RuntimeError as e:
             conn.send_json({"type": "error", "error": str(e)})
+
+    def _build_state(self) -> dict:
+        """Build the full session state dict (model/thinking/stats/version/...)."""
+        state = self.commands.get_state()
+        data = state.get("data", {})
+        data["cwd"] = self._format_cwd_for_footer(self.cwd)
+        data["gitBranch"] = self._get_git_branch()
+        data["sessionStats"] = self.commands.get_session_stats().get("data", {})
+        data["version"] = self._version
+        data["commands"] = self.commands.get_commands()
+        return data
+
+    def _broadcast_state(self) -> None:
+        """Broadcast the full state after mutations (model/thinking/session name)."""
+        try:
+            self._broadcast({"type": "state", "data": self._build_state()})
+        except Exception:
+            pass
 
     def _get_pi_version(self) -> str:
         """Get the installed pi version once."""
@@ -239,22 +249,26 @@ class Peripheral:
             self._broadcast({"type": "bash_result", "command": command, "data": result})
         elif cmd_type == "cycle_model":
             self.commands.cycle_model()
+            self._broadcast_state()
         elif cmd_type == "set_model":
             provider = data.get("provider")
             model_id = data.get("modelId")
             if not provider or not model_id:
                 raise RuntimeError("Missing 'provider' or 'modelId'")
             self.commands.set_model(provider, model_id)
+            self._broadcast_state()
         elif cmd_type == "get_available_models":
             models = self.commands.get_available_models()
             self._broadcast({"type": "models", "data": models})
         elif cmd_type == "cycle_thinking_level":
             self.commands.cycle_thinking_level()
+            self._broadcast_state()
         elif cmd_type == "set_thinking_level":
             level = data.get("level")
             if not level:
                 raise RuntimeError("Missing 'level'")
             self.commands.set_thinking_level(level)
+            self._broadcast_state()
         elif cmd_type == "get_available_thinking_levels":
             levels = self.commands.get_available_thinking_levels()
             self._broadcast({"type": "thinking_levels", "data": levels})
@@ -266,6 +280,7 @@ class Peripheral:
             if not name:
                 raise RuntimeError("Missing 'name'")
             self.commands.set_session_name(name)
+            self._broadcast_state()
         elif cmd_type == "extension_ui_response":
             response_id = data.get("id")
             if not response_id:
