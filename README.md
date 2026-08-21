@@ -169,25 +169,6 @@ pi-web/
     └── vendor/         # 本地第三方库（marked）
 ```
 
-## 开发
-
-### 三阶段流程
-
-1. **讨论**：确定设计或修改方案（此阶段不改代码）
-2. **生成/更新设计文件**：把结论写入 `pi-web-design.md`
-3. **开发/修改**：根据讨论结果和设计文件实现
-
-### Git 原则
-
-- 具有不确定性的尝试性修改 → 本地 `git commit`（便于回滚）
-- 确定性的修改且无后继操作 → 推送到 GitHub
-- 相对阶段性的更新 → 推送到 GitHub
-- 避免频繁的 GitHub 操作
-
-### 设计文档
-
-详细的架构、协议、UI 设计见 [pi-web-design.md](pi-web-design.md)。
-
 ## 技术说明
 
 - **RPC 方案**：Python 标准库实现 Web 服务（无第三方 Python 依赖），Pi RPC 协议 JSON line over stdin/stdout
