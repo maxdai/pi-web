@@ -1,0 +1,31 @@
+{
+  "name": "pi-sdk-web",
+  "version": "0.1.0",
+  "description": "Browser Web access for Pi (AI coding agent) via the Pi SDK - standalone module, zero modification to Pi itself",
+  "type": "module",
+  "bin": {
+    "pi-web": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "static"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx src/cli.ts",
+    "verify": "tsx src/verify-sdk.ts"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "^0.84.2",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/ws": "^8.5.12",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}
