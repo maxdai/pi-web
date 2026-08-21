@@ -162,7 +162,7 @@ class PiWebClient {
     }
 
     // Loaded resources
-    this.renderLoadedResources(state.commands);
+    this.renderLoadedResources(state.commands, state.tools);
 
     // First footer line: pwd (branch) • session name
     const pwd = state.cwd || '';
@@ -174,15 +174,15 @@ class PiWebClient {
     this.renderStats(state.sessionStats, state);
   }
 
-  renderLoadedResources(commands) {
+  renderLoadedResources(commands, tools) {
     if (!this.loadedResourcesEl) return;
-    if (!commands || commands.length === 0) {
+    if ((!commands || commands.length === 0) && (!tools || tools.length === 0)) {
       this.loadedResourcesEl.innerHTML = '';
       return;
     }
 
-    const groups = { skill: [], prompt: [], extension: [] };
-    for (const cmd of commands) {
+    const groups = { skill: [], prompt: [], extension: [], tools: tools || [] };
+    for (const cmd of commands || []) {
       const source = cmd.source;
       if (source === 'skill') groups.skill.push(cmd);
       else if (source === 'prompt') groups.prompt.push(cmd);
@@ -210,6 +210,9 @@ class PiWebClient {
     }
     if (groups.extension.length > 0) {
       sections.push(this.resourceSection('Extensions', groups.extension.map((c) => c.name)));
+    }
+    if (groups.tools.length > 0) {
+      sections.push(this.resourceSection('Tools', groups.tools));
     }
     body.innerHTML = sections.join('');
 

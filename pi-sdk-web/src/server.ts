@@ -224,6 +224,7 @@ export class PiWebServer {
       cwd: this.formatCwd(this.session.sessionManager.getCwd()),
       gitBranch: this.getGitBranch(this.session.sessionManager.getCwd()),
       commands: this.getCommands(),
+      tools: this.session.getActiveToolNames(),
     };
     try {
       state.sessionStats = this.session.getSessionStats();
