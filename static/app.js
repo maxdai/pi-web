@@ -285,8 +285,9 @@ class PiWebClient {
       const modelLabel = provider ? `${provider}/${model}` : model;
       const thinking = state.thinkingLevel || 'off';
       const modelHtml = `<span class="clickable model-label" title="Click to change model">${this.escapeHtml(modelLabel)}</span>`;
+      const cycleHtml = `<span class="clickable cycle-model-label" title="Cycle to next model (TUI Ctrl+P)">>></span>`;
       const thinkingHtml = `<span class="clickable thinking-label" title="Click to change thinking">${this.escapeHtml(thinking)}</span>`;
-      rightHtml = `${modelHtml} · ${thinkingHtml}`;
+      rightHtml = `${modelHtml} ${cycleHtml} · ${thinkingHtml}`;
     }
 
     statsEl.innerHTML = `<span class="stats-left">${leftParts.join(' ')}</span><span class="stats-right">${rightHtml}</span>`;
@@ -296,6 +297,13 @@ class PiWebClient {
       modelEl.addEventListener('click', (e) => {
         e.stopPropagation();
         this.openModelPicker();
+      });
+    }
+    const cycleEl = statsEl.querySelector('.cycle-model-label');
+    if (cycleEl) {
+      cycleEl.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.send({ type: 'cycle_model' });
       });
     }
     const thinkingEl = statsEl.querySelector('.thinking-label');
