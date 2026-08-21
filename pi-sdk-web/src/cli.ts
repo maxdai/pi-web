@@ -48,8 +48,14 @@ async function cmdList(): Promise<void> {
 
 async function cmdResume(name: string, port: number): Promise<void> {
   const { info, sessionManager } = await findSessionByName(name);
-  if (sessionManager.getCwd()) {
-    process.chdir(sessionManager.getCwd());
+  const cwd = sessionManager.getCwd();
+  if (cwd) {
+    try {
+      process.chdir(cwd);
+    } catch {
+      // Session cwd no longer exists - keep current directory (same as pii)
+      console.error(`Session cwd not found (${cwd}), keeping current directory`);
+    }
   }
 
   // Create services the way Pi's CLI does: extensions (including built-in
