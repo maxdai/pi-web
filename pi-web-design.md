@@ -616,3 +616,15 @@ pi-sdk-web（独立 npm 包，位于 pi-web 仓库 pi-sdk-web/ 子目录）
 3. **WebSocket 实现**：**`ws` 包**——Node 无内置 WebSocket 服务端（内置是客户端），`ws` 是事实标准、成熟、零原生依赖；不手写。
 4. **SDK 版本策略**：**`^0.84.2`**——npm 对 0.x 的 `^` 语义自动锁定 minor（等效 `~`）；SDK 演进时手动验证后升版本，流程为「Pi 升级 → 验证 SDK API → 升版本」。
 5. **发布/安装路径**：**MVP 不发布 npm**——开发期 `npm link` / 本地安装（`npm install -g ./pi-sdk-web`）；功能稳定后再视需要发布（`pi-sdk-web` 包名已确认可用，未被占用）。
+
+### 14.9 实现状态与补充决策（2025-08，已落地）
+
+pi-sdk-web 已实现并通过浏览器验收（本地提交，随本设计一起推送）。**架构与协议**：
+
+- **模块结构**：`pi-sdk-web/src/`（`cli.ts` 命令入口、`session.ts` 查找、`server.ts` HTTP+WS 桥接、`ui-context.ts` WebUIContext）+ `verify-sdk.ts` 验证脚本。
+- **WebSocket 协议**：与现有 Python 桥接（server.py）**完全一致**——连接时发 `state`+`history`，Pi 事件原样广播，客户端消息 `prompt/abort/bash/set_model/...`，前端 `static/` 零修改复用。
+- **扩展 UI**：`WebUIContext` 实现 `ExtensionUIContext`，select/confirm/input/editor 通过 `extension_ui_response` 由浏览器 resolve；notify/setStatus/setTitle/setWidget 直接广播；theme 用 identity Proxy（扩展调用 `ui.theme.fg` 等颜色函数不崩溃，颜色由浏览器 CSS 承担）。`bindExtensions` 的 mode 用 `"rpc"`（ExtensionMode 无 web 值；rpc = dialog 可用、非终端 UI）。
+- **扩展命令执行**（`/ctx-status` 等，新增决策）：前端 `/cmd` 输入发送 `command` 消息 → 服务端 `extensionRunner.getCommand(name)` 取 `RegisteredCommand.handler`（公开字段）→ 调用时构造 `ExtensionCommandContext` 并传 **`hasUI: false`** → 扩展走文本 fallback（magic-context 的 ctx-status 用 `pi.appendEntry` 写 session custom entry）→ `entry_appended` 事件回传。**根因**：Pi 的 `ExtensionRunner.hasUI()` 实现是 `uiContext !== noOpUIContext`，提供任何 uiContext 即 hasUI=true（§6.16 的"误判"）；命令上下文是自构造对象，其 `hasUI` 是普通字段可覆盖。
+- **命令输出弹窗**（新增决策，对齐 TUI）：服务端执行命令时订阅捕获期间产生的 custom entry，转为 `extension_ui_request`（method `notify`，title `/<命令名>`，message 为 Markdown 文本）弹窗广播；前端 notify 弹窗以 Markdown 渲染（sanitize 白名单复用）。session 历史中的 custom 块保留（默认收起，可回看）。
+- **已知限制**：扩展命令的新会话操作（newSession/fork/switchSession 等）在命令上下文中返回 `{cancelled:true}` 占位；trust 流程简化（默认信任）；theme 切换不支持；`session.dispose` 退出清理。
+- **验证记录**：`npm run verify` 全链路通过（createAgentSession → bindExtensions → subscribe → prompt → 事件流）；`pi-web list`/`r` 正常；`/ctx-status` 弹窗实测成功。
