@@ -5,6 +5,7 @@ const BUILTIN_COMMANDS = [
   { name: 'model', description: 'Select model (opens selector)', builtin: true, action: 'model' },
   { name: 'thinking', description: 'Select thinking level', builtin: true, action: 'thinking' },
   { name: 'compact', description: 'Manually compact the session context', builtin: true, action: 'compact' },
+  { name: 'reload', description: 'Reload session resources and extensions', builtin: true, action: 'reload' },
   { name: 'name', description: 'Set session display name', builtin: true, action: 'name' },
   { name: 'login', description: 'Configure provider authentication (not supported in web)', builtin: true, unsupported: true },
   { name: 'logout', description: 'Remove provider authentication (not supported in web)', builtin: true, unsupported: true },
@@ -1075,6 +1076,8 @@ class PiWebClient {
       this.openThinkingPicker();
     } else if (cmd.action === 'compact') {
       this.send({ type: 'compact' });
+    } else if (cmd.action === 'reload') {
+      this.send({ type: 'reload' });
     } else if (cmd.action === 'name') {
       const newName = window.prompt('Set session display name:', '');
       if (newName && newName.trim()) {

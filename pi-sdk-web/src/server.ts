@@ -356,6 +356,13 @@ export class PiWebServer {
       case "compact":
         await this.session.compact(typeof data.customInstructions === "string" ? data.customInstructions : undefined);
         break;
+      case "reload":
+        // Align with TUI /reload: refuse while streaming or compacting
+        if (!this.session.isIdle) throw new Error("Wait for the current response to finish before reloading.");
+        if (this.session.isCompacting) throw new Error("Wait for compaction to finish before reloading.");
+        await this.session.reload();
+        this.broadcastState();
+        break;
       case "set_session_name": {
         const name = typeof data.name === "string" ? data.name : "";
         if (!name) throw new Error("Missing 'name'");
