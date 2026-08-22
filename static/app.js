@@ -186,6 +186,11 @@ class PiWebClient {
     if (!state) return;
     this.lastState = state;
 
+    // Page title: pi-web - <session name>
+    if (state.sessionName || state.sessionId) {
+      document.title = `pi-web - ${state.sessionName || state.sessionId}`;
+    }
+
     // Header version
     if (this.versionEl && state.version) {
       this.versionEl.textContent = `v${state.version}`;
