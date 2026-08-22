@@ -333,7 +333,24 @@ export class PiWebServer {
       case "bash": {
         const command = typeof data.command === "string" ? data.command : "";
         if (!command) throw new Error("Missing 'command'");
-        const result = await this.session.executeBash(command);
+        const excludeFromContext = data.excludeFromContext === true;
+        // Let extensions intercept/enhance the command (same as Pi RPC/TUI):
+        // user_bash handlers may provide a result or operations for execution.
+        const eventResult = await this.session.extensionRunner.emitUserBash({
+          type: "user_bash",
+          command,
+          excludeFromContext,
+          cwd: this.session.sessionManager.getCwd(),
+        });
+        if (eventResult?.result) {
+          this.session.recordBashResult(command, eventResult.result, { excludeFromContext });
+          this.broadcast({ type: "bash_result", command, data: eventResult.result });
+          break;
+        }
+        const result = await this.session.executeBash(command, undefined, {
+          excludeFromContext,
+          operations: eventResult?.operations,
+        });
         this.broadcast({ type: "bash_result", command, data: result });
         break;
       }
