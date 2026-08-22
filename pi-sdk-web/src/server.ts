@@ -92,7 +92,11 @@ export class PiWebServer {
     });
 
     this.httpServer = createServer((req, res) => this.handleHttp(req, res));
+    // Some components (ws internals, MCP-style extensions) accumulate 'close'
+    // listeners on the server; raise the limit to avoid MaxListenersExceededWarning
+    this.httpServer.setMaxListeners(50);
     this.wsServer = new WebSocketServer({ server: this.httpServer, path: "/ws" });
+    this.wsServer.setMaxListeners(50);
     this.wsServer.on("connection", (ws) => this.handleConnection(ws));
 
     await new Promise<void>((resolvePromise, reject) => {
