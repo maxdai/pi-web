@@ -13,6 +13,50 @@
   --thinking: #808080;
   --bash-mode: #b5bd68;
   --warning: #ffff00;
+  --custom-bg: #2d2838;
+  --custom-label: #9575cd;
+  --md-heading: #f0c674;
+  --md-link: #81a2be;
+  --code-bg: #1e1e24;
+  --modal-bg: #1e1e24;
+  --accent-soft: rgba(138, 190, 183, 0.3);
+  --warning-soft: rgba(255, 255, 0, 0.3);
+  --accent-hover: rgba(138, 190, 183, 0.1);
+  --accent-selected: rgba(138, 190, 183, 0.2);
+  --accent-contrast: #18181e;
+  --code-inline-bg: rgba(128, 128, 128, 0.15);
+  --table-head-bg: rgba(128, 128, 128, 0.1);
+}
+
+/* Bright theme (colors aligned with Pi's light theme) */
+body.theme-bright {
+  --bg: #f5f5f5;
+  --text: #1f2328;
+  --dim: #767676;
+  --muted: #6c6c6c;
+  --accent: #5a8080;
+  --user-bg: #e8e8e8;
+  --tool-pending-bg: #e8e8f0;
+  --tool-success-bg: #e8f0e8;
+  --tool-error-bg: #f0e8e8;
+  --error: #aa5555;
+  --border: #b0b0b0;
+  --thinking: #6c6c6c;
+  --bash-mode: #588458;
+  --warning: #9a7326;
+  --custom-bg: #ede7f6;
+  --custom-label: #7e57c2;
+  --md-heading: #9a7326;
+  --md-link: #547da7;
+  --code-bg: #eef0f2;
+  --modal-bg: #ffffff;
+  --accent-soft: rgba(90, 128, 128, 0.25);
+  --warning-soft: rgba(154, 115, 38, 0.25);
+  --accent-hover: rgba(90, 128, 128, 0.12);
+  --accent-selected: rgba(90, 128, 128, 0.2);
+  --accent-contrast: #ffffff;
+  --code-inline-bg: rgba(0, 0, 0, 0.06);
+  --table-head-bg: rgba(0, 0, 0, 0.05);
 }
 
 * {
@@ -63,6 +107,28 @@ body {
 #version {
   color: var(--dim);
   font-size: 12px;
+}
+
+#theme-switch {
+  font-size: 12px;
+  margin-left: 4px;
+  user-select: none;
+}
+
+.theme-option {
+  cursor: pointer;
+  color: var(--dim);
+}
+
+.theme-option.active {
+  color: var(--accent);
+  font-weight: 600;
+  text-decoration: underline;
+}
+
+.theme-sep {
+  color: var(--dim);
+  margin: 0 4px;
 }
 
 #conn-status {
@@ -121,7 +187,7 @@ body {
 
 #conn-status.connected {
   color: var(--accent);
-  background: rgba(138,190,183,0.1);
+  background: var(--accent-hover);
 }
 
 #conn-status.disconnected {
@@ -239,7 +305,7 @@ body {
 }
 
 .special-block {
-  background: #2d2838;
+  background: var(--custom-bg);
   margin: 4px 0;
   padding: 6px 12px;
   border-radius: 6px;
@@ -248,7 +314,7 @@ body {
 }
 
 .special-block .special-label {
-  color: #9575cd;
+  color: var(--custom-label);
   font-weight: bold;
   font-size: 12px;
   margin-bottom: 4px;
@@ -299,7 +365,7 @@ body {
 .message.user .body h4,
 .message.user .body h5,
 .message.user .body h6 {
-  color: #f0c674;
+  color: var(--md-heading);
   margin: 0.8em 0 0.4em;
   font-weight: 600;
 }
@@ -339,7 +405,7 @@ body {
 
 .body-text code,
 .message.user .body code {
-  background: rgba(128, 128, 128, 0.15);
+  background: var(--code-inline-bg);
   color: var(--accent);
   padding: 0.1em 0.35em;
   border-radius: 3px;
@@ -349,7 +415,7 @@ body {
 
 .body-text pre,
 .message.user .body pre {
-  background: #1e1e24;
+  background: var(--code-bg);
   border: 1px solid var(--border);
   border-radius: 6px;
   padding: 10px 12px;
@@ -360,7 +426,7 @@ body {
 .body-text pre code,
 .message.user .body pre code {
   background: transparent;
-  color: #b5bd68;
+  color: var(--bash-mode);
   padding: 0;
   font-size: 0.9em;
   line-height: 1.5;
@@ -377,7 +443,7 @@ body {
 
 .body-text a,
 .message.user .body a {
-  color: #81a2be;
+  color: var(--md-link);
   text-decoration: none;
 }
 
@@ -410,7 +476,7 @@ body {
 
 .body-text th,
 .message.user .body th {
-  background: rgba(128, 128, 128, 0.1);
+  background: var(--table-head-bg);
   font-weight: 600;
 }
 
@@ -469,7 +535,7 @@ body {
 .status-indicator .spinner {
   width: 12px;
   height: 12px;
-  border: 2px solid rgba(138, 190, 183, 0.3);
+  border: 2px solid var(--accent-soft);
   border-top-color: var(--accent);
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
@@ -481,17 +547,17 @@ body {
 }
 
 .status-indicator.retry .spinner {
-  border-color: rgba(255, 255, 0, 0.3);
+  border-color: var(--warning-soft);
   border-top-color: var(--warning);
 }
 
 .status-indicator.compaction .spinner {
-  border-color: rgba(138, 190, 183, 0.3);
+  border-color: var(--accent-soft);
   border-top-color: var(--accent);
 }
 
 .status-indicator.branch .spinner {
-  border-color: rgba(138, 190, 183, 0.3);
+  border-color: var(--accent-soft);
   border-top-color: var(--accent);
 }
 
@@ -554,7 +620,7 @@ body {
 }
 
 #modal {
-  background: #1e1e24;
+  background: var(--code-bg);
   border: 1px solid var(--border);
   border-radius: 8px;
   width: 480px;
@@ -601,7 +667,7 @@ body {
 }
 
 .modal-item:hover {
-  background: rgba(138, 190, 183, 0.1);
+  background: var(--accent-hover);
 }
 
 .modal-item .modal-item-name {
@@ -615,7 +681,7 @@ body {
 }
 
 .modal-item.selected {
-  background: rgba(138, 190, 183, 0.2);
+  background: var(--accent-selected);
 }
 
 .modal-item.selected .modal-item-name {
@@ -654,13 +720,13 @@ body {
 .modal-message.body-text h4,
 .modal-message.body-text h5,
 .modal-message.body-text h6 {
-  color: #f0c674;
+  color: var(--md-heading);
   margin: 0.8em 0 0.4em;
   font-weight: 600;
 }
 
 .modal-message.body-text pre {
-  background: #1e1e24;
+  background: var(--code-bg);
   border: 1px solid var(--border);
   border-radius: 6px;
   padding: 10px 12px;
@@ -669,7 +735,7 @@ body {
 }
 
 .modal-message.body-text code {
-  background: rgba(128, 128, 128, 0.15);
+  background: var(--code-inline-bg);
   color: var(--accent);
   padding: 0.1em 0.35em;
   border-radius: 3px;
@@ -703,7 +769,7 @@ body {
 
 .modal-btn:hover {
   background: var(--accent);
-  color: #18181e;
+  color: var(--accent-contrast);
 }
 
 .modal-btn.cancel-btn {
@@ -713,7 +779,7 @@ body {
 
 .modal-btn.cancel-btn:hover {
   background: var(--error);
-  color: #18181e;
+  color: var(--accent-contrast);
 }
 
 .modal-input {
@@ -753,7 +819,7 @@ body {
   margin-bottom: 4px;
   border: 1px solid var(--border);
   border-radius: 6px;
-  background: #1e1e24;
+  background: var(--code-bg);
   max-height: 160px;
   overflow-y: auto;
 }
@@ -768,11 +834,11 @@ body {
 }
 
 .command-item:hover {
-  background: rgba(138, 190, 183, 0.1);
+  background: var(--accent-hover);
 }
 
 .command-item.selected {
-  background: rgba(138, 190, 183, 0.2);
+  background: var(--accent-selected);
 }
 
 .command-item.selected .command-name {
@@ -830,7 +896,7 @@ body {
 
 #send-btn:hover {
   background: var(--accent);
-  color: #18181e;
+  color: var(--accent-contrast);
 }
 
 #send-btn:active {
@@ -851,7 +917,7 @@ body {
 
 #abort-btn:hover {
   background: var(--error);
-  color: #18181e;
+  color: var(--accent-contrast);
 }
 
 #abort-btn:active {

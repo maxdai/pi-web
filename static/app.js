@@ -37,6 +37,8 @@ class PiWebClient {
     this.hasConnectedBefore = false;
     this.commandMenuIndex = -1;
 
+    this.initThemeSwitch();
+
     // Streaming state: current assistant message being built
     this.streaming = {
       active: false,
@@ -96,6 +98,27 @@ class PiWebClient {
   setStatus(status) {
     this.statusEl.textContent = status === 'connected' ? 'Connected' : 'Disconnected';
     this.statusEl.className = status === 'connected' ? 'connected' : 'disconnected';
+  }
+
+  // ------------------------------------------------------------------
+  // Theme switch (Dark | Bright)
+  // ------------------------------------------------------------------
+
+  initThemeSwitch() {
+    const stored = localStorage.getItem('piweb-theme') || 'dark';
+    this.applyTheme(stored);
+    document.querySelectorAll('.theme-option').forEach((el) => {
+      el.addEventListener('click', () => this.applyTheme(el.dataset.theme));
+    });
+  }
+
+  applyTheme(theme) {
+    const bright = theme === 'bright';
+    document.body.classList.toggle('theme-bright', bright);
+    localStorage.setItem('piweb-theme', bright ? 'bright' : 'dark');
+    document.querySelectorAll('.theme-option').forEach((el) => {
+      el.classList.toggle('active', el.dataset.theme === (bright ? 'bright' : 'dark'));
+    });
   }
 
   send(obj) {
