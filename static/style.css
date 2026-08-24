@@ -400,6 +400,8 @@ body {
 .message.user .body ol {
   margin: 0.4em 0;
   padding-left: 1.6em;
+  /* Inline markers: keep numbers/bullets aligned with the text (not flush left) */
+  list-style-position: inside;
 }
 
 .body-text li,
