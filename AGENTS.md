@@ -86,6 +86,12 @@ pii r <name> --web <port>   # Web 服务，使用指定端口
 - 提交信息应**简洁、描述性**，说明改动内容。
 - 一个提交尽量聚焦一个改动点。
 
+### npm 发版流程（pi-sdk-web）
+
+- 发版流程定义于 `README.md`「发布新版本（维护者）」节（npm version → commit+tag → npm publish → git push --follow-tags）。
+- **重要**：发版（`npm publish`）前必须先向用户确认「是否修改完成」——用户可能还在调整中，未经确认不得发版；本地 `git commit` 不受此限制。
+- 版本号由用户确认后提升；用户设备升级命令 `npm install -g pi-sdk-web@latest`。
+
 ## 5. 目录结构（提议，以实际为准）
 
 ```text
