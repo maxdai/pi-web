@@ -92,16 +92,43 @@ pii 的项目路径解析优先级：环境变量 `PI_WEB_DIR` → 项目内推�
 
 ### 3. 安装 pi-web（SDK 方案，推荐）
 
+**已发布到 npm registry**，直接安装：
+
 ```bash
-cd pi-sdk-web
-npm install        # 安装依赖（SDK + ws）
-npm run build      # 编译 TypeScript + 复制前端 static 进包
-npm install -g .   # 全局安装 pi-web 命令
-pi-web list        # 验证
+npm install -g pi-sdk-web    # 全局安装 pi-web 命令
+pi-web list                  # 验证
 ```
 
-> 未发布到 npm registry，因此从仓库源码安装。更新时重新执行 `npm run build && npm install -g .`。
+升级：`npm update -g pi-sdk-web`。
+
+> 从仓库源码安装/开发（在另一台设备同步源码时用）：
+> ```bash
+> cd pi-sdk-web && npm install && npm run build && npm install -g .
+> ```
 > 开发期也可以不安装：`cd pi-sdk-web && npx tsx src/cli.ts r <name>`（源码改动即时生效）。
+
+## 发布新版本（维护者）
+
+pi-sdk-web 已发布到 npm（`pi-sdk-web`，作者 maxdai）。发布新版本流程：
+
+```bash
+# 1. 修改代码后，在仓库根提升版本
+#    （pi-sdk-web 子目录执行 npm version 只改 package.json，不会自动 git commit）
+npm version patch                          # 或 minor / major（改 pi-sdk-web/package.json）
+
+# 2. 提交 + 打 tag
+git add pi-sdk-web/package.json pi-sdk-web/package-lock.json
+git commit -m "Release pi-sdk-web x.y.z"
+git tag vX.Y.Z
+
+# 3. 发布（prepublishOnly 自动构建；自动化 token 无需交互式认证）
+cd pi-sdk-web && npm publish
+
+# 4. 推送 git（含 tag）
+cd .. && git push --follow-tags
+```
+
+> 认证：本机 `~/.npmrc` 配置 npm 的 **Automation/Granular token**（npmjs.com → Access Tokens 创建）后发布零交互；用户升级命令：`npm update -g pi-sdk-web`。
 
 ## 使用
 
