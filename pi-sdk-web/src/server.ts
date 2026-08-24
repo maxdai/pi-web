@@ -9,7 +9,7 @@
  *   - Client msgs: prompt/abort/get_stats/bash/cycle_model/set_model/... -> session methods
  */
 import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { dirname, join, resolve } from "node:path";
@@ -33,6 +33,16 @@ const PACKAGE_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const STATIC_DIR =
   [resolve(PACKAGE_DIR, "static"), resolve(PACKAGE_DIR, "..", "static")].find((p) => existsSync(p)) ??
   resolve(PACKAGE_DIR, "..", "static");
+
+// Our own package version (pi-sdk-web), shown in the header next to Pi's version
+const PI_WEB_VERSION: string = (() => {
+  try {
+    const pkg = JSON.parse(readFileSync(join(PACKAGE_DIR, "package.json"), "utf8")) as { version?: string };
+    return pkg.version ?? "dev";
+  } catch {
+    return "dev";
+  }
+})();
 
 // Events after which footer stats should be refreshed (TUI does this too)
 const STATS_REFRESH_EVENTS = new Set([
@@ -233,6 +243,7 @@ export class PiWebServer {
       autoCompactionEnabled: this.session.autoCompactionEnabled,
       messageCount: this.session.messages.length,
       version: VERSION,
+      piWebVersion: PI_WEB_VERSION,
       cwd: this.formatCwd(this.session.sessionManager.getCwd()),
       gitBranch: this.getGitBranch(this.session.sessionManager.getCwd()),
       commands: this.getCommands(),

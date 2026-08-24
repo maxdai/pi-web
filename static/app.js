@@ -191,9 +191,11 @@ class PiWebClient {
       document.title = `pi-web - ${state.sessionName || state.sessionId}`;
     }
 
-    // Header version
+    // Header version: pi v<pi version> · pi-web v<pi-sdk-web version>
     if (this.versionEl && state.version) {
-      this.versionEl.textContent = `v${state.version}`;
+      const parts = [`v${state.version}`];
+      if (state.piWebVersion) parts.push(`pi-web v${state.piWebVersion}`);
+      this.versionEl.textContent = parts.join(' · ');
     }
 
     // Loaded resources
