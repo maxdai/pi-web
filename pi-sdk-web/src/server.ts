@@ -192,7 +192,11 @@ export class PiWebServer {
     try {
       const data = await readFile(filePath);
       const ext = filePath.slice(filePath.lastIndexOf(".")).toLowerCase();
-      res.writeHead(200, { "Content-Type": MIME[ext] ?? "application/octet-stream" });
+      res.writeHead(200, {
+        "Content-Type": MIME[ext] ?? "application/octet-stream",
+        // Always revalidate: frontend updates must be visible without manual cache clears
+        "Cache-Control": "no-cache",
+      });
       res.end(data);
     } catch {
       res.writeHead(404).end();
