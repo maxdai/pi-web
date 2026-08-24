@@ -228,7 +228,7 @@ body {
 }
 
 .message.assistant {
-  padding: 2px 0;
+  padding: 2px 12px;
 }
 
 .message .role {
