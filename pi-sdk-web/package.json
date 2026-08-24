@@ -13,7 +13,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.json && node -e \"require('node:fs').cpSync('../static', 'static', { recursive: true })\"",
     "dev": "tsx src/cli.ts",
-    "verify": "tsx src/verify-sdk.ts"
+    "verify": "tsx src/verify-sdk.ts",
+    "prepublishOnly": "npm run build"
   },
   "engines": {
     "node": ">=20"
@@ -28,5 +29,18 @@
     "@types/ws": "^8.5.12",
     "tsx": "^4.19.0",
     "typescript": "^5.6.0"
-  }
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/maxdai/pi-web.git"
+  },
+  "keywords": [
+    "pi",
+    "pi-coding-agent",
+    "browser",
+    "web-ui",
+    "agent",
+    "coding-agent"
+  ]
 }
