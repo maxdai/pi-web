@@ -105,7 +105,7 @@ class PiWebClient {
   // ------------------------------------------------------------------
 
   initThemeSwitch() {
-    const stored = localStorage.getItem('piweb-theme') || 'dark';
+    const stored = localStorage.getItem('piweb-theme') || 'bright';
     this.applyTheme(stored);
     document.querySelectorAll('.theme-option').forEach((el) => {
       el.addEventListener('click', () => this.applyTheme(el.dataset.theme));
