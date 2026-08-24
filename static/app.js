@@ -545,7 +545,7 @@ class PiWebClient {
     labelEl.className = 'special-label';
     labelEl.textContent = label;
     const body = document.createElement('div');
-    body.className = 'special-body';
+    body.className = 'special-body body-text';
     div.appendChild(labelEl);
     div.appendChild(body);
     div.addEventListener('click', () => this.toggleSpecial(div));
@@ -865,7 +865,7 @@ class PiWebClient {
     for (const block of message.content || []) {
       if (block.type === 'thinking') {
         const p = document.createElement('div');
-        p.className = 'thinking';
+        p.className = 'thinking body-text';
         p.innerHTML = this.renderMarkdown(block.thinking);
         body.appendChild(p);
       } else if (block.type === 'text') {

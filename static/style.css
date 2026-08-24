@@ -396,6 +396,10 @@ body {
 
 .body-text ul,
 .body-text ol,
+.thinking ul,
+.thinking ol,
+.modal-message.body-text ul,
+.modal-message.body-text ol,
 .message.user .body ul,
 .message.user .body ol {
   margin: 0.4em 0;
