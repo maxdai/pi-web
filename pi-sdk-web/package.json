@@ -42,5 +42,6 @@
     "web-ui",
     "agent",
     "coding-agent"
-  ]
+  ],
+  "author": "maxdai"
 }
