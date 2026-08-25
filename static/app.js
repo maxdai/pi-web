@@ -8,6 +8,7 @@ const BUILTIN_COMMANDS = [
   { name: 'compact', description: 'Manually compact the session context', builtin: true, action: 'compact' },
   { name: 'reload', description: 'Reload session resources and extensions', builtin: true, action: 'reload' },
   { name: 'export', description: 'Export session to HTML (or .jsonl)', builtin: true, action: 'export' },
+  { name: 'session', description: 'Show session information', builtin: true, action: 'session' },
   { name: 'name', description: 'Set session display name', builtin: true, action: 'name' },
   { name: 'login', description: 'Configure provider authentication (not supported in web)', builtin: true, unsupported: true },
   { name: 'logout', description: 'Remove provider authentication (not supported in web)', builtin: true, unsupported: true },
@@ -1202,6 +1203,8 @@ class PiWebClient {
     } else if (cmd.action === 'export') {
       const path = (args || '').trim();
       this.send({ type: 'export', path: path });
+    } else if (cmd.action === 'session') {
+      this.send({ type: 'session' });
     } else if (cmd.action === 'name') {
       const newName = window.prompt('Set session display name:', '');
       if (newName && newName.trim()) {

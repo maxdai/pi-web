@@ -507,8 +507,69 @@ export class PiWebServer {
         await this.executeCommand(name, args);
         break;
       }
+      case "session":
+        // Read-only session info (TUI /session equivalent)
+        this.broadcastSessionInfo();
+        break;
       default:
         throw new Error(`Unsupported command: ${cmdType}`);
+    }
+  }
+
+  /** TUI /session equivalent: show session info as a modal (read-only). */
+  private broadcastSessionInfo(): void {
+    try {
+      const stats = this.session.getSessionStats();
+      const sm = this.session.sessionManager;
+      const entries = sm.getEntries();
+      const model = this.session.model;
+
+      const lines: string[] = [];
+      lines.push("## Session Info", "");
+      const name = sm.getSessionName();
+      if (name) lines.push(`**Name:** ${name}`);
+      lines.push(`**ID:** ${this.session.sessionId}`);
+      if (stats.sessionFile) lines.push(`**File:** ${stats.sessionFile}`);
+      if (model) lines.push(`**Model:** ${model.provider}/${model.id}`);
+      lines.push(`**Thinking:** ${this.session.thinkingLevel}`, "");
+
+      lines.push("### Messages");
+      lines.push(`- User: ${stats.userMessages}`);
+      lines.push(`- Assistant: ${stats.assistantMessages}`);
+      lines.push(`- Tool calls: ${stats.toolCalls}`);
+      lines.push(`- Tool results: ${stats.toolResults}`);
+      lines.push(`- Total: ${stats.totalMessages}`);
+      lines.push(`- Entries: ${entries.length}`, "");
+
+      const t = stats.tokens;
+      if (t) {
+        lines.push("### Tokens");
+        lines.push(`- Input: ${t.input}`);
+        lines.push(`- Output: ${t.output}`);
+        lines.push(`- Cache read: ${t.cacheRead}`);
+        lines.push(`- Cache write: ${t.cacheWrite}`);
+        lines.push(`- Total: ${t.total}`, "");
+      }
+
+      lines.push("### Cost");
+      lines.push(`$${stats.cost.toFixed(4)}`);
+
+      const cu = stats.contextUsage;
+      if (cu?.contextWindow) {
+        lines.push("", "### Context");
+        lines.push(`- ${cu.percent}% / ${cu.contextWindow} tokens`);
+      }
+
+      this.broadcast({
+        type: "extension_ui_request",
+        id: crypto.randomUUID(),
+        method: "notify",
+        title: "/session",
+        message: lines.join("\n"),
+        notifyType: "info",
+      });
+    } catch {
+      // session info unavailable - skip
     }
   }
 
