@@ -1635,11 +1635,24 @@ class PiWebClient {
       ...((this.lastState && this.lastState.commands) || []),
       ...BUILTIN_COMMANDS,
     ];
-    const filtered = commands.filter((c) => {
-      const name = (c.name || '').replace(/^skill:/, '').toLowerCase();
-      const desc = (c.description || c.source || '').toLowerCase();
-      return name.includes(query) || desc.includes(query);
-    });
+    const filtered = commands
+      .filter((c) => {
+        const name = (c.name || '').replace(/^skill:/, '').toLowerCase();
+        const desc = (c.description || c.source || '').toLowerCase();
+        return name.includes(query) || desc.includes(query);
+      })
+      .sort((a, b) => {
+        // Exact-name match first, then name-prefix, then name-contains,
+        // then description-contains (avoids unrelated commands flooding the list)
+        const score = (c) => {
+          const name = (c.name || '').replace(/^skill:/, '').toLowerCase();
+          if (name === query) return 0;
+          if (name.startsWith(query)) return 1;
+          if (name.includes(query)) return 2;
+          return 3;
+        };
+        return score(a) - score(b);
+      });
 
     if (filtered.length === 0) {
       this.hideCommandMenu();
