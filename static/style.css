@@ -734,6 +734,44 @@ body {
   color: var(--text);
 }
 
+/* Lightweight extension notifications (TUI shows notify as transient status) */
+#toast-container {
+  position: fixed;
+  top: 12px;
+  right: 12px;
+  z-index: 200;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 420px;
+}
+
+.toast {
+  background: var(--modal-bg);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 6px;
+  padding: 8px 12px;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.5;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  opacity: 1;
+  transition: opacity 0.3s;
+}
+
+.toast-warning {
+  border-left-color: var(--warning);
+}
+
+.toast-error {
+  border-left-color: var(--error);
+}
+
+.toast-hide {
+  opacity: 0;
+}
+
 .modal-message {
   color: var(--text);
   font-size: 13px;

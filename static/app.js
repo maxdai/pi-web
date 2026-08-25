@@ -1469,12 +1469,30 @@ class PiWebClient {
   }
 
   openExtensionNotify(req) {
-    this.openModal(req.title || 'Notification', 'extension-notify');
-    this.currentExtRequest = req;
-    this.modalSearch.style.display = 'none';
-    // Render as markdown (sanitized) so command outputs (/ctx-status etc.) look right
-    this.modalList.innerHTML = `<div class="modal-message body-text">${this.renderMarkdown(req.message || '')}</div>`;
-    // Close button in modal footer is enough
+    // Command output notifications (title starts with "/", e.g. /ctx-status) keep
+    // the modal. Other extension notifies are lightweight toasts (TUI shows
+    // notify as a transient status message, not a dialog).
+    if (req.title && String(req.title).startsWith('/')) {
+      this.openModal(req.title || 'Notification', 'extension-notify');
+      this.currentExtRequest = req;
+      this.modalSearch.style.display = 'none';
+      this.modalList.innerHTML = `<div class="modal-message body-text">${this.renderMarkdown(req.message || '')}</div>`;
+      return;
+    }
+    this.showToast(req.message || '', req.notifyType);
+  }
+
+  showToast(message, type) {
+    let container = document.getElementById('toast-container');
+    if (!container) return;
+    const toast = document.createElement('div');
+    toast.className = 'toast' + (type ? ` toast-${type}` : '');
+    toast.textContent = message;
+    container.appendChild(toast);
+    setTimeout(() => {
+      toast.classList.add('toast-hide');
+      setTimeout(() => toast.remove(), 300);
+    }, type === 'error' ? 8000 : 5000);
   }
 
   handleModels(models) {
