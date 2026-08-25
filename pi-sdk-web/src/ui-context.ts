@@ -57,6 +57,16 @@ export class WebUIContext implements ExtensionUIContext {
     return Object.fromEntries(this.statusMap);
   }
 
+  /** Drop state tied to the previous session (dialogs + status snapshots). */
+  clearSessionState(): void {
+    for (const pending of this.pending.values()) {
+      if (pending.timer) clearTimeout(pending.timer);
+      pending.resolve(undefined);
+    }
+    this.pending.clear();
+    this.statusMap.clear();
+  }
+
   /** Handle a browser `extension_ui_response` message. */
   respond(id: string, response: { value?: string; confirmed?: boolean; cancelled?: boolean }): boolean {
     const pending = this.pending.get(id);

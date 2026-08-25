@@ -9,6 +9,7 @@ const BUILTIN_COMMANDS = [
   { name: 'reload', description: 'Reload session resources and extensions', builtin: true, action: 'reload' },
   { name: 'export', description: 'Export session to HTML (or .jsonl)', builtin: true, action: 'export' },
   { name: 'session', description: 'Show session information', builtin: true, action: 'session' },
+  { name: 'resume', description: 'Switch to another session', builtin: true, action: 'resume' },
   { name: 'name', description: 'Set session display name', builtin: true, action: 'name' },
   { name: 'login', description: 'Configure provider authentication (not supported in web)', builtin: true, unsupported: true },
   { name: 'logout', description: 'Remove provider authentication (not supported in web)', builtin: true, unsupported: true },
@@ -164,6 +165,9 @@ class PiWebClient {
         break;
       case 'scoped_models':
         this.handleScopedModels(data.data);
+        break;
+      case 'sessions':
+        this.handleSessions(data.data);
         break;
       case 'error':
         this.appendError(data.error);
@@ -590,6 +594,19 @@ class PiWebClient {
     this.toolTimers.clear();
     this.toolEls.clear();
     this.streaming = { active: false, el: null, role: 'assistant' };
+    // Drop stale UI state from the previous session (on /resume reload)
+    const widgets = document.getElementById('widgets');
+    if (widgets) {
+      widgets.innerHTML = '';
+      widgets.style.display = 'none';
+    }
+    this.extStatus = {};
+    const extStatusEl = document.getElementById('ext-status');
+    if (extStatusEl) extStatusEl.style.display = 'none';
+    const pendingEl = document.getElementById('pending');
+    if (pendingEl) pendingEl.style.display = 'none';
+    const statusEl = document.getElementById('status');
+    if (statusEl) statusEl.style.display = 'none';
   }
 
   // ------------------------------------------------------------------
@@ -1205,6 +1222,8 @@ class PiWebClient {
       this.send({ type: 'export', path: path });
     } else if (cmd.action === 'session') {
       this.send({ type: 'session' });
+    } else if (cmd.action === 'resume') {
+      this.openResumePicker();
     } else if (cmd.action === 'name') {
       const newName = window.prompt('Set session display name:', '');
       if (newName && newName.trim()) {
@@ -1529,6 +1548,31 @@ class PiWebClient {
     this.renderModalItems(items, (item) => {
       this.send({ type: 'set_thinking_level', level: item.value });
     });
+  }
+
+  // ------------------------------------------------------------------
+  // Resume picker (switch to another session)
+  // ------------------------------------------------------------------
+
+  openResumePicker() {
+    this.openModal('Resume Session', 'resume');
+    this.modalList.innerHTML = '<div class="modal-message">Loading sessions...</div>';
+    this.send({ type: 'get_sessions' });
+  }
+
+  handleSessions(data) {
+    if (this.modalMode !== 'resume') return;
+    const sessions = data || [];
+    if (sessions.length === 0) {
+      this.modalList.innerHTML = '<div class="modal-message">No other sessions available</div>';
+      return;
+    }
+    this.renderModalItems(
+      sessions.map((s) => ({ name: s.name || s.id, desc: s.cwd, value: s.path })),
+      (item) => {
+        this.send({ type: 'resume', path: item.value });
+      },
+    );
   }
 
   // ------------------------------------------------------------------

@@ -10,9 +10,11 @@
 import {
   SettingsManager,
   createAgentSessionFromServices,
+  createAgentSessionRuntime,
   createAgentSessionServices,
   getAgentDir,
   resolveModelScopeWithDiagnostics,
+  type CreateAgentSessionRuntimeFactory,
 } from "@earendil-works/pi-coding-agent";
 import { findSessionByName, listSessions, loadBuiltinExtensions } from "./session.ts";
 import { PiWebServer } from "./server.ts";
@@ -63,25 +65,44 @@ async function cmdResume(name: string, port: number): Promise<void> {
   // the same modelRuntime used below, so scopedModels resolution sees them.
   const agentDir = getAgentDir();
   const settingsManager = SettingsManager.create(sessionManager.getCwd(), agentDir);
-  const services = await createAgentSessionServices({
+
+  // Runtime factory: re-invoked by AgentSessionRuntime whenever the session is
+  // replaced (e.g. /resume switches to another session with a different cwd).
+  const createRuntime: CreateAgentSessionRuntimeFactory = async ({ cwd, agentDir: dir, sessionManager: sm, sessionStartEvent }) => {
+    const settings = SettingsManager.create(cwd, dir);
+    const services = await createAgentSessionServices({
+      cwd,
+      agentDir: dir,
+      settingsManager: settings,
+      resourceLoaderOptions: { extensionFactories: await loadBuiltinExtensions() },
+    });
+    // Resolve enabledModels (settings) into scopedModels, matching Pi's CLI
+    const enabledModels = settings.getEnabledModels();
+    const scopedModels =
+      enabledModels && enabledModels.length > 0
+        ? (
+            await resolveModelScopeWithDiagnostics(enabledModels, services.modelRuntime, {
+              signal: AbortSignal.timeout(15_000),
+            })
+          ).scopedModels
+        : [];
+    const created = await createAgentSessionFromServices({
+      services,
+      sessionManager: sm,
+      sessionStartEvent,
+      scopedModels,
+    });
+    return { ...created, services, diagnostics: [] };
+  };
+
+  const runtime = await createAgentSessionRuntime(createRuntime, {
     cwd: sessionManager.getCwd(),
     agentDir,
-    settingsManager,
-    resourceLoaderOptions: { extensionFactories: await loadBuiltinExtensions() },
+    sessionManager,
   });
-  // Resolve enabledModels (settings) into scopedModels, matching Pi's CLI
-  const enabledModels = settingsManager.getEnabledModels();
-  const scopedModels =
-    enabledModels && enabledModels.length > 0
-      ? (
-          await resolveModelScopeWithDiagnostics(enabledModels, services.modelRuntime, {
-            signal: AbortSignal.timeout(15_000),
-          })
-        ).scopedModels
-      : [];
-  const { session } = await createAgentSessionFromServices({ services, sessionManager, scopedModels });
+  const { session } = runtime;
 
-  const server = new PiWebServer(session, { port });
+  const server = new PiWebServer(runtime, { port });
   await server.start();
   console.log(`server at http://127.0.0.1:${port}/ (session: ${info.name ?? info.id})`);
 
@@ -96,7 +117,7 @@ async function cmdResume(name: string, port: number): Promise<void> {
       // ignore teardown errors - we still need to exit
     }
     try {
-      session.dispose();
+      runtime.dispose();
     } catch {
       // ignore
     }

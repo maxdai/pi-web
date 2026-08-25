@@ -15,6 +15,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  AgentSessionRuntime,
   ModelRegistry,
   VERSION,
   type AgentSession,
@@ -24,6 +25,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { WebSocket, WebSocketServer } from "ws";
+import { listSessions } from "./session.ts";
 import { WebUIContext } from "./ui-context.ts";
 
 const DEFAULT_PORT = 4080;
@@ -79,7 +81,7 @@ export interface PiWebServerOptions {
 }
 
 export class PiWebServer {
-  readonly session: AgentSession;
+  readonly runtime: AgentSessionRuntime;
   readonly port: number;
   readonly staticDir: string;
   private readonly uiContext: WebUIContext;
@@ -88,8 +90,13 @@ export class PiWebServer {
   private readonly clients = new Set<WebSocket>();
   private unsubscribe: (() => void) | null = null;
 
-  constructor(session: AgentSession, options: PiWebServerOptions = {}) {
-    this.session = session;
+  /** Current session (may change on /resume session switching). */
+  private get session(): AgentSession {
+    return this.runtime.session;
+  }
+
+  constructor(runtime: AgentSessionRuntime, options: PiWebServerOptions = {}) {
+    this.runtime = runtime;
     this.port = options.port ?? DEFAULT_PORT;
     this.staticDir = options.staticDir ?? STATIC_DIR;
     this.uiContext = new WebUIContext((obj) => this.broadcast(obj));
@@ -100,13 +107,11 @@ export class PiWebServer {
   // ------------------------------------------------------------------
 
   async start(): Promise<void> {
-    // Bind extensions with the web UI context (replaces the TUI/RPC context)
-    await this.session.bindExtensions({
-      uiContext: this.uiContext,
-      // "rpc" is the closest ExtensionMode: dialog-capable UI (hasUI=true),
-      // but not terminal-only UI
-      mode: "rpc",
-    });
+    // Rebind hook: invoked by the runtime whenever the session is replaced
+    // (/resume switches to another session).
+    this.runtime.setRebindSession(() => this.bindCurrentSession(true));
+
+    await this.bindCurrentSession(false);
 
     this.httpServer = createServer((req, res) => this.handleHttp(req, res));
     // Some components (ws internals, MCP-style extensions) accumulate 'close'
@@ -120,14 +125,50 @@ export class PiWebServer {
       this.httpServer!.once("error", reject);
       this.httpServer!.listen(this.port, "127.0.0.1", () => resolvePromise());
     });
+  }
 
-    // Forward session events to all browser clients
-    this.unsubscribe = this.session.subscribe((event) => {
+  /**
+   * Bind extensions + subscribe events for the current session, and sync the
+   * process cwd. On session replacement (`afterSwitch`), also tell browsers to
+   * reload their view (new state + history) and switch the process cwd.
+   */
+  private async bindCurrentSession(afterSwitch: boolean): Promise<void> {
+    const session = this.runtime.session;
+
+    // Unsubscribe from the previous session first (also avoids stale events
+    // during teardown/dispose of the old session).
+    this.unsubscribe?.();
+    this.unsubscribe = null;
+
+    await session.bindExtensions({
+      uiContext: this.uiContext,
+      // "rpc" is the closest ExtensionMode: dialog-capable UI (hasUI=true),
+      // but not terminal-only UI
+      mode: "rpc",
+    });
+
+    this.unsubscribe = session.subscribe((event) => {
       this.broadcast(event);
       if (STATS_REFRESH_EVENTS.has((event as { type: string }).type)) {
         this.broadcastStats();
       }
     });
+
+    if (afterSwitch) {
+      // Align process cwd with the resumed session (same as startup chdir)
+      const cwd = session.sessionManager.getCwd();
+      if (cwd) {
+        try {
+          process.chdir(cwd);
+        } catch {
+          console.error(`Session cwd not found (${cwd}), keeping current directory`);
+        }
+      }
+      // Stale extension dialogs/status from the previous session are dropped
+      this.uiContext.clearSessionState();
+      this.broadcastState();
+      this.broadcastHistory();
+    }
   }
 
   async stop(): Promise<void> {
@@ -190,6 +231,11 @@ export class PiWebServer {
     } catch {
       // state unavailable - skip
     }
+  }
+
+  /** Broadcast the current session's history (used after session switching). */
+  private broadcastHistory(): void {
+    this.broadcast({ type: "history", data: this.buildHistory() });
   }
 
   // ------------------------------------------------------------------
@@ -511,13 +557,53 @@ export class PiWebServer {
         // Read-only session info (TUI /session equivalent)
         this.broadcastSessionInfo();
         break;
+      case "get_sessions": {
+        // All sessions except the current one (for /resume)
+        const currentFile = this.session.sessionFile;
+        const all = await listSessions();
+        this.broadcast({
+          type: "sessions",
+          data: all
+            .filter((s) => s.path !== currentFile)
+            .map((s) => ({ name: s.name ?? "", id: s.id, cwd: s.cwd, path: s.path })),
+        });
+        break;
+      }
+      case "resume": {
+        const path = typeof data.path === "string" && data.path ? data.path : "";
+        if (!path) throw new Error("Missing 'path'");
+        await this.resumeSession(path);
+        break;
+      }
       default:
         throw new Error(`Unsupported command: ${cmdType}`);
     }
   }
 
-  /** TUI /session equivalent: show session info as a modal (read-only). */
-  private broadcastSessionInfo(): void {
+  /**
+   * Resume (switch to) another session file. The runtime tears down the current
+   * session, creates the new one and invokes our rebind callback, which rebinds
+   * extensions, resubscribes, switches cwd and broadcasts state/history.
+   */
+  private async resumeSession(path: string): Promise<void> {
+    // Unsubscribe from the current session before teardown so stale events from
+    // the old session are not broadcast during disposal.
+    this.unsubscribe?.();
+    this.unsubscribe = null;
+    try {
+      const result = await this.runtime.switchSession(path);
+      if (result.cancelled) return;
+    } catch (err) {
+      // Rebind hook already ran on failure? No: on error the old session may be
+      // gone - resubscribe defensively to keep the server usable.
+      await this.bindCurrentSession(false);
+      throw err;
+    }
+    // On success the rebind hook (bindCurrentSession(true)) already ran inside
+    // switchSession; nothing more to do here.
+  }
+
+  /** TUI /session equivalent: show session info as a modal (read-only). */  private broadcastSessionInfo(): void {
     try {
       const stats = this.session.getSessionStats();
       const sm = this.session.sessionManager;
