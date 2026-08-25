@@ -1186,10 +1186,18 @@ class PiWebClient {
         this.send({ type: 'bash', command: command });
       }
     } else if (text.startsWith('/')) {
-      // Slash command: builtins are handled locally, everything else is
+      // Skill commands (/skill:name args) go through prompt expansion in Pi -
+      // sent as-is (with the skill: prefix) so session.prompt expands them.
+      if (text.startsWith('/skill:')) {
+        this.send({ type: 'prompt', message: text });
+        this.inputEl.value = '';
+        this.hideCommandMenu();
+        return;
+      }
+      // Other slash commands: builtins are handled locally, everything else is
       // executed as an extension command by the server.
       const m = text.slice(1).match(/^(\S+)\s*(.*)$/);
-      const name = (m ? m[1] : text.slice(1)).replace(/^skill:/, '');
+      const name = m ? m[1] : text.slice(1);
       const args = m ? m[2] : '';
       const builtin = BUILTIN_COMMANDS.find((c) => c.name === name);
       if (builtin && builtin.action && !builtin.unsupported) {
@@ -1707,7 +1715,7 @@ class PiWebClient {
       .map(
         (c, i) =>
           `<div class="command-item" data-index="${i}">` +
-          `<span class="command-name">/${this.escapeHtml(c.name.replace(/^skill:/, ''))}</span>` +
+          `<span class="command-name">/${this.escapeHtml(c.name)}</span>` +
           `<span class="command-desc">${this.escapeHtml(c.description || c.source || '')}</span>` +
           (c.unsupported ? `<span class="command-unsupported">not supported</span>` : '') +
           `</div>`,
@@ -1758,9 +1766,8 @@ class PiWebClient {
       return;
     }
 
-    // Regular commands: insert into input
-    const name = cmd.name.replace(/^skill:/, '');
-    this.inputEl.value = '/' + name + ' ';
+    // Regular commands: insert into input (keep skill: prefix - Pi expands it)
+    this.inputEl.value = '/' + cmd.name + ' ';
     this.inputEl.focus();
     this.hideCommandMenu();
   }
