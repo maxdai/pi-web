@@ -131,6 +131,22 @@ body {
   margin: 0 4px;
 }
 
+#msg-nav {
+  margin-left: 10px;
+  font-size: 13px;
+  user-select: none;
+}
+
+.nav-btn {
+  cursor: pointer;
+  color: var(--dim);
+  padding: 0 4px;
+}
+
+.nav-btn:hover {
+  color: var(--accent);
+}
+
 #conn-status {
   font-size: 12px;
   padding: 2px 8px;

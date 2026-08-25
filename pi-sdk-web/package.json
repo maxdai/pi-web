@@ -7,11 +7,10 @@
     "pi-web": "./dist/cli.js"
   },
   "files": [
-    "dist",
-    "static"
+    "dist"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json && node -e \"require('node:fs').cpSync('../static', 'static', { recursive: true })\"",
+    "build": "tsc -p tsconfig.json && node -e \"require('node:fs').cpSync('../static', 'dist/static', { recursive: true })\"",
     "dev": "tsx src/cli.ts",
     "verify": "tsx src/verify-sdk.ts",
     "prepublishOnly": "npm run build"

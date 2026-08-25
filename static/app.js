@@ -1115,6 +1115,42 @@ class PiWebClient {
     if (scroller) scroller.scrollTop = scroller.scrollHeight;
   }
 
+  /**
+   * Jump to the previous (-1) or next (+1) user message in the scroll view.
+   * Positions the target message at the top of the viewport.
+   */
+  jumpToUserMessage(direction) {
+    const scroller = document.getElementById('scroll-view');
+    if (!scroller) return;
+    const users = [...document.querySelectorAll('.message.user')];
+    if (users.length === 0) return;
+
+    const scrollerRect = scroller.getBoundingClientRect();
+    const offsetTop = (el) => el.getBoundingClientRect().top - scrollerRect.top + scroller.scrollTop;
+    const current = scroller.scrollTop;
+    const buffer = 12; // px: treat "essentially at this message's top" as already there
+
+    let target = null;
+    if (direction === -1) {
+      for (let i = users.length - 1; i >= 0; i--) {
+        if (offsetTop(users[i]) < current - buffer) {
+          target = users[i];
+          break;
+        }
+      }
+    } else {
+      for (const u of users) {
+        if (offsetTop(u) > current + buffer) {
+          target = u;
+          break;
+        }
+      }
+    }
+    if (target) {
+      scroller.scrollTo({ top: Math.max(0, offsetTop(target) - 8), behavior: 'smooth' });
+    }
+  }
+
   // ------------------------------------------------------------------
   // Input
   // ------------------------------------------------------------------
@@ -1196,6 +1232,13 @@ class PiWebClient {
       }
     });
     this.inputEl.addEventListener('input', () => this.updateCommandMenu());
+
+    // Header nav buttons: jump to previous/next user message
+    const navPrev = document.getElementById('nav-prev');
+    const navNext = document.getElementById('nav-next');
+    if (navPrev) navPrev.addEventListener('click', () => this.jumpToUserMessage(-1));
+    if (navNext) navNext.addEventListener('click', () => this.jumpToUserMessage(1));
+
     if (this.sendBtn) {
       this.sendBtn.addEventListener('click', () => this.sendMessage());
     }

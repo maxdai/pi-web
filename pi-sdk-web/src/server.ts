@@ -30,9 +30,16 @@ const DEFAULT_PORT = 4080;
 // Static frontend: prefer the in-package copy (built by `npm run build` for
 // global installs), fall back to the repo-root static/ during development.
 const PACKAGE_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const STATIC_DIR =
-  [resolve(PACKAGE_DIR, "static"), resolve(PACKAGE_DIR, "..", "static")].find((p) => existsSync(p)) ??
-  resolve(PACKAGE_DIR, "..", "static");
+// Static frontend source:
+//  - dev (tsx runs src/server.ts): always the repo-root static/ (live files)
+//  - published (dist/server.js): the built copy at dist/static (packaged)
+const RUNNING_FROM_SRC = fileURLToPath(import.meta.url).includes(`${sep}src${sep}`);
+const STATIC_DIR = RUNNING_FROM_SRC
+  ? resolve(PACKAGE_DIR, "..", "static")
+  : (() => {
+      const built = resolve(PACKAGE_DIR, "dist", "static");
+      return existsSync(built) ? built : resolve(PACKAGE_DIR, "..", "static");
+    })();
 
 // Our own package version (pi-sdk-web), shown in the header next to Pi's version
 const PI_WEB_VERSION: string = (() => {
