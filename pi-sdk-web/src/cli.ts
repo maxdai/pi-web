@@ -85,9 +85,16 @@ async function cmdResume(name: string, port: number): Promise<void> {
   await server.start();
   console.log(`server at http://127.0.0.1:${port}/ (session: ${info.name ?? info.id})`);
 
+  let shuttingDown = false;
   const shutdown = async (signal: string) => {
+    if (shuttingDown) return; // Repeated Ctrl+C must not re-enter teardown
+    shuttingDown = true;
     console.log(`\n${signal} received, shutting down...`);
-    await server.stop();
+    try {
+      await server.stop();
+    } catch {
+      // ignore teardown errors - we still need to exit
+    }
     try {
       session.dispose();
     } catch {

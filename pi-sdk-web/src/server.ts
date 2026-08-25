@@ -12,7 +12,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   ModelRegistry,
@@ -157,8 +157,12 @@ export class PiWebServer {
       return;
     }
     for (const client of this.clients) {
-      if (client.readyState === WebSocket.OPEN) {
+      if (client.readyState !== WebSocket.OPEN) continue;
+      try {
         client.send(message);
+      } catch {
+        // One broken client must not block delivery to the others
+        this.clients.delete(client);
       }
     }
   }
@@ -193,8 +197,10 @@ export class PiWebServer {
     let path = (req.url ?? "/").split("?")[0];
     if (path === "/") path = "/index.html";
 
+    const root = resolve(this.staticDir);
     const filePath = resolve(this.staticDir, "." + path);
-    if (!filePath.startsWith(resolve(this.staticDir))) {
+    // Exact-prefix match (avoid /a/static-evil passing a /a/static check)
+    if (filePath !== root && !filePath.startsWith(root + sep)) {
       res.writeHead(403).end();
       return;
     }
@@ -275,7 +281,15 @@ export class PiWebServer {
     return cwd;
   }
 
+  private gitBranchCache: { cwd: string; branch: string | null; at: number } | null = null;
+  private static readonly GIT_CACHE_TTL_MS = 5_000;
+
   private getGitBranch(cwd: string): string | null {
+    const now = Date.now();
+    if (this.gitBranchCache && this.gitBranchCache.cwd === cwd && now - this.gitBranchCache.at < PiWebServer.GIT_CACHE_TTL_MS) {
+      return this.gitBranchCache.branch;
+    }
+    let branch: string | null = null;
     try {
       const stdout = execFileSync("git", ["branch", "--show-current"], {
         cwd,
@@ -285,10 +299,12 @@ export class PiWebServer {
         // "fatal: not a git repository" in non-git dirs) - suppress it
         stdio: ["ignore", "pipe", "ignore"],
       });
-      return stdout.trim() || null;
+      branch = stdout.trim() || null;
     } catch {
-      return null;
+      branch = null;
     }
+    this.gitBranchCache = { cwd, branch, at: now };
+    return branch;
   }
 
   private getCommands(): unknown[] {
@@ -538,7 +554,7 @@ export class PiWebServer {
       sessionManager: sm,
       modelRegistry: new ModelRegistry(this.session.modelRuntime),
       model: this.session.model,
-      scopedModels: [],
+      scopedModels: this.session.scopedModels,
       thinkingLevel: this.session.thinkingLevel,
       isIdle: () => this.session.isIdle,
       isProjectTrusted: () => true,
@@ -559,7 +575,9 @@ export class PiWebServer {
       fork: async () => ({ cancelled: true }),
       navigateTree: async () => ({ cancelled: true }),
       switchSession: async () => ({ cancelled: true }),
-      reload: async () => {},
+      reload: async () => {
+        await this.session.reload();
+      },
     };
   }
 }
