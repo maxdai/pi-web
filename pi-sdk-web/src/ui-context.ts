@@ -45,9 +45,16 @@ export class WebUIContext implements ExtensionUIContext {
   private readonly pending = new Map<string, PendingDialog>();
   private readonly sink: UiEventSink;
   private readonly identityTheme: Theme = createIdentityTheme();
+  /** Latest setStatus values per key, so late-connecting browsers get current state */
+  private readonly statusMap = new Map<string, string>();
 
   constructor(sink: UiEventSink) {
     this.sink = sink;
+  }
+
+  /** Current extension status snapshot (key -> text) for new connections. */
+  getStatusSnapshot(): Record<string, string> {
+    return Object.fromEntries(this.statusMap);
   }
 
   /** Handle a browser `extension_ui_response` message. */
@@ -127,6 +134,11 @@ export class WebUIContext implements ExtensionUIContext {
   }
 
   setStatus(key: string, text: string | undefined): void {
+    if (text === undefined || text === null) {
+      this.statusMap.delete(key);
+    } else {
+      this.statusMap.set(key, text);
+    }
     this.sink({ type: "extension_ui_request", id: crypto.randomUUID(), method: "setStatus", statusKey: key, statusText: text });
   }
 

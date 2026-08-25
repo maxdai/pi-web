@@ -36,6 +36,7 @@ class PiWebClient {
     this.modalMode = null; // 'model' | 'thinking'
     this.hasConnectedBefore = false;
     this.commandMenuIndex = -1;
+    this.extStatus = {};
 
     this.initThemeSwitch();
 
@@ -168,6 +169,9 @@ class PiWebClient {
         break;
       case 'pi_error':
         this.appendError(data.error);
+        break;
+      case 'ext_status':
+        this.applyExtStatusSnapshot(data.data);
         break;
       case 'extension_ui_request':
         this.handleExtensionUIRequest(data);
@@ -1350,8 +1354,36 @@ class PiWebClient {
     } else if (method === 'setWidget') {
       // Persistent widget panel (TUI: above/below editor). Not a popup.
       this.renderWidget(req);
+    } else if (method === 'setStatus') {
+      // Extension status text (e.g. magic-context "mc: 29.3K (4%) · idle")
+      this.renderStatusItem(req);
     }
-    // setStatus / setTitle / set_editor_text are handled elsewhere or ignored
+    // setTitle / set_editor_text are handled elsewhere or ignored
+  }
+
+  renderStatusItem(req) {
+    const el = document.getElementById('ext-status');
+    if (!el) return;
+    if (req.statusText === undefined || req.statusText === null) {
+      delete this.extStatus[req.statusKey];
+    } else {
+      this.extStatus[req.statusKey] = req.statusText;
+    }
+    this.updateExtStatusDisplay();
+  }
+
+  applyExtStatusSnapshot(snapshot) {
+    if (!snapshot) return;
+    this.extStatus = Object.assign({}, snapshot);
+    this.updateExtStatusDisplay();
+  }
+
+  updateExtStatusDisplay() {
+    const el = document.getElementById('ext-status');
+    if (!el) return;
+    const entries = Object.entries(this.extStatus);
+    el.textContent = entries.map(([k, v]) => `${k}: ${v}`).join(' · ');
+    el.style.display = entries.length ? 'block' : 'none';
   }
 
   openExtensionSelect(req) {

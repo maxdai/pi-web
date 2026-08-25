@@ -239,6 +239,11 @@ export class PiWebServer {
     // Initial state (state + history), mirroring the Python bridge
     this.sendJson(ws, { type: "state", data: this.buildState() });
     this.sendJson(ws, { type: "history", data: this.buildHistory() });
+    // Current extension statuses (setStatus may have fired before this client connected)
+    const extStatus = this.uiContext.getStatusSnapshot();
+    if (Object.keys(extStatus).length > 0) {
+      this.sendJson(ws, { type: "ext_status", data: extStatus });
+    }
   }
 
   private sendJson(ws: WebSocket, obj: unknown): void {
