@@ -829,6 +829,8 @@ class PiWebClient {
     el.querySelector('.widget-title').textContent = key;
     el.querySelector('.widget-body').textContent = (req.widgetLines || []).join('\n');
     widgetsEl.style.display = 'block';
+    // Layout change: keep pinned to bottom if already there
+    this.keepPinnedToBottom();
   }
 
   // ------------------------------------------------------------------
@@ -1421,6 +1423,17 @@ class PiWebClient {
     const entries = Object.entries(this.extStatus);
     el.textContent = entries.map(([k, v]) => `${k}: ${v}`).join(' · ');
     el.style.display = entries.length ? 'block' : 'none';
+    // Layout change: if we were pinned to the bottom, keep it pinned
+    this.keepPinnedToBottom();
+  }
+
+  /** Re-scroll to bottom if the view was already at/near the bottom. */
+  keepPinnedToBottom() {
+    const scroller = document.getElementById('scroll-view');
+    if (!scroller) return;
+    if (scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 2) {
+      this.scrollToBottom();
+    }
   }
 
   openExtensionSelect(req) {
