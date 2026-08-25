@@ -600,7 +600,7 @@ body {
 }
 
 #ext-status {
-  color: var(--dim);
+  color: var(--text);
   font-size: 12px;
   margin-bottom: 4px;
 }
