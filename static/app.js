@@ -804,12 +804,14 @@ class PiWebClient {
     const widgetsEl = document.getElementById('widgets');
     if (!widgetsEl) return;
     const key = req.widgetKey || 'widget';
+    const wasAtBottom = this.wasAtBottom();
 
     if (req.widgetLines === undefined || req.widgetLines === null) {
       // Clear this widget
       const el = widgetsEl.querySelector(`[data-widget-key="${CSS.escape(key)}"]`);
       if (el) el.remove();
       if (widgetsEl.children.length === 0) widgetsEl.style.display = 'none';
+      if (wasAtBottom) this.scrollToBottom();
       return;
     }
 
@@ -830,7 +832,7 @@ class PiWebClient {
     el.querySelector('.widget-body').textContent = (req.widgetLines || []).join('\n');
     widgetsEl.style.display = 'block';
     // Layout change: keep pinned to bottom if already there
-    this.keepPinnedToBottom();
+    if (wasAtBottom) this.scrollToBottom();
   }
 
   // ------------------------------------------------------------------
@@ -1403,18 +1405,28 @@ class PiWebClient {
   renderStatusItem(req) {
     const el = document.getElementById('ext-status');
     if (!el) return;
+    const wasAtBottom = this.wasAtBottom();
     if (req.statusText === undefined || req.statusText === null) {
       delete this.extStatus[req.statusKey];
     } else {
       this.extStatus[req.statusKey] = req.statusText;
     }
     this.updateExtStatusDisplay();
+    if (wasAtBottom) this.scrollToBottom();
   }
 
   applyExtStatusSnapshot(snapshot) {
     if (!snapshot) return;
+    const wasAtBottom = this.wasAtBottom();
     this.extStatus = Object.assign({}, snapshot);
     this.updateExtStatusDisplay();
+    if (wasAtBottom) this.scrollToBottom();
+  }
+
+  /** Whether the view is currently pinned to the bottom (before layout changes). */
+  wasAtBottom() {
+    const scroller = document.getElementById('scroll-view');
+    return !!scroller && scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 2;
   }
 
   updateExtStatusDisplay() {
@@ -1423,17 +1435,6 @@ class PiWebClient {
     const entries = Object.entries(this.extStatus);
     el.textContent = entries.map(([k, v]) => `${k}: ${v}`).join(' · ');
     el.style.display = entries.length ? 'block' : 'none';
-    // Layout change: if we were pinned to the bottom, keep it pinned
-    this.keepPinnedToBottom();
-  }
-
-  /** Re-scroll to bottom if the view was already at/near the bottom. */
-  keepPinnedToBottom() {
-    const scroller = document.getElementById('scroll-view');
-    if (!scroller) return;
-    if (scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 2) {
-      this.scrollToBottom();
-    }
   }
 
   openExtensionSelect(req) {
