@@ -1205,7 +1205,14 @@ class PiWebClient {
       } else if (builtin && builtin.unsupported) {
         this.appendError(`/${name} is not supported in web mode`);
       } else {
-        this.send({ type: 'command', name: name, args: args });
+        // Prompt templates (/cl etc.) are expanded by Pi's prompt layer -
+        // send as prompt text, same as /skill: commands.
+        const knownTemplate = (this.lastState?.commands || []).find((c) => c.name === name && c.source === 'prompt');
+        if (knownTemplate) {
+          this.send({ type: 'prompt', message: text });
+        } else {
+          this.send({ type: 'command', name: name, args: args });
+        }
       }
     } else {
       this.send({ type: 'prompt', message: text });
