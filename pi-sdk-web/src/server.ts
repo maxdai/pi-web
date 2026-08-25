@@ -148,9 +148,15 @@ export class PiWebServer {
     });
 
     this.unsubscribe = session.subscribe((event) => {
+      const type = (event as { type: string }).type;
       this.broadcast(event);
-      if (STATS_REFRESH_EVENTS.has((event as { type: string }).type)) {
+      if (STATS_REFRESH_EVENTS.has(type)) {
         this.broadcastStats();
+      }
+      if (type === "agent_settled") {
+        // Refresh full state after each turn (tools may have changed, e.g. an
+        // extension switched active tools during the turn)
+        this.broadcastState();
       }
     });
 
@@ -434,6 +440,10 @@ export class PiWebServer {
         break;
       case "get_stats":
         this.broadcastStats();
+        break;
+      case "get_state":
+        // Used by the sidebar Tools refresh button
+        this.broadcastState();
         break;
       case "bash": {
         const command = typeof data.command === "string" ? data.command : "";

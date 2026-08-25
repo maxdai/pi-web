@@ -171,6 +171,17 @@ body {
   color: var(--dim);
 }
 
+.tools-refresh {
+  float: right;
+  cursor: pointer;
+  color: var(--accent);
+  padding: 0 4px;
+}
+
+.tools-refresh:hover {
+  text-decoration: underline;
+}
+
 .resources-body {
   margin-top: 6px;
   color: var(--muted);

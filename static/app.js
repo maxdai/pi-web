@@ -279,6 +279,15 @@ class PiWebClient {
       const header = document.createElement('div');
       header.className = 'resources-header';
       header.textContent = 'Tools (click to expand)';
+      const refreshBtn = document.createElement('span');
+      refreshBtn.className = 'tools-refresh';
+      refreshBtn.title = 'Refresh tools list';
+      refreshBtn.textContent = '⟳';
+      refreshBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.send({ type: 'get_state' });
+      });
+      header.appendChild(refreshBtn);
 
       const body = document.createElement('div');
       body.className = 'resources-body';
@@ -291,7 +300,7 @@ class PiWebClient {
         const expanded = div.dataset.expanded === 'true';
         div.dataset.expanded = expanded ? 'false' : 'true';
         body.style.display = expanded ? 'none' : 'block';
-        header.textContent = expanded ? 'Tools (click to expand)' : 'Tools (click to collapse)';
+        header.firstChild.textContent = expanded ? 'Tools (click to expand)' : 'Tools (click to collapse)';
       });
       this.loadedResourcesEl.appendChild(div);
     }
