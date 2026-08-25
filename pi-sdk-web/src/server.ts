@@ -311,6 +311,7 @@ export class PiWebServer {
       cwd: this.formatCwd(this.session.sessionManager.getCwd()),
       gitBranch: this.getGitBranch(this.session.sessionManager.getCwd()),
       commands: this.getCommands(),
+      tools: this.getActiveTools(),
     };
     try {
       state.sessionStats = this.session.getSessionStats();
@@ -382,6 +383,19 @@ export class PiWebServer {
         commands.push({ name: `skill:${s.name}`, description: s.description, source: "skill", sourceInfo: s.sourceInfo });
       }
       return commands;
+    } catch {
+      return [];
+    }
+  }
+
+  /** Tools currently exposed to the LLM (name + description). */
+  private getActiveTools(): unknown[] {
+    try {
+      const active = new Set(this.session.getActiveToolNames());
+      return this.session
+        .getAllTools()
+        .filter((t) => active.has(t.name))
+        .map((t) => ({ name: t.name, description: t.description }));
     } catch {
       return [];
     }
