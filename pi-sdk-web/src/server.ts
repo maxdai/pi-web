@@ -277,7 +277,9 @@ export class PiWebServer {
   private buildHistory(): unknown {
     try {
       return {
-        entries: this.session.sessionManager.getEntries(),
+        // Match TUI's initial rendering: the current context view
+        // (compaction collapses older entries into a summary; branch-aware)
+        entries: this.session.sessionManager.buildContextEntries(),
         leafId: this.session.sessionManager.getLeafId(),
       };
     } catch {
