@@ -148,15 +148,9 @@ export class PiWebServer {
     });
 
     this.unsubscribe = session.subscribe((event) => {
-      const type = (event as { type: string }).type;
       this.broadcast(event);
-      if (STATS_REFRESH_EVENTS.has(type)) {
+      if (STATS_REFRESH_EVENTS.has((event as { type: string }).type)) {
         this.broadcastStats();
-      }
-      if (type === "agent_settled") {
-        // Refresh full state after each turn (tools may have changed, e.g. an
-        // extension switched active tools during the turn)
-        this.broadcastState();
       }
     });
 
