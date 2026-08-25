@@ -222,57 +222,79 @@ class PiWebClient {
 
   renderLoadedResources(commands, tools) {
     if (!this.loadedResourcesEl) return;
-    if ((!commands || commands.length === 0) && (!tools || tools.length === 0)) {
-      this.loadedResourcesEl.innerHTML = '';
-      return;
-    }
-
-    const groups = { skill: [], prompt: [], extension: [], tools: tools || [] };
-    for (const cmd of commands || []) {
-      const source = cmd.source;
-      if (source === 'skill') groups.skill.push(cmd);
-      else if (source === 'prompt') groups.prompt.push(cmd);
-      else groups.extension.push(cmd);
-    }
-
-    const div = document.createElement('div');
-    div.className = 'resources-block';
-    div.dataset.expanded = 'false';
-
-    const header = document.createElement('div');
-    header.className = 'resources-header';
-    header.textContent = 'Loaded Resources (click to expand)';
-
-    const body = document.createElement('div');
-    body.className = 'resources-body';
-    body.style.display = 'none';
-
-    const sections = [];
-    if (groups.skill.length > 0) {
-      sections.push(this.resourceSection('Skills', groups.skill.map((c) => c.name)));
-    }
-    if (groups.prompt.length > 0) {
-      sections.push(this.resourceSection('Prompts', groups.prompt.map((c) => c.name)));
-    }
-    if (groups.extension.length > 0) {
-      sections.push(this.resourceSection('Extensions', groups.extension.map((c) => c.name)));
-    }
-    if (groups.tools.length > 0) {
-      sections.push(this.resourceSection('Tools', groups.tools.map((t) => t.name)));
-    }
-    body.innerHTML = sections.join('');
-
-    div.appendChild(header);
-    div.appendChild(body);
-    div.addEventListener('click', () => {
-      const expanded = div.dataset.expanded === 'true';
-      div.dataset.expanded = expanded ? 'false' : 'true';
-      body.style.display = expanded ? 'none' : 'block';
-      header.textContent = expanded ? 'Loaded Resources (click to expand)' : 'Loaded Resources (click to collapse)';
-    });
-
     this.loadedResourcesEl.innerHTML = '';
-    this.loadedResourcesEl.appendChild(div);
+
+    // Loaded Resources block (Skills/Prompts/Extensions)
+    if (commands && commands.length > 0) {
+      const groups = { skill: [], prompt: [], extension: [] };
+      for (const cmd of commands) {
+        const source = cmd.source;
+        if (source === 'skill') groups.skill.push(cmd);
+        else if (source === 'prompt') groups.prompt.push(cmd);
+        else groups.extension.push(cmd);
+      }
+
+      const div = document.createElement('div');
+      div.className = 'resources-block';
+      div.dataset.expanded = 'false';
+
+      const header = document.createElement('div');
+      header.className = 'resources-header';
+      header.textContent = 'Loaded Resources (click to expand)';
+
+      const body = document.createElement('div');
+      body.className = 'resources-body';
+      body.style.display = 'none';
+
+      const sections = [];
+      if (groups.skill.length > 0) {
+        sections.push(this.resourceSection('Skills', groups.skill.map((c) => c.name)));
+      }
+      if (groups.prompt.length > 0) {
+        sections.push(this.resourceSection('Prompts', groups.prompt.map((c) => c.name)));
+      }
+      if (groups.extension.length > 0) {
+        sections.push(this.resourceSection('Extensions', groups.extension.map((c) => c.name)));
+      }
+      body.innerHTML = sections.join('');
+
+      div.appendChild(header);
+      div.appendChild(body);
+      div.addEventListener('click', () => {
+        const expanded = div.dataset.expanded === 'true';
+        div.dataset.expanded = expanded ? 'false' : 'true';
+        body.style.display = expanded ? 'none' : 'block';
+        header.textContent = expanded ? 'Loaded Resources (click to expand)' : 'Loaded Resources (click to collapse)';
+      });
+      this.loadedResourcesEl.appendChild(div);
+    }
+
+    // Separate Tools block below Loaded Resources (web enhancement)
+    if (tools && tools.length > 0) {
+      const div = document.createElement('div');
+      div.className = 'resources-block';
+      div.dataset.expanded = 'false';
+      div.style.marginTop = '6px';
+
+      const header = document.createElement('div');
+      header.className = 'resources-header';
+      header.textContent = 'Tools (click to expand)';
+
+      const body = document.createElement('div');
+      body.className = 'resources-body';
+      body.style.display = 'none';
+      body.innerHTML = this.resourceSection('', tools.map((t) => t.name));
+
+      div.appendChild(header);
+      div.appendChild(body);
+      div.addEventListener('click', () => {
+        const expanded = div.dataset.expanded === 'true';
+        div.dataset.expanded = expanded ? 'false' : 'true';
+        body.style.display = expanded ? 'none' : 'block';
+        header.textContent = expanded ? 'Tools (click to expand)' : 'Tools (click to collapse)';
+      });
+      this.loadedResourcesEl.appendChild(div);
+    }
   }
 
   resourceSection(name, items) {
