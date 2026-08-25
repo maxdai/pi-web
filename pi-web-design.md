@@ -628,3 +628,30 @@ pi-sdk-web 已实现并通过浏览器验收（本地提交，随本设计一起
 - **命令输出弹窗**（新增决策，对齐 TUI）：服务端执行命令时订阅捕获期间产生的 custom entry，转为 `extension_ui_request`（method `notify`，title `/<命令名>`，message 为 Markdown 文本）弹窗广播；前端 notify 弹窗以 Markdown 渲染（sanitize 白名单复用）。session 历史中的 custom 块保留（默认收起，可回看）。
 - **已知限制**：扩展命令的新会话操作（newSession/fork/switchSession 等）在命令上下文中返回 `{cancelled:true}` 占位；trust 流程简化（默认信任）；theme 切换不支持；`session.dispose` 退出清理。
 - **验证记录**：`npm run verify` 全链路通过（createAgentSession → bindExtensions → subscribe → prompt → 事件流）；`pi-web list`/`r` 正常；`/ctx-status` 弹窗实测成功。
+
+### 14.10 会话切换（/resume，2025-08 设计，待实施）
+
+**动机**：`/resume` 是 TUI 的会话切换命令（选择器列出 session → 切换当前会话）。当前 pi-sdk-web 架构为固定 session（`createAgentSessionFromServices`），需升级以支持会话替换。
+
+**架构升级**：
+- `cli.ts`：services/scopedModels 创建逻辑包装为 **createRuntime 工厂**（对齐 Pi main.ts），用 `createAgentSessionRuntime(createRuntime, {cwd, agentDir, sessionManager})` 创建 runtime。
+- `PiWebServer`：持有 **runtime**（非固定 session）；内部统一 `this.runtime.session` 动态取值（约 20 处 `this.session` 引用改造）。
+- `start()` 的初始 bindExtensions+subscribe 逻辑抽为公共方法 `bindCurrentSession()`；`runtime.setRebindSession(bindCurrentSession)` 注册回调（session 替换后 Pi 自动调用）。
+
+**切换链路**（`/resume`）：
+1. 前端 `/resume` → `get_sessions` → 服务端 `SessionManager.listAll()`（**过滤当前 session**）→ 弹窗列出（名称/id/cwd）→ 用户选择 → 发 `resume {path}`
+2. 服务端 `runtime.switchSession(path)`（SDK 内置：扩展 `beforeSessionSwitch` 可取消、目标 cwd 存在性断言）
+3. **执行前先退订旧订阅**（避免 teardown/dispose 期间旧事件广播）
+4. rebindSession 回调：重新 `bindExtensions`（WebUIContext 保留实例，清空 pending 对话框 + 状态快照）→ 重新 `subscribe` → `process.chdir(目标cwd)`（try/catch 警告）→ 广播新 `state` + `history`
+5. 前端 `renderHistory`（clearContent）时**顺带清空旧 session 残留**：widgets/pending/status/ext-status（等新快照到达）
+
+**边界处理**：
+- 目标 session cwd 不存在 → SDK 断言拒绝，前端错误提示（toast）；不做 TUI 的 cwd 选择补救交互（MVP 简化）
+- **trust 简化**：沿用默认信任（不传 projectTrustContextFactory，与启动一致；TUI 会做新 cwd 信任评估——差异明示）
+- 切换时未完成的扩展对话框（select 等）→ 作废清除
+- 正在运行的 agent 操作会被切换中断（TUI 同样行为）
+- 切换失败 → 当前会话不受影响
+
+**联动自动生效**：footer cwd/git branch（缓存按 cwd 区分）、bash 执行目录（显式 sessionManager.getCwd()）、模型/thinking（工厂恢复逻辑）均随新 session 自动更新。
+
+**影响面**：cli.ts（runtime 工厂）、server.ts（runtime 化 + 切换命令 + rebind 回调）、app.js（/resume 弹窗 + 重载清理）、ui-context.ts（pending/status 清空方法）。
