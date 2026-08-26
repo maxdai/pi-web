@@ -10,7 +10,7 @@
  */
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { readFile, unlink } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -591,6 +591,19 @@ export class PiWebServer {
         const path = typeof data.path === "string" && data.path ? data.path : "";
         if (!path) throw new Error("Missing 'path'");
         await this.resumeSession(path);
+        break;
+      }
+      case "delete_session": {
+        const path = typeof data.path === "string" && data.path ? data.path : "";
+        if (!path) throw new Error("Missing 'path'");
+        // Safety: only allow deleting known session files (never arbitrary paths)
+        const known = (await listSessions()).some((s) => s.path === path);
+        if (!known) throw new Error("Not a known session file");
+        // Align with TUI: cannot delete the currently active session
+        if (this.session.sessionFile === path) {
+          throw new Error("Cannot delete the currently active session");
+        }
+        await unlink(path);
         break;
       }
       default:

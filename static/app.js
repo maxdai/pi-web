@@ -1630,12 +1630,34 @@ class PiWebClient {
       this.modalList.innerHTML = '<div class="modal-message">No other sessions available</div>';
       return;
     }
+    this.resumeSessions = sessions;
     this.renderModalItems(
       sessions.map((s) => ({ name: s.name || s.id, desc: s.cwd, value: s.path })),
       (item) => {
         this.send({ type: 'resume', path: item.value });
       },
     );
+    // Add delete buttons to each item (stopPropagation so clicks don't resume)
+    this.modalList.querySelectorAll('.modal-item').forEach((el, i) => {
+      const session = sessions[i];
+      const del = document.createElement('span');
+      del.className = 'resume-delete';
+      del.title = 'Delete this session';
+      del.textContent = '🗑';
+      del.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.deleteSession(session);
+      });
+      el.appendChild(del);
+    });
+  }
+
+  deleteSession(session) {
+    const label = session.name || session.id;
+    if (!window.confirm(`Delete session "${label}"?\nThis cannot be undone.`)) return;
+    this.send({ type: 'delete_session', path: session.path });
+    // Refresh the list after delete (errors surface via toast/error message)
+    setTimeout(() => this.send({ type: 'get_sessions' }), 300);
   }
 
   // ------------------------------------------------------------------
