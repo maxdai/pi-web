@@ -554,6 +554,12 @@ class PiWebClient {
   }
 
   renderCustom(entry) {
+    // Status traces (appendEntry entries without data.text, e.g.
+    // minimode-status {mode, tools}) are file/event-stream only — TUI
+    // renders nothing for them, so neither do we.
+    if (entry.type === 'custom' && !(entry.data && typeof entry.data.text === 'string' && entry.data.text.trim().length > 0)) {
+      return;
+    }
     const customType = entry.customType || 'custom';
     const label = `[${customType}]`;
     const content = this.customEntryText(entry);

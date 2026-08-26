@@ -720,16 +720,21 @@ export class PiWebServer {
     }
 
     // Show command output as a modal (TUI-like). The session entry remains
-    // for history; the modal is the transient presentation.
+    // for history; the modal is the transient presentation. Only entries
+    // carrying a text payload are shown as modals — entries without
+    // data.text are status traces (e.g. minimode-status) and stay
+    // file/event-stream only, matching TUI, which renders nothing for them.
     for (const entry of captured) {
       const data = entry.data as { title?: string; text?: string } | undefined;
-      const message = data?.text ?? (data !== undefined ? JSON.stringify(data, null, 2) : "");
+      if (!data || typeof data.text !== "string" || data.text.trim().length === 0) {
+        continue;
+      }
       this.broadcast({
         type: "extension_ui_request",
         id: crypto.randomUUID(),
         method: "notify",
-        title: data?.title ?? `/${name}`,
-        message,
+        title: data.title ?? `/${name}`,
+        message: data.text,
         notifyType: "info",
       });
     }
