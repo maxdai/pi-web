@@ -1640,6 +1640,7 @@ class PiWebClient {
     // Add delete buttons to each item (stopPropagation so clicks don't resume)
     this.modalList.querySelectorAll('.modal-item').forEach((el, i) => {
       const session = sessions[i];
+      el.classList.add('resume-item');
       const del = document.createElement('span');
       del.className = 'resume-delete';
       del.title = 'Delete this session';

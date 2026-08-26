@@ -710,6 +710,29 @@ body {
   font-size: 13px;
 }
 
+/* Resume picker items: delete icon pushed to the right, away from the path */
+.modal-item.resume-item {
+  display: flex;
+  align-items: baseline;
+}
+
+.modal-item.resume-item .resume-delete {
+  margin-left: auto;
+  padding-left: 16px;
+  cursor: pointer;
+  opacity: 0.6;
+}
+
+.modal-item.resume-item .resume-delete:hover {
+  opacity: 1;
+}
+
+.modal-item.resume-item .modal-item-desc {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .modal-item:hover {
   background: var(--accent-hover);
 }
