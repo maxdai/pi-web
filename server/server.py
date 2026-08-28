@@ -28,7 +28,23 @@ from rpc_client import RpcClient, RpcCommands
 from websocket import WebSocketConnection, WebSocketServer
 
 DEFAULT_PORT = 4080
-STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
+
+
+def _resolve_static_dir() -> Path:
+    """Find the static/ directory: the repo layout keeps it next to the
+    project root (server.py's parent.parent), while the npm package layout
+    ships it at dist/static (server.py lives at dist/pi-bin/server/). Search
+    upward so both layouts resolve."""
+    d = Path(__file__).resolve().parent
+    for _ in range(4):
+        candidate = d / "static"
+        if candidate.is_dir():
+            return candidate
+        d = d.parent
+    return Path(__file__).resolve().parent / "static"
+
+
+STATIC_DIR = _resolve_static_dir()
 
 
 class Peripheral:
