@@ -140,6 +140,14 @@ export class PiWebServer {
     this.unsubscribe?.();
     this.unsubscribe = null;
 
+    if (afterSwitch) {
+      // Drop stale extension dialogs/status from the PREVIOUS session BEFORE
+      // rebinding: bindExtensions emits session_start, whose handlers (e.g.
+      // magic-context's status line) call setStatus and populate statusMap.
+      // Clearing after bindExtensions would wipe the new session's values.
+      this.uiContext.clearSessionState();
+    }
+
     await session.bindExtensions({
       uiContext: this.uiContext,
       // "rpc" is the closest ExtensionMode: dialog-capable UI (hasUI=true),
@@ -164,8 +172,6 @@ export class PiWebServer {
           console.error(`Session cwd not found (${cwd}), keeping current directory`);
         }
       }
-      // Stale extension dialogs/status from the previous session are dropped
-      this.uiContext.clearSessionState();
       this.broadcastState();
       this.broadcastHistory();
       // Push the (new) extension status snapshot: the frontend's
