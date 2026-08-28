@@ -47,10 +47,22 @@ function createWebTheme(): Theme {
     const fgColors: Record<string, string> = {};
     const bgColors: Record<string, string> = {};
     // dark.json colors refer to vars by name (e.g. "accent" -> "#8abeb7")
-    // or carry a literal hex; split bg keys (Bg suffix) from fg keys.
+    // or carry a literal hex. Split background keys from foreground keys by
+    // the explicit ThemeBg set (mirrors Pi's createTheme in theme.ts) rather
+    // than a "Bg" suffix: scrollbarThumb is a ThemeBg without that suffix.
+    const bgKeys = new Set([
+      "selectedBg",
+      "scrollbarThumb",
+      "searchMatchBg",
+      "userMessageBg",
+      "customMessageBg",
+      "toolPendingBg",
+      "toolSuccessBg",
+      "toolErrorBg",
+    ]);
     for (const [key, value] of Object.entries(darkJson.colors)) {
       const resolved = value.startsWith("#") ? value : darkJson.vars[value] ?? value;
-      if (key.endsWith("Bg")) {
+      if (bgKeys.has(key)) {
         bgColors[key] = resolved;
       } else {
         fgColors[key] = resolved;
