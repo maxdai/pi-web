@@ -1,6 +1,6 @@
 {
   "name": "pi-sdk-web",
-  "version": "0.3.7",
+  "version": "0.3.8",
   "description": "Browser Web access for Pi (AI coding agent) via the Pi SDK - standalone module, zero modification to Pi itself",
   "type": "module",
   "bin": {
