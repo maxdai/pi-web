@@ -628,8 +628,9 @@ pi-sdk-web 已实现并通过浏览器验收（本地提交，随本设计一起
 - **命令输出弹窗**（新增决策，对齐 TUI）：服务端执行命令时订阅捕获期间产生的 custom entry，转为 `extension_ui_request`（method `notify`，title `/<命令名>`，message 为 Markdown 文本）弹窗广播；前端 notify 弹窗以 Markdown 渲染（sanitize 白名单复用）。session 历史中的 custom 块保留（默认收起，可回看）。
 - **custom entry 按 `data.text` 区分呈现**（补充决策）：命令执行捕获的 **`type:"custom"`** entry 仅当 `data.text` 为非空字符串时才转弹窗；无 `data.text` 的 entry（如 minimode-status 的 `{mode,tools}` 状态轨迹）不弹窗、不回显为消息块，只在 session 文件/事件流留痕——与 TUI 一致（TUI 对无 renderer 的 custom entry 不渲染）。`custom_message`（有 `content`）不受此规则影响，仍按内容渲染。
 - **流式期间的用户消息默认 steer**（补充决策，对齐 TUI）：会话运行中提交 user message 时，服务端 `prompt` 命令透传 `streamingBehavior: "steer"`（`prompt(text, { streamingBehavior: "steer" })`），与 interactive-mode.ts 默认行为一致（TUI 流式期间提交消息即用 steer 排队，`app.message.followUp` 仅是扩展键）。不传该选项时 Pi 抛「Agent is already processing...」错误。前端 `queue_update` 事件驱动 Steering pending 展示已有支持（对齐 Python 桥接协议），无需改动。
+- **宿主进程伪装为 Pi（`argv[1]` 改写，补充决策）**：pi-web 是**进程内嵌入** SDK 的宿主（`createAgentSessionServices` + `createAgentSessionFromServices` 在自身进程创建 `AgentSession`，从不 spawn `pi` 命令），入口是自身 bin `pi-sdk-web/dist/cli.js`。magic-context 等进程内扩展用 `resolvePiInvocation()` 派生子 pi 时最信任 `process.argv[1]`（源码注释：*"extensions load in-process, so argv[1] is the host cli.js"*），在 pi-web 宿主下该值指向 pi-web 自身 → historian/dreamer 子进程会 re-exec web server（上游 magic-context issue #177 "host re-invoke"、PR-350 评审已记录）。**修复**：cli.ts 启动时把 `process.argv[1]` 改写为 pi-sdk-web 依赖的 `@earendil-works/pi-coding-agent/dist/cli.js`（`import.meta.resolve` 定位，不依赖 exports 子路径），使扩展派生的子 pi 命中真 Pi CLI。副作用核查：pi-sdk-web 自身用 `process.argv.slice(2)` 解析参数（不受影响）；Pi 核心模块不读 `argv[1]`（仅 Pi 自身 CLI 入口读，pi-web 从不调用）；magic-context `createRequire(argv[1])` 的 CJS 解析在改写前后行为一致（该路径因 ESM-only exports 限制本来就走不通，实际成功路径是 Bare import）。`process.title` 不改（Pi 设置 process.title=APP_NAME 仅 ps 显示用途，与 resolvePiInvocation 判定无关）。
 - **已知限制**：扩展命令的新会话操作（newSession/fork/switchSession 等）在命令上下文中返回 `{cancelled:true}` 占位；trust 流程简化（默认信任）；theme 切换不支持；`session.dispose` 退出清理。
-- **验证记录**：`npm run verify` 全链路通过（createAgentSession → bindExtensions → subscribe → prompt → 事件流）；`pi-web list`/`r` 正常；`/ctx-status` 弹窗实测成功。
+- **验证记录**：`npm run verify` 全链路通过（createAgentSession → bindExtensions → subscribe → prompt → 事件流）；`pi-web list`/`r` 正常；`/ctx-status` 弹窗实测成功；`check-argv` 模拟 resolvePiInvocation 验证 spawn real Pi CLI（0.3.9 发布）；`check-spawn` 端到端验证子进程产出标准 JSON 协议输出（0.3.9 发布前）。
 
 ### 14.10 会话切换（/resume，2025-08 设计，待实施）
 
@@ -657,3 +658,24 @@ pi-sdk-web 已实现并通过浏览器验收（本地提交，随本设计一起
 **联动自动生效**：footer cwd/git branch（缓存按 cwd 区分）、bash 执行目录（显式 sessionManager.getCwd()）、模型/thinking（工厂恢复逻辑）均随新 session 自动更新。
 
 **影响面**：cli.ts（runtime 工厂）、server.ts（runtime 化 + 切换命令 + rebind 回调）、app.js（/resume 弹窗 + 重载清理）、ui-context.ts（pending/status 清空方法）。
+
+### 14.11 进程模型与宿主兼容性（2025-08 讨论结论）
+
+**讨论**：能否让 pi-web 通过调用 `pi` 命令的方式启动（即让 `argv[1]` 天然正确，消除宿主伪装）？结论：**SDK 模式下结构性不可能，且无配置项可启用 pi-sdk-web**。
+
+**为什么不能通过 pi 命令启动（SDK 模式）**：
+- SDK 模式本质是 **pi-web 进程 = 宿主 = Pi 运行时**（`createAgentSession*` 在 pi-web 进程内创建 AgentSession，UI 层由 pi-web 实现，与 `InteractiveMode` 平级）。宿主进程必须有入口，即 pi-web 自身 bin。
+- 若入口换成 pi 命令：`pi`（TUI）→ 消息流/输入框/footer 是 `InteractiveMode` 硬编码，pi-web 无法接管 UI，失去存在意义；`pi --mode rpc` → 回到 RPC 模式，序列化边界兼容性问题全部重现（setWidget 工厂函数丢弃、custom() no-op），且用户明确不采用。
+- 因此「SDK 模式 + 通过 pi 命令启动」自相矛盾：进程是 pi 的则 UI 归不了 pi-web；进程是 pi-web 的则 `argv[1]` 是 pi-web。
+
+**为什么没有配置项可启用 pi-sdk-web**：
+- Pi 模式分派硬编码在 `main.ts: resolveAppMode` + `AppMode = "interactive" | "print" | "json" | "rpc"`（源码核实）。
+- CLI 参数只接受 `--mode text|json|rpc`、`--tui-mode regular|fullscreen`（TUI 内部布局），无 `--mode web`/第三方 UI 宿主口。
+- 要让 `pi` 命令启用 pi-sdk-web，唯一途径是**改 Pi 本体**（新增 mode + main.ts 分派分支），即 §14.5 次选方案「Pi 内置 WebMode」，因违反「不改 Pi」核心原则被排除。
+- 若 Pi 未来开放「第三方注册模式/UI 宿主」扩展点，pi-sdk-web 可变为 `pi --mode web` 直接使用——但目前不存在。
+
+**当前产品线**：`pi`（TUI/print/json/rpc，Pi 本体）与 `pi-web r <name>`（SDK 独立嵌入宿主）是**两条独立入口**；`pii --web`（RPC 桥接）并存保留。宿主伪装（§14.9 `argv[1]` 改写）则是 SDK 模式下「使扩展宿主假设成立」的最优近似：效果上让 pi-web 进程看起来像 pi 启动，且 historian 派生的子进程确实是「通过调用 pi 命令（`node .../pi-coding-agent/dist/cli.js --print ...`）」启动的。
+
+**进一步消除伪装依赖的方向**（待上游，非本项目可定）：
+1. magic-context 上游 `resolvePiInvocation` 修复（PR-350：仅当 `argv[1]` 匹配 `pi-coding-agent/dist/cli.js` 才复用为宿主 CLI）——合入后任何嵌入宿主不再被误判，pi-web 伪装可退役。
+2. magic-context 开放 `piBinary` 配置（`PiSubagentRunner` 构造函数已有 `options.piBinary`，仅缺配置入口）。
