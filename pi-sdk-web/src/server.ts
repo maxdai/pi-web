@@ -168,6 +168,12 @@ export class PiWebServer {
       this.uiContext.clearSessionState();
       this.broadcastState();
       this.broadcastHistory();
+      // Push the (new) extension status snapshot: the frontend's
+      // clearContent() on history wipes ext-status and there is no other
+      // channel after switching, so plugin status lines (e.g. magic-context)
+      // would stay hidden until the new session's first turn event.
+      const extStatus = this.uiContext.getStatusSnapshot();
+      this.broadcast({ type: "ext_status", data: extStatus });
     }
   }
 
