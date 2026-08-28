@@ -1773,7 +1773,10 @@ class PiWebClient {
     ];
     const filtered = commands
       .filter((c) => {
-        const name = (c.name || '').replace(/^skill:/, '').toLowerCase();
+        // Match against the raw command name (with skill:/prompt prefixes, e.g.
+        // "skill:meeting-discuss") so typing "/skill" surfaces every skill
+        // command instead of only ones whose bare name contains "skill".
+        const name = (c.name || '').toLowerCase();
         const desc = (c.description || c.source || '').toLowerCase();
         return name.includes(query) || desc.includes(query);
       })
@@ -1781,7 +1784,7 @@ class PiWebClient {
         // Exact-name match first, then name-prefix, then name-contains,
         // then description-contains (avoids unrelated commands flooding the list)
         const score = (c) => {
-          const name = (c.name || '').replace(/^skill:/, '').toLowerCase();
+          const name = (c.name || '').toLowerCase();
           if (name === query) return 0;
           if (name.startsWith(query)) return 1;
           if (name.includes(query)) return 2;
