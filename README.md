@@ -197,6 +197,51 @@ pi-web / pii 的 Web 服务只监听 **服务端本机的 `127.0.0.1`**（不暴
 - 隧道随 ssh 会话存续（该终端保持运行）；可加 `-N` 仅转发不执行远程命令，配合 `-f` 后台运行（如 `ssh -f -N -L 4080:127.0.0.1:4080 <user>@<pi-server>`）
 - Windows 10+ 自带 OpenSSH 客户端，同样可用
 
+### 长期持续运行（systemd service，可选）
+
+如果需要隧道**长期保持**（不依赖某个终端窗口），可以在本地电脑配置一个 systemd 用户服务。把下面的内容保存为 `~/.config/systemd/user/pi-web-tunnel.service`（替换 `xxxx@xxxx` 为你的 SSH 服务器/用户）：
+
+```ini
+[Unit]
+Description=SSH tunnel to pi web (localhost:4080 -> 127.0.0.1:4080 via xxxx@xxxxxx)
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/ssh -v -N -T -L 4080:127.0.0.1:4080 \
+   -o ExitOnForwardFailure=yes \
+   -o ServerAliveInterval=60 \
+   -o ServerAliveCountMax=3 \
+   -o ConnectTimeout=10 \
+   -o BatchMode=yes \
+   xxxx@xxxx
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+```
+
+启用并启动：
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now pi-web-tunnel
+systemctl --user status pi-web-tunnel   # 查看状态/日志
+```
+
+要点：
+
+- `-o BatchMode=yes`：不交互，依赖 SSH key 认证（`ssh-keygen` 生成、`ssh-copy-id` 部署；若无 key 认证该服务会启动失败，属预期）
+- `-o ExitOnForwardFailure=yes`：本地端口被占用/转发失败时立即退出（配合 `Restart` 自动重试），避免"静默失败"
+- `-o ServerAliveInterval/CountMax`：检测断连并自动重连
+- `Restart=on-failure` + `RestartSec=5`：崩溃后 5 秒自动重启
+- `WantedBy=default.target`：用户登录后自动启动（`systemctl --user enable` 后开机生效）
+- 开机自启需启用 lingering：`loginctl enable-linger <user>`（否则用户未登录时代理不启动）
+
 ## 项目结构
 
 ```text
