@@ -426,7 +426,11 @@ export class PiWebServer {
       case "prompt": {
         const message = typeof data.message === "string" ? data.message : "";
         if (!message) throw new Error("Missing 'message'");
-        await this.session.prompt(message);
+        // Queue with steer when the agent is already running (matches TUI's
+        // default: user messages submitted mid-turn are steered, i.e. handled
+        // right after the current turn; without this Pi throws
+        // "Agent is already processing...").
+        await this.session.prompt(message, { streamingBehavior: "steer" });
         break;
       }
       case "abort":
