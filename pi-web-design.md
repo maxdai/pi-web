@@ -621,7 +621,8 @@ pi-sdk-web（独立 npm 包，位于 pi-web 仓库 pi-sdk-web/ 子目录）
 
 pi-sdk-web 已实现并通过浏览器验收（本地提交，随本设计一起推送）。**架构与协议**：
 
-- **模块结构**：`pi-sdk-web/src/`（`cli.ts` 命令入口、`session.ts` 查找、`server.ts` HTTP+WS 桥接、`ui-context.ts` WebUIContext）+ `verify-sdk.ts` 验证脚本。
+- **模块结构**：`pi-sdk-web/src/`（`cli.ts` 命令入口、`session.ts` 查找、`server.ts` HTTP+WS 桥接、`ui-context.ts` WebUIContext、`pii-cli.ts` pii bin 包装器）+ `verify-sdk.ts` 验证脚本。
+- **pii 随 npm 包分发（补充决策）**：pii（RPC 桥启动器 + 桥）此前仅存于 GitHub 仓库（`pii/pii` + `server/*.py`，Python 标准库），无安装包。现随 `pi-sdk-web` 一起分发：build 时把 `pii/pii` 与 `server/*.py`（排除 `__pycache__`）复制进 `dist/pi-bin/`；npm bin 新增 `pii` → `dist/pi-bin/pii-cli.js`（Node 包装器，定位 `python3` 后 `spawnSync` 执行内嵌 `pii`，透传参数/stdin/stdio，设置 `PI_WEB_DIR=dist/pi-bin` 让 pii 解析到同目录 `server/server.py`）。安装 `pi-sdk-web` 后 `pii` 立即可用（需机器有 python3，与原脚本要求一致）；GitHub 仓库的 `pii/pii` 仍保留为开发入口。
 - **WebSocket 协议**：与现有 Python 桥接（server.py）**完全一致**——连接时发 `state`+`history`，Pi 事件原样广播，客户端消息 `prompt/abort/bash/set_model/...`，前端 `static/` 零修改复用。
 - **扩展 UI**：`WebUIContext` 实现 `ExtensionUIContext`，select/confirm/input/editor 通过 `extension_ui_response` 由浏览器 resolve；notify/setStatus/setTitle/setWidget 直接广播；theme 返回**官方 Pi Theme 实例**（与 TUI 一致，见下）；`bindExtensions` 的 mode 用 `"rpc"`（ExtensionMode 无 web 值；rpc = dialog 可用、非终端 UI）。
 - **theme 与 ANSI 颜色（对齐 TUI，补充决策）**：对齐 TUI 的做法——TUI 中 `ctx.ui.theme` 返回官方 Theme 实例（`interactive-mode.ts` 的 `get theme() { return theme; }`），扩展调用 `theme.fg("accent", text)` 等得到**真实 ANSI 转义串**，由终端解析渲染。pi-web 的浏览器没有终端，因此：

@@ -4,13 +4,14 @@
   "description": "Browser Web access for Pi (AI coding agent) via the Pi SDK - standalone module, zero modification to Pi itself",
   "type": "module",
   "bin": {
-    "pi-web": "./dist/cli.js"
+    "pi-web": "./dist/cli.js",
+    "pii": "./dist/pi-bin/pii-cli.js"
   },
   "files": [
     "dist"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json && node -e \"require('node:fs').cpSync('../static', 'dist/static', { recursive: true })\"",
+    "build": "tsc -p tsconfig.json && node -e \"require('node:fs').cpSync('../static', 'dist/static', { recursive: true }); require('node:fs').mkdirSync('dist/pi-bin', { recursive: true }); require('node:fs').renameSync('dist/pii-cli.js', 'dist/pi-bin/pii-cli.js'); require('node:fs').cpSync('../pii/pii', 'dist/pi-bin/pii'); require('node:fs').cpSync('../server', 'dist/pi-bin/server', { recursive: true, filter: (s) => !s.includes('__pycache__') })\"",
     "dev": "tsx src/cli.ts",
     "verify": "tsx src/verify-sdk.ts",
     "prepublishOnly": "npm run build"
