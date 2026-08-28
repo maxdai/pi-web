@@ -1392,9 +1392,12 @@ class PiWebClient {
     const text = this.inputEl.value.trim();
     if (!text) return;
     if (text.startsWith('!')) {
-      const command = text.slice(1).trim();
+      // TUI parity: "!cmd" runs bash (output goes to LLM context);
+      // "!!cmd" runs bash with excludeFromContext (output NOT sent to LLM).
+      const isExcluded = text.startsWith('!!');
+      const command = (isExcluded ? text.slice(2) : text.slice(1)).trim();
       if (command) {
-        this.send({ type: 'bash', command: command });
+        this.send({ type: 'bash', command: command, excludeFromContext: isExcluded });
       }
     } else if (text.startsWith('/')) {
       // Skill commands (/skill:name args) go through prompt expansion in Pi -
