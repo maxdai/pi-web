@@ -561,16 +561,25 @@ export class PiWebServer {
       case "set_scoped_models": {
         const models = Array.isArray(data.models) ? (data.models as Array<Record<string, unknown>>) : [];
         const resolved: Array<{ model: unknown; thinkingLevel?: unknown }> = [];
+        const enabledIds: string[] = [];
         for (const m of models) {
           const provider = m.provider as string | undefined;
           const modelId = m.modelId as string | undefined;
           if (!provider || !modelId) continue;
+          enabledIds.push(`${provider}/${modelId}`);
           const model = this.session.modelRuntime
             .getAvailableSnapshot()
             .find((x) => x.provider === provider && x.id === modelId);
           if (model) resolved.push({ model, thinkingLevel: m.thinkingLevel });
         }
         this.session.setScopedModels(resolved as never);
+        // Persist only on explicit save (TUI Ctrl+S onPersist); toggling is
+        // session-only (onChange) and must not rewrite settings.json.
+        if (data.persist === true) {
+          this.session.settingsManager.setEnabledModels(
+            enabledIds.length > 0 ? enabledIds : undefined,
+          );
+        }
         this.broadcastState();
         break;
       }

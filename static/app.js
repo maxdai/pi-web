@@ -1872,6 +1872,7 @@ class PiWebClient {
     this.scopedModelsAll = [];
     this.scopedModelsSelected = new Set();
     this.scopedModelsData = null;
+    this.scopedModelsSaved = true;
     this.modalList.innerHTML = '<div class="modal-message">Loading models...</div>';
     this.send({ type: 'get_scoped_models' });
   }
@@ -1910,11 +1911,13 @@ class PiWebClient {
       })
       .join('');
     this.modalList.innerHTML =
-      rows +
       `<div class="modal-actions">
-         <button class="modal-btn ok-btn">Apply</button>
+         <button class="modal-btn ok-btn">Save</button>
          <button class="modal-btn cancel-btn">Cancel</button>
-       </div>`;
+         <span class="modal-hint"></span>
+       </div>` +
+      rows;
+    this.updateScopedUnsavedHint();
     this.modalList.querySelectorAll('.scoped-model').forEach((el) => {
       el.addEventListener('click', () => {
         const key = el.dataset.key;
@@ -1923,31 +1926,47 @@ class PiWebClient {
         const checked = this.scopedModelsSelected.has(key);
         el.classList.toggle('selected', checked);
         el.querySelector('.modal-check').textContent = checked ? '☑' : '☐';
+        // TUI onChange: apply to session (memory, persist=false); Save persists.
+        this.applyScopedModels(false);
       });
     });
     const okBtn = this.modalList.querySelector('.ok-btn');
     if (okBtn) {
       okBtn.addEventListener('click', () => {
-        const models = [];
-        for (const m of this.scopedModelsAll || []) {
-          const key = `${m.provider}/${m.id}`;
-          if (this.scopedModelsSelected.has(key)) {
-            const scopedInfo = (this.scopedModelsData?.scoped || []).find(
-              (s) => `${s.provider}/${s.id}` === key,
-            );
-            models.push({
-              provider: m.provider,
-              modelId: m.id,
-              thinkingLevel: scopedInfo?.thinkingLevel,
-            });
-          }
-        }
-        this.send({ type: 'set_scoped_models', models });
+        this.applyScopedModels(true);
         this.closeModal();
       });
     }
     const cancelBtn = this.modalList.querySelector('.cancel-btn');
     if (cancelBtn) cancelBtn.addEventListener('click', () => this.closeModal());
+  }
+
+  /** Send the current selection to the server (persist=false = memory only). */
+  applyScopedModels(persist) {
+    const models = [];
+    for (const m of this.scopedModelsAll || []) {
+      const key = `${m.provider}/${m.id}`;
+      if (this.scopedModelsSelected.has(key)) {
+        const scopedInfo = (this.scopedModelsData?.scoped || []).find(
+          (s) => `${s.provider}/${s.id}` === key,
+        );
+        models.push({
+          provider: m.provider,
+          modelId: m.id,
+          thinkingLevel: scopedInfo?.thinkingLevel,
+        });
+      }
+    }
+    this.send({ type: 'set_scoped_models', models, persist: persist });
+    this.scopedModelsSaved = persist;
+    this.updateScopedUnsavedHint();
+  }
+
+  updateScopedUnsavedHint() {
+    const hint = this.modalList.querySelector('.modal-hint');
+    if (!hint) return;
+    hint.textContent = this.scopedModelsSaved ? '' : ' (unsaved)';
+    hint.className = this.scopedModelsSaved ? 'modal-hint' : 'modal-hint unsaved';
   }
 
   // ------------------------------------------------------------------
