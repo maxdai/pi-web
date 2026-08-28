@@ -457,11 +457,12 @@ export class PiWebServer {
         break;
       case "set_theme": {
         // Browser theme switch (dark/light): swap the extension ANSI theme.
-        // The browser reloads on the confirmation (unless sync:true, which is
-        // the first-connection sync that must NOT loop).
+        // CSS switches instantly on the client; the server theme only
+        // affects extension setStatus/setWidget generated after this point
+        // (same as TUI - status text is fixed at setStatus time).
         const name = data.name === "light" ? "light" : "dark";
         this.uiContext.setWebTheme(name);
-        this.broadcast({ type: "theme_set", data: { name, sync: data.sync === true } });
+        this.broadcast({ type: "theme_set", data: { name } });
         break;
       }
       case "bash": {

@@ -248,9 +248,8 @@ class PiWebClient {
       this.hasConnectedBefore = true;
       // Sync the persisted theme to the server on first connection so
       // extension ANSI colors match the CSS theme (server defaults to dark).
-      // sync:true - no reload on the acknowledgement (first load only).
       const stored = localStorage.getItem('piweb-theme') === 'bright' ? 'light' : (localStorage.getItem('piweb-theme') || 'light');
-      this.send({ type: 'set_theme', name: stored, sync: true });
+      this.send({ type: 'set_theme', name: stored });
     };
     ws.onmessage = (ev) => this.handleMessage(ev.data);
     ws.onclose = () => {
@@ -286,15 +285,19 @@ class PiWebClient {
   applyTheme(theme, initial) {
     const light = theme === 'light';
     const name = light ? 'light' : 'dark';
+    // CSS variables switch instantly (the "interface frame", like TUI's
+    // requestRender on theme change).
     document.body.classList.toggle('theme-light', light);
     localStorage.setItem('piweb-theme', name);
     document.querySelectorAll('.theme-option').forEach((el) => {
       el.classList.toggle('active', el.dataset.theme === name);
     });
     if (initial) return;
-    // Tell the server to swap the extension ANSI theme, then reload on the
-    // theme_set confirmation so the message is definitely delivered (no race
-    // with the reload) and already-rendered colored content refreshes.
+    // Tell the server to swap the extension ANSI theme: extensions that
+    // setStatus/setWidget AFTER this point generate colors with the new
+    // theme. Already-rendered status text keeps its old colors until the
+    // extension updates it (same as TUI - status text is fixed at setStatus
+    // time; theme change only repaints the frame).
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       this.send({ type: 'set_theme', name: name });
     }
@@ -325,11 +328,10 @@ class PiWebClient {
         this.renderState(data.data);
         break;
       case 'theme_set':
-        // Server confirmed the theme switch. Reload unless this was the
-        // first-connection sync (sync:true) - that must not cause a loop.
-        if (!data.data || data.data.sync !== true) {
-          setTimeout(() => location.reload(), 50);
-        }
+        // Server acknowledged the theme switch. No reload needed: CSS
+        // variables already switched instantly and the server theme only
+        // affects extension setStatus/setWidget generated after this point
+        // (same as TUI).
         break;
       case 'history':
         this.renderHistory(data.data);
