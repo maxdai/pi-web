@@ -16,8 +16,40 @@ import {
   resolveModelScopeWithDiagnostics,
   type CreateAgentSessionRuntimeFactory,
 } from "@earendil-works/pi-coding-agent";
+import { existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
 import { findSessionByName, listSessions, loadBuiltinExtensions } from "./session.ts";
 import { PiWebServer } from "./server.ts";
+
+// ---------------------------------------------------------------------------
+// Pretend to be Pi for in-process extensions.
+//
+// Extensions loaded into this process (magic-context historian/dreamer, etc.)
+// derive "how to spawn a Pi subagent" from process.argv[1] — the host entry
+// script (resolvePiInvocation reuses it when it exists on disk). pi-web's own
+// bin is NOT Pi, so without this a subagent would re-exec the web server.
+// Point argv[1] at the real Pi CLI that pi-sdk-web depends on: extension
+// subagents then spawn Pi exactly as they would from a TUI Pi host.
+//
+// Safe because: pi-sdk-web parses its own args via process.argv.slice(2);
+// Pi's core modules never read argv[1] (only Pi's own CLI entries do, which
+// pi-web never invokes); magic-context's createRequire(argv[1]) module
+// resolution still finds @earendil-works/pi-coding-agent (it sits inside
+// pi-sdk-web/node_modules).
+// ---------------------------------------------------------------------------
+const PI_CLI_ENTRY = (() => {
+  try {
+    const mainEntry = fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent"));
+    const candidate = join(dirname(mainEntry), "cli.js");
+    return existsSync(candidate) ? candidate : undefined;
+  } catch {
+    return undefined;
+  }
+})();
+if (PI_CLI_ENTRY && process.argv[1] !== PI_CLI_ENTRY) {
+  process.argv[1] = PI_CLI_ENTRY;
+}
 
 const DEFAULT_PORT = 4080;
 const DOC = `pi-web - browser Web access for Pi (via Pi SDK)
