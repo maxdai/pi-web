@@ -20,14 +20,18 @@
   - 特殊消息（branch / compaction / custom）
   - Header + Loaded Resources（右侧栏：Skills / Prompts / Extensions）
   - Footer（pwd / git branch / token / context / model / thinking）
+  - 主题切换（Dark / Light，与 TUI 命名一致；扩展 ANSI 颜色同步）
 - 支持操作：
   - 发送消息（prompt）、中止（abort）
   - 模型切换（点击 footer、`>>` 循环切换或 `/model`）
   - Thinking 切换（点击 footer 或 `/thinking`）
-  - 直接执行 bash（`!command`）
+  - 直接执行 bash（`!command`；`!!command` 排除上下文不发给 LLM）
   - 斜杠命令菜单（`/`，支持键盘导航）
   - 扩展命令执行与弹窗（如 `/ctx-status`）
+  - 右侧栏 Tools 框（当前暴露给 LLM 的工具；SDK 方案）
+  - `/resume` 会话切换
 - 事件驱动刷新，与 TUI 行为一致
+- 扩展输出渲染 ANSI 颜色（状态栏 / widget / 通知 / 工具输出）
 
 ## 架构
 
@@ -65,8 +69,9 @@ SDK 方案直接持有 AgentSession：无 JSON line 序列化边界、扩展 UI 
 
 ## 前置条件
 
-1. **Node.js ≥ 20 + npm**（SDK 方案需要；RPC 方案仅需 Python 3）
-2. **Pi 已安装并配置完成**：`~/.pi/agent/` 下需有认证（`auth.json`）、模型库、设置及 session 文件。两个方案都依赖 Pi 的模型/认证/会话配置。
+1. **Node.js ≥ 20 + npm**（SDK 方案及 pii 的 npm 启动器需要）
+2. **Python 3**（RPC 方案需要——pii 的内嵌 Python 桥）
+3. **Pi 已安装并配置完成**：`~/.pi/agent/` 下需有认证（`auth.json`）、模型库、设置及 session 文件。两个方案都依赖 Pi 的模型/认证/会话配置。
 
 ## 安装
 
@@ -79,24 +84,24 @@ cd pi-web
 
 ### 2. 安装 pii（RPC 方案，可选）
 
+`pii` 已随 npm 包分发：安装 `pi-sdk-web` 后 `pii` 命令立即可用（无需单独复制脚本）。
+
 ```bash
-# 复制到全局路径（原文件会备份）
-cp /usr/local/bin/pii /usr/local/bin/pii.bak 2>/dev/null || true
-cp pii/pii /usr/local/bin/pii
-chmod +x /usr/local/bin/pii
+npm install -g pi-sdk-web    # 同时提供 pi-web 和 pii 命令
+pii list                     # 验证
 ```
 
-> 也可以不安装，直接用 `python3 pii/pii ...` 运行。
-
-pii 的项目路径解析优先级：环境变量 `PI_WEB_DIR` → 项目内推导 → `~/pi-web` fallback。
+> pii 的 Node 启动器会调用本机 `python3` 运行内嵌的 Python 桥（RPC 方案），需要机器装有 Python 3。
+> 从仓库源码运行（开发）：`python3 pii/pii ...`（不依赖 npm 包装器）。
 
 ### 3. 安装 pi-web（SDK 方案，推荐）
 
-**已发布到 npm registry**，直接安装：
+**已发布到 npm registry**，直接安装（同时提供 `pi-web` 和 `pii` 命令）：
 
 ```bash
-npm install -g pi-sdk-web    # 全局安装 pi-web 命令
+npm install -g pi-sdk-web    # 全局安装 pi-web / pii 命令
 pi-web list                  # 验证
+pii list                     # 验证（需 Python 3）
 ```
 
 升级：`npm update -g pi-sdk-web`。
@@ -205,11 +210,12 @@ pi-web/
 │   ├── server.py       # HTTP + WebSocket 桥接
 │   ├── rpc_client.py   # Pi RPC 客户端
 │   └── websocket.py    # 标准库 WebSocket 实现
-├── pi-sdk-web/         # SDK 客户端模块（npm 包 pi-sdk-web，bin 命令 pi-web）
+├── pi-sdk-web/         # SDK 客户端模块（npm 包 pi-sdk-web，bin 命令 pi-web 和 pii）
 │   ├── package.json
 │   ├── tsconfig.json
 │   └── src/
 │       ├── cli.ts          # pi-web 命令入口（r/list）
+│       ├── pii-cli.ts      # pii 命令的 Node 启动器（spawn 内嵌 Python 桥）
 │       ├── session.ts      # session 查找 + 内置扩展加载
 │       ├── server.ts       # HTTP + WebSocket 桥接（AgentSession 直连）
 │       ├── ui-context.ts   # WebUIContext（扩展 UI 映射浏览器）
@@ -220,6 +226,8 @@ pi-web/
     ├── app.js
     └── vendor/         # 本地第三方库（marked）
 ```
+
+> 打包：`npm run build` 把 pii 启动器 + Python 桥（`pii/pii`、`server/*.py`）复制进 `dist/pi-bin/`，随 npm 包分发（`files: ["dist"]`），安装后 `pii` / `pi-web` 命令均可用。
 
 ## 技术说明
 
