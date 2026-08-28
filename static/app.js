@@ -246,6 +246,11 @@ class PiWebClient {
         return;
       }
       this.hasConnectedBefore = true;
+      // Sync the persisted theme to the server on first connection so
+      // extension ANSI colors match the CSS theme (server defaults to dark).
+      // sync:true - no reload on the acknowledgement (first load only).
+      const stored = localStorage.getItem('piweb-theme') === 'bright' ? 'light' : (localStorage.getItem('piweb-theme') || 'light');
+      this.send({ type: 'set_theme', name: stored, sync: true });
     };
     ws.onmessage = (ev) => this.handleMessage(ev.data);
     ws.onclose = () => {
@@ -270,20 +275,29 @@ class PiWebClient {
   // ------------------------------------------------------------------
 
   initThemeSwitch() {
-    const stored = localStorage.getItem('piweb-theme') || 'bright';
-    this.applyTheme(stored);
+    // Migrate the old 'bright' key to 'light' (renamed for TUI parity).
+    const stored = localStorage.getItem('piweb-theme') === 'bright' ? 'light' : (localStorage.getItem('piweb-theme') || 'light');
+    this.applyTheme(stored, true);
     document.querySelectorAll('.theme-option').forEach((el) => {
-      el.addEventListener('click', () => this.applyTheme(el.dataset.theme));
+      el.addEventListener('click', () => this.applyTheme(el.dataset.theme, false));
     });
   }
 
-  applyTheme(theme) {
-    const bright = theme === 'bright';
-    document.body.classList.toggle('theme-bright', bright);
-    localStorage.setItem('piweb-theme', bright ? 'bright' : 'dark');
+  applyTheme(theme, initial) {
+    const light = theme === 'light';
+    const name = light ? 'light' : 'dark';
+    document.body.classList.toggle('theme-light', light);
+    localStorage.setItem('piweb-theme', name);
     document.querySelectorAll('.theme-option').forEach((el) => {
-      el.classList.toggle('active', el.dataset.theme === (bright ? 'bright' : 'dark'));
+      el.classList.toggle('active', el.dataset.theme === name);
     });
+    if (initial) return;
+    // Tell the server to swap the extension ANSI theme, then reload on the
+    // theme_set confirmation so the message is definitely delivered (no race
+    // with the reload) and already-rendered colored content refreshes.
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      this.send({ type: 'set_theme', name: name });
+    }
   }
 
   send(obj) {
@@ -309,6 +323,13 @@ class PiWebClient {
     switch (data.type) {
       case 'state':
         this.renderState(data.data);
+        break;
+      case 'theme_set':
+        // Server confirmed the theme switch. Reload unless this was the
+        // first-connection sync (sync:true) - that must not cause a loop.
+        if (!data.data || data.data.sync !== true) {
+          setTimeout(() => location.reload(), 50);
+        }
         break;
       case 'history':
         this.renderHistory(data.data);

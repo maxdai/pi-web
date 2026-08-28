@@ -28,25 +28,25 @@ interface PendingDialog {
 }
 
 /**
- * Build the official Pi theme (colors from the shipped dark.json) so
- * extensions calling ui.theme.fg("accent", text) / .bg(...) get REAL ANSI
- * escapes — identical to TUI (interactive-mode.ts returns the same Theme
- * instance from ctx.ui.theme). The browser renders the escapes as colored
- * spans (see app.js ansiToHtml), acting as the "terminal".
+ * Load a Pi theme (dark.json/light.json colors) so extensions calling
+ * ui.theme.fg("accent", text) / .bg(...) get REAL ANSI escapes — identical
+ * to TUI (interactive-mode.ts returns the same Theme instance from
+ * ctx.ui.theme). The browser renders the escapes as colored spans (see
+ * app.js ansiToHtml), acting as the "terminal".
  *
- * The Theme class and initTheme are exported by the Pi SDK; dark.json ships
- * in the package dist. Constructing the Theme directly keeps us independent
- * of initTheme's global side effects and gives the same result.
+ * The Theme class is exported by the Pi SDK and the theme JSONs ship in the
+ * package dist. Constructing the Theme directly keeps us independent of
+ * initTheme's global side effects and gives the same result.
  */
-function createWebTheme(): Theme {
+function createWebTheme(name: "dark" | "light" = "dark"): Theme {
   try {
     const mainEntry = fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent"));
-    const darkJson = JSON.parse(
-      readFileSync(join(dirname(mainEntry), "modes", "interactive", "theme", "dark.json"), "utf8"),
+    const themeJson = JSON.parse(
+      readFileSync(join(dirname(mainEntry), "modes", "interactive", "theme", `${name}.json`), "utf8"),
     ) as { vars: Record<string, string>; colors: Record<string, string> };
     const fgColors: Record<string, string> = {};
     const bgColors: Record<string, string> = {};
-    // dark.json colors refer to vars by name (e.g. "accent" -> "#8abeb7")
+    // theme colors refer to vars by name (e.g. "accent" -> "#8abeb7")
     // or carry a literal hex. Split background keys from foreground keys by
     // the explicit ThemeBg set (mirrors Pi's createTheme in theme.ts) rather
     // than a "Bg" suffix: scrollbarThumb is a ThemeBg without that suffix.
@@ -60,15 +60,15 @@ function createWebTheme(): Theme {
       "toolSuccessBg",
       "toolErrorBg",
     ]);
-    for (const [key, value] of Object.entries(darkJson.colors)) {
-      const resolved = value.startsWith("#") ? value : darkJson.vars[value] ?? value;
+    for (const [key, value] of Object.entries(themeJson.colors)) {
+      const resolved = value.startsWith("#") ? value : themeJson.vars[value] ?? value;
       if (bgKeys.has(key)) {
         bgColors[key] = resolved;
       } else {
         fgColors[key] = resolved;
       }
     }
-    return new PiTheme(fgColors as never, bgColors as never, "truecolor", { name: "dark" });
+    return new PiTheme(fgColors as never, bgColors as never, "truecolor", { name });
   } catch {
     // Last-resort identity: return the text argument unchanged (no ANSI).
     return new Proxy({} as Theme, {
@@ -87,7 +87,7 @@ function createWebTheme(): Theme {
 export class WebUIContext implements ExtensionUIContext {
   private readonly pending = new Map<string, PendingDialog>();
   private readonly sink: UiEventSink;
-  private readonly webTheme: Theme = createWebTheme();
+  private webTheme: Theme = createWebTheme();
   /** Latest setStatus values per key, so late-connecting browsers get current state */
   private readonly statusMap = new Map<string, string>();
 
@@ -252,6 +252,11 @@ export class WebUIContext implements ExtensionUIContext {
   }
   setTheme(): { success: boolean; error?: string } {
     return { success: false, error: "Theme switching not supported in web mode" };
+  }
+
+  /** Switch the theme used for extension ANSI colors (dark/light). */
+  setWebTheme(name: "dark" | "light"): void {
+    this.webTheme = createWebTheme(name);
   }
 
   // ------------------------------------------------------------------

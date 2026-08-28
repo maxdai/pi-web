@@ -455,6 +455,15 @@ export class PiWebServer {
         // Used by the sidebar Tools refresh button
         this.broadcastState();
         break;
+      case "set_theme": {
+        // Browser theme switch (dark/light): swap the extension ANSI theme.
+        // The browser reloads on the confirmation (unless sync:true, which is
+        // the first-connection sync that must NOT loop).
+        const name = data.name === "light" ? "light" : "dark";
+        this.uiContext.setWebTheme(name);
+        this.broadcast({ type: "theme_set", data: { name, sync: data.sync === true } });
+        break;
+      }
       case "bash": {
         const command = typeof data.command === "string" ? data.command : "";
         if (!command) throw new Error("Missing 'command'");
