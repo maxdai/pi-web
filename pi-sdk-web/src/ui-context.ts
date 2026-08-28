@@ -28,6 +28,10 @@ interface PendingDialog {
  * ANSI-colored strings. The browser renders with CSS, so we return text
  * unchanged (color codes are meaningless in the DOM). Keeps extensions from
  * crashing on theme access; real colors can be added later.
+ *
+ * Pi's Theme.fg() signature is fg(color: ThemeColor, text: string) - some
+ * extensions call it with both args, so the identity function must return
+ * the TEXT argument (2nd), not the color name (1st).
  */
 function createIdentityTheme(): Theme {
   return new Proxy({} as Theme, {
@@ -35,8 +39,12 @@ function createIdentityTheme(): Theme {
       // theme.name / theme.isDark etc. may be accessed as properties
       if (prop === "name") return "dark";
       if (prop === "isDark") return true;
-      // Everything else is a color function (fg/bg/...): return identity
-      return (text: unknown) => (typeof text === "string" ? text : "");
+      // Everything else is a color function (fg/bg/...): return identity.
+      // Support both fg(text) and fg(color, text); never return a color name.
+      return (...args: unknown[]) => {
+        const textArg = args.length > 1 ? args[1] : args[0];
+        return typeof textArg === "string" ? textArg : "";
+      };
     },
   });
 }
