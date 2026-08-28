@@ -16,6 +16,168 @@ const BUILTIN_COMMANDS = [
   { name: 'settings', description: 'Open settings menu (not supported in web)', builtin: true, unsupported: true },
 ];
 
+// ---------------------------------------------------------------------------
+// ANSI escape code to HTML converter.
+//
+// Extensions build status/widget/notify strings with ANSI escapes (via
+// ui.theme.fg/bg, e.g. magic-context's status line). The browser has no
+// terminal to render them, so we convert escapes to inline-styled <span>
+// here — the browser acts as the "terminal". Pi's own export-html does the
+// same conversion server-side (core/export-html/ansi-to-html.ts); this is a
+// port of that pure function, matching its behavior.
+// ---------------------------------------------------------------------------
+
+// Standard ANSI color palette (0-15)
+const ANSI_COLORS = [
+  '#000000', // 0: black
+  '#800000', // 1: red
+  '#008000', // 2: green
+  '#808000', // 3: yellow
+  '#000080', // 4: blue
+  '#800080', // 5: magenta
+  '#008080', // 6: cyan
+  '#c0c0c0', // 7: white
+  '#808080', // 8: bright black
+  '#ff0000', // 9: bright red
+  '#00ff00', // 10: bright green
+  '#ffff00', // 11: bright yellow
+  '#0000ff', // 12: bright blue
+  '#ff00ff', // 13: bright magenta
+  '#00ffff', // 14: bright cyan
+  '#ffffff', // 15: bright white
+];
+
+/** Convert a 256-color index (0-255) to hex. */
+function color256ToHex(index) {
+  if (index < 16) return ANSI_COLORS[index];
+  if (index < 232) {
+    // Color cube (16-231): 6x6x6 = 216 colors
+    const cubeIndex = index - 16;
+    const r = Math.floor(cubeIndex / 36);
+    const g = Math.floor((cubeIndex % 36) / 6);
+    const b = cubeIndex % 6;
+    const toComponent = (n) => (n === 0 ? 0 : 55 + n * 40);
+    const toHex = (n) => toComponent(n).toString(16).padStart(2, '0');
+    return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+  }
+  // Grayscale (232-255): 24 shades
+  const gray = 8 + (index - 232) * 10;
+  const grayHex = gray.toString(16).padStart(2, '0');
+  return `#${grayHex}${grayHex}${grayHex}`;
+}
+
+function escapeHtmlAnsi(text) {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+function createEmptyStyle() {
+  return { fg: null, bg: null, bold: false, dim: false, italic: false, underline: false };
+}
+
+function styleToInlineCSS(style) {
+  const parts = [];
+  if (style.fg) parts.push(`color:${style.fg}`);
+  if (style.bg) parts.push(`background-color:${style.bg}`);
+  if (style.bold) parts.push('font-weight:bold');
+  if (style.dim) parts.push('opacity:0.6');
+  if (style.italic) parts.push('font-style:italic');
+  if (style.underline) parts.push('text-decoration:underline');
+  return parts.join(';');
+}
+
+function hasStyle(style) {
+  return style.fg !== null || style.bg !== null || style.bold || style.dim || style.italic || style.underline;
+}
+
+function applySgrCode(params, style) {
+  let i = 0;
+  while (i < params.length) {
+    const code = params[i];
+    if (code === 0) {
+      style.fg = null; style.bg = null; style.bold = false;
+      style.dim = false; style.italic = false; style.underline = false;
+    } else if (code === 1) {
+      style.bold = true;
+    } else if (code === 2) {
+      style.dim = true;
+    } else if (code === 3) {
+      style.italic = true;
+    } else if (code === 4) {
+      style.underline = true;
+    } else if (code === 22) {
+      style.bold = false; style.dim = false;
+    } else if (code === 23) {
+      style.italic = false;
+    } else if (code === 24) {
+      style.underline = false;
+    } else if (code >= 30 && code <= 37) {
+      style.fg = ANSI_COLORS[code - 30];
+    } else if (code === 38) {
+      if (params[i + 1] === 5 && params.length > i + 2) {
+        style.fg = color256ToHex(params[i + 2]);
+        i += 2;
+      } else if (params[i + 1] === 2 && params.length > i + 4) {
+        style.fg = `rgb(${params[i + 2]},${params[i + 3]},${params[i + 4]})`;
+        i += 4;
+      }
+    } else if (code === 39) {
+      style.fg = null;
+    } else if (code >= 40 && code <= 47) {
+      style.bg = ANSI_COLORS[code - 40];
+    } else if (code === 48) {
+      if (params[i + 1] === 5 && params.length > i + 2) {
+        style.bg = color256ToHex(params[i + 2]);
+        i += 2;
+      } else if (params[i + 1] === 2 && params.length > i + 4) {
+        style.bg = `rgb(${params[i + 2]},${params[i + 3]},${params[i + 4]})`;
+        i += 4;
+      }
+    } else if (code === 49) {
+      style.bg = null;
+    } else if (code >= 90 && code <= 97) {
+      style.fg = ANSI_COLORS[code - 90 + 8];
+    } else if (code >= 100 && code <= 107) {
+      style.bg = ANSI_COLORS[code - 100 + 8];
+    }
+    i++;
+  }
+}
+
+// Match ANSI escape sequences: ESC[ followed by params and ending with 'm'
+const ANSI_REGEX = /\x1b\[([\d;]*)m/g;
+
+/** Convert ANSI-escaped text to HTML with inline styles. */
+function ansiToHtml(text) {
+  const style = createEmptyStyle();
+  let result = '';
+  let lastIndex = 0;
+  let inSpan = false;
+  ANSI_REGEX.lastIndex = 0;
+  let match = ANSI_REGEX.exec(text);
+  while (match !== null) {
+    const beforeText = text.slice(lastIndex, match.index);
+    if (beforeText) result += escapeHtmlAnsi(beforeText);
+    const params = match[1] ? match[1].split(';').map((p) => parseInt(p, 10) || 0) : [0];
+    if (inSpan) { result += '</span>'; inSpan = false; }
+    applySgrCode(params, style);
+    if (hasStyle(style)) {
+      result += `<span style="${styleToInlineCSS(style)}">`;
+      inSpan = true;
+    }
+    lastIndex = match.index + match[0].length;
+    match = ANSI_REGEX.exec(text);
+  }
+  const remainingText = text.slice(lastIndex);
+  if (remainingText) result += escapeHtmlAnsi(remainingText);
+  if (inSpan) result += '</span>';
+  return result;
+}
+
 class PiWebClient {
   constructor() {
     this.ws = null;
@@ -869,7 +1031,10 @@ class PiWebClient {
       widgetsEl.appendChild(el);
     }
     el.querySelector('.widget-title').textContent = key;
-    el.querySelector('.widget-body').textContent = (req.widgetLines || []).join('\n');
+    // ANSI escapes (extension theme) render as colored spans per line.
+    el.querySelector('.widget-body').innerHTML = (req.widgetLines || [])
+      .map((line) => ansiToHtml(String(line)))
+      .join('<br>');
     widgetsEl.style.display = 'block';
     // Layout change: keep pinned to bottom if already there
     if (wasAtBottom) this.scrollToBottom();
@@ -1028,9 +1193,11 @@ class PiWebClient {
     if (!expanded && lines.length > limit) {
       const visible = lines.slice(0, limit).join('\n');
       const hidden = lines.length - limit;
-      out.textContent = visible + `\n... (${hidden} more lines, click to expand)`;
+      // ANSI escapes (from tool outputs) render as colored spans; the
+      // truncated marker stays plain text.
+      out.innerHTML = ansiToHtml(visible) + `<div class="tool-truncated">... (${hidden} more lines, click to expand)</div>`;
     } else {
-      out.textContent = full;
+      out.innerHTML = ansiToHtml(full);
     }
   }
 
@@ -1473,7 +1640,9 @@ class PiWebClient {
     const el = document.getElementById('ext-status');
     if (!el) return;
     const entries = Object.entries(this.extStatus);
-    el.textContent = entries.map(([k, v]) => `${k}: ${v}`).join(' · ');
+    // ANSI escapes (from extension theme.fg/bg) render as colored spans.
+    // ansiToHtml escapes the value's HTML; the key is escaped separately.
+    el.innerHTML = entries.map(([k, v]) => `${this.escapeHtml(k)}: ${ansiToHtml(String(v))}`).join(' · ');
     el.style.display = entries.length ? 'block' : 'none';
   }
 
@@ -1578,7 +1747,8 @@ class PiWebClient {
     if (!container) return;
     const toast = document.createElement('div');
     toast.className = 'toast' + (type ? ` toast-${type}` : '');
-    toast.textContent = message;
+    // Extension notify messages may carry ANSI escapes (theme.fg); render them.
+    toast.innerHTML = ansiToHtml(String(message));
     container.appendChild(toast);
     setTimeout(() => {
       toast.classList.add('toast-hide');

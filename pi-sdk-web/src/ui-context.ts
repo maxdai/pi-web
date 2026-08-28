@@ -15,6 +15,10 @@ import type {
   ExtensionWidgetOptions,
   Theme,
 } from "@earendil-works/pi-coding-agent";
+import { Theme as PiTheme } from "@earendil-works/pi-coding-agent";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 export type UiEventSink = (obj: unknown) => void;
 
@@ -24,35 +28,54 @@ interface PendingDialog {
 }
 
 /**
- * Identity theme: extensions call ui.theme.fg(...) / ui.theme.bg(...) to get
- * ANSI-colored strings. The browser renders with CSS, so we return text
- * unchanged (color codes are meaningless in the DOM). Keeps extensions from
- * crashing on theme access; real colors can be added later.
+ * Build the official Pi theme (colors from the shipped dark.json) so
+ * extensions calling ui.theme.fg("accent", text) / .bg(...) get REAL ANSI
+ * escapes — identical to TUI (interactive-mode.ts returns the same Theme
+ * instance from ctx.ui.theme). The browser renders the escapes as colored
+ * spans (see app.js ansiToHtml), acting as the "terminal".
  *
- * Pi's Theme.fg() signature is fg(color: ThemeColor, text: string) - some
- * extensions call it with both args, so the identity function must return
- * the TEXT argument (2nd), not the color name (1st).
+ * The Theme class and initTheme are exported by the Pi SDK; dark.json ships
+ * in the package dist. Constructing the Theme directly keeps us independent
+ * of initTheme's global side effects and gives the same result.
  */
-function createIdentityTheme(): Theme {
-  return new Proxy({} as Theme, {
-    get(_target, prop) {
-      // theme.name / theme.isDark etc. may be accessed as properties
-      if (prop === "name") return "dark";
-      if (prop === "isDark") return true;
-      // Everything else is a color function (fg/bg/...): return identity.
-      // Support both fg(text) and fg(color, text); never return a color name.
-      return (...args: unknown[]) => {
-        const textArg = args.length > 1 ? args[1] : args[0];
-        return typeof textArg === "string" ? textArg : "";
-      };
-    },
-  });
+function createWebTheme(): Theme {
+  try {
+    const mainEntry = fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent"));
+    const darkJson = JSON.parse(
+      readFileSync(join(dirname(mainEntry), "modes", "interactive", "theme", "dark.json"), "utf8"),
+    ) as { vars: Record<string, string>; colors: Record<string, string> };
+    const fgColors: Record<string, string> = {};
+    const bgColors: Record<string, string> = {};
+    // dark.json colors refer to vars by name (e.g. "accent" -> "#8abeb7")
+    // or carry a literal hex; split bg keys (Bg suffix) from fg keys.
+    for (const [key, value] of Object.entries(darkJson.colors)) {
+      const resolved = value.startsWith("#") ? value : darkJson.vars[value] ?? value;
+      if (key.endsWith("Bg")) {
+        bgColors[key] = resolved;
+      } else {
+        fgColors[key] = resolved;
+      }
+    }
+    return new PiTheme(fgColors as never, bgColors as never, "truecolor", { name: "dark" });
+  } catch {
+    // Last-resort identity: return the text argument unchanged (no ANSI).
+    return new Proxy({} as Theme, {
+      get(_target, prop) {
+        if (prop === "name") return "dark";
+        if (prop === "isDark") return true;
+        return (...args: unknown[]) => {
+          const textArg = args.length > 1 ? args[1] : args[0];
+          return typeof textArg === "string" ? textArg : "";
+        };
+      },
+    });
+  }
 }
 
 export class WebUIContext implements ExtensionUIContext {
   private readonly pending = new Map<string, PendingDialog>();
   private readonly sink: UiEventSink;
-  private readonly identityTheme: Theme = createIdentityTheme();
+  private readonly webTheme: Theme = createWebTheme();
   /** Latest setStatus values per key, so late-connecting browsers get current state */
   private readonly statusMap = new Map<string, string>();
 
@@ -207,7 +230,7 @@ export class WebUIContext implements ExtensionUIContext {
   // ------------------------------------------------------------------
 
   get theme(): Theme {
-    return this.identityTheme;
+    return this.webTheme;
   }
   getAllThemes(): { name: string; path: string | undefined }[] {
     return [];
