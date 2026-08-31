@@ -213,6 +213,10 @@ class PiWebClient {
 
     // Tool call rendering state: map toolCallId -> element
     this.toolEls = new Map();
+    // Bash streaming blocks: map bash id -> element
+    this.bashEls = new Map();
+    this.pendingBashId = null;
+    this.pendingBashCommand = '';
     // Tool execution timers: map toolCallId -> interval id
     this.toolTimers = new Map();
 
@@ -913,6 +917,14 @@ class PiWebClient {
         // Extension custom entries (e.g. magic-context /ctx-status) arrive live
         this.renderEntry(ev.entry);
         break;
+      case 'bash_execution_update':
+        // Streaming bash output (e.g. !! running a long-lived program).
+        // Append the delta to the matching tool block in real time; the
+        // final bash_result finalizes it (exit code, truncation info).
+        if (typeof ev.delta === 'string' && ev.delta.length > 0) {
+          this.appendBashChunk(ev.id, ev.delta);
+        }
+        break;
       default:
         break;
     }
@@ -1310,11 +1322,39 @@ class PiWebClient {
     this.toolEls.delete(ev.toolCallId);
   }
 
+  appendBashChunk(id, delta) {
+    // Find or create the tool block for this bash run (keyed by the id the
+    // client sent with the bash message, e.g. bash-<timestamp>).
+    const key = id || this.pendingBashId;
+    if (!key) return;
+    let div = this.bashEls.get(key);
+    if (!div) {
+      div = this.createToolBlock('bash', { command: this.pendingBashCommand || '' }, key);
+      div.className = 'tool-block pending';
+      this.bashEls.set(key, div);
+    }
+    // Append the delta to the full text and re-apply the preview (respects
+    // the collapsed/expanded state of the block).
+    const full = (div.dataset.fullOutput || '') + delta;
+    div.dataset.fullOutput = full;
+    this.applyToolPreview(div);
+    if (this.wasAtBottom()) this.scrollToBottom();
+  }
+
   renderBashResult(data) {
-    const div = this.createToolBlock('bash', { command: data.command }, 'bash-' + Date.now());
+    const id = data.id;
     const result = data.data || {};
+    let div = (id && this.bashEls.get(id)) || null;
+    if (!div) {
+      div = this.createToolBlock('bash', { command: data.command }, id || 'bash-' + Date.now());
+      if (id) this.bashEls.set(id, div);
+    }
     const output = result.output || '';
-    this.setToolOutput(div, output);
+    // Streaming blocks have the full text already (appended incrementally);
+    // for non-streaming runs set it now.
+    if (!(div.dataset.fullOutput && div.dataset.fullOutput.length > 0)) {
+      this.setToolOutput(div, output);
+    }
 
     const isError = result.exitCode !== undefined && result.exitCode !== 0;
     div.className = isError ? 'tool-block error' : 'tool-block success';
@@ -1334,6 +1374,10 @@ class PiWebClient {
     }
 
     this.scrollToBottom();
+    // Streaming done: drop the block from the live map (no more deltas).
+    if (id) this.bashEls.delete(id);
+    this.pendingBashId = null;
+    this.pendingBashCommand = '';
   }
 
   resultText(result) {
@@ -1420,7 +1464,10 @@ class PiWebClient {
       const isExcluded = text.startsWith('!!');
       const command = (isExcluded ? text.slice(2) : text.slice(1)).trim();
       if (command) {
-        this.send({ type: 'bash', command: command, excludeFromContext: isExcluded });
+        const id = 'bash-' + Date.now();
+        this.send({ type: 'bash', command: command, excludeFromContext: isExcluded, id: id });
+        this.pendingBashId = id;
+        this.pendingBashCommand = command;
       }
     } else if (text.startsWith('/')) {
       // Skill commands (/skill:name args) go through prompt expansion in Pi -

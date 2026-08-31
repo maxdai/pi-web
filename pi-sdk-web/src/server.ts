@@ -469,6 +469,9 @@ export class PiWebServer {
         const command = typeof data.command === "string" ? data.command : "";
         if (!command) throw new Error("Missing 'command'");
         const excludeFromContext = data.excludeFromContext === true;
+        // Correlation id for streaming: Pi emits bash_execution_update
+        // events carrying this id while the command runs (onChunk).
+        const id = typeof data.id === "string" && data.id ? data.id : `bash-${Date.now()}`;
         // Let extensions intercept/enhance the command (same as Pi RPC/TUI):
         // user_bash handlers may provide a result or operations for execution.
         const eventResult = await this.session.extensionRunner.emitUserBash({
@@ -479,14 +482,15 @@ export class PiWebServer {
         });
         if (eventResult?.result) {
           this.session.recordBashResult(command, eventResult.result, { excludeFromContext });
-          this.broadcast({ type: "bash_result", command, data: eventResult.result });
+          this.broadcast({ type: "bash_result", id, command, data: eventResult.result });
           break;
         }
         const result = await this.session.executeBash(command, undefined, {
           excludeFromContext,
+          id,
           operations: eventResult?.operations,
         });
-        this.broadcast({ type: "bash_result", command, data: result });
+        this.broadcast({ type: "bash_result", id, command, data: result });
         break;
       }
       case "cycle_model":
