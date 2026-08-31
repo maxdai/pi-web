@@ -448,6 +448,11 @@ export class PiWebServer {
       case "abort":
         await this.session.abort();
         break;
+      case "abort_bash":
+        // Kill only the running bash (TUI Ctrl+C equivalent), leaving any
+        // agent activity untouched.
+        this.session.abortBash();
+        break;
       case "get_stats":
         this.broadcastStats();
         break;

@@ -544,6 +544,40 @@ body {
   font-size: 12px;
 }
 
+/* Running !/!! bash output (streaming) - fixed area between messages and
+   input, so later messages don't push it out of view (TUI analog:
+   pendingMessagesContainer). Moved into the message flow on completion. */
+#bash-pending {
+  display: none;
+  padding: 4px 12px;
+  border-top: 1px solid var(--border);
+  font-size: 13px;
+  /* ~10 lines of output visible; scrolling inside the block for more */
+  max-height: calc(10 * 1.5em);
+  overflow-y: auto;
+}
+
+.bash-stop-btn {
+  margin-left: 8px;
+  padding: 1px 8px;
+  font-size: 11px;
+  color: var(--error);
+  border: 1px solid var(--error);
+  border-radius: 4px;
+  background: transparent;
+  cursor: pointer;
+  vertical-align: middle;
+}
+
+.bash-stop-btn:hover {
+  background: color-mix(in srgb, var(--error) 15%, transparent);
+}
+
+.bash-stop-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
 .widget-block {
   margin: 2px 0;
 }

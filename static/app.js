@@ -1331,6 +1331,30 @@ class PiWebClient {
     if (!div) {
       div = this.createToolBlock('bash', { command: this.pendingBashCommand || '' }, key);
       div.className = 'tool-block pending';
+      // Stop button in the title row (TUI Ctrl+C equivalent): abort_bash
+      // kills only this running bash. Removed when the block finalizes.
+      const stopBtn = document.createElement('button');
+      stopBtn.className = 'bash-stop-btn';
+      stopBtn.textContent = '⏹ stop';
+      stopBtn.title = 'Stop this bash command (Ctrl+C in TUI)';
+      stopBtn.addEventListener('click', (e) => {
+        e.stopPropagation(); // don't toggle expand
+        this.send({ type: 'abort_bash' });
+        stopBtn.disabled = true;
+        stopBtn.textContent = 'stopping...';
+      });
+      div.querySelector('.tool-title')?.appendChild(stopBtn);
+      // The running bash block lives in the #bash-pending area (between the
+      // message flow and the input box) so later messages don't push it
+      // out of view - same as TUI's pendingMessagesContainer. bash_result
+      // moves it into the normal message flow when done.
+      const bashPending = document.getElementById('bash-pending');
+      if (bashPending) {
+        bashPending.appendChild(div);
+        bashPending.style.display = 'block';
+      } else {
+        this.contentEl.appendChild(div);
+      }
       this.bashEls.set(key, div);
     }
     // Append the delta to the full text and re-apply the preview (respects
@@ -1355,6 +1379,18 @@ class PiWebClient {
     if (!(div.dataset.fullOutput && div.dataset.fullOutput.length > 0)) {
       this.setToolOutput(div, output);
     }
+    // Move the finished block from the bash-pending (fixed) area into the
+    // normal message flow, keeping its accumulated output.
+    const bashPending = document.getElementById('bash-pending');
+    if (bashPending && bashPending.contains(div)) {
+      this.contentEl.appendChild(div);
+      if (bashPending.children.length === 0) {
+        bashPending.style.display = 'none';
+      }
+      this.scrollToBottom();
+    }
+    // Bash done: the stop button is no longer relevant.
+    div.querySelector('.bash-stop-btn')?.remove();
 
     const isError = result.exitCode !== undefined && result.exitCode !== 0;
     div.className = isError ? 'tool-block error' : 'tool-block success';
