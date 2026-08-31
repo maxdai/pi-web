@@ -93,6 +93,29 @@ export class WebUIContext implements ExtensionUIContext {
 
   constructor(sink: UiEventSink) {
     this.sink = sink;
+    // Pi's ExtensionRunner wraps the ui context with `{...ui}` (a shallow
+    // spread) when building the extension ctx - class prototype members
+    // (methods AND the theme getter) would be LOST by that spread (only own
+    // enumerable properties survive). Copy prototype methods onto the
+    // instance as own bound properties, and expose theme as an own
+    // property, so extensions see the same shape as TUI's object-literal
+    // UIContext (all methods + theme as own props).
+    const proto = Object.getPrototypeOf(this);
+    for (const name of Object.getOwnPropertyNames(proto)) {
+      if (name === "constructor") continue;
+      const desc = Object.getOwnPropertyDescriptor(proto, name);
+      if (desc && typeof desc.value === "function") {
+        (this as unknown as Record<string, unknown>)[name] = desc.value.bind(this);
+      }
+    }
+    // Theme: the prototype getter is not picked up by `{...}` and the own
+    // property cannot shadow a getter-only prototype via assignment. Define
+    // an own enumerable getter returning webTheme (fresh after setWebTheme).
+    Object.defineProperty(this, "theme", {
+      configurable: true,
+      enumerable: true,
+      get: () => this.webTheme,
+    });
   }
 
   /** Current extension status snapshot (key -> text) for new connections. */
