@@ -215,14 +215,21 @@ body {
 
 .ext-item {
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
-  gap: 6px;
+  gap: 0 6px;
+}
+
+.ext-item > span:first-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .ext-version {
   color: var(--dim);
   font-size: 10px;
   flex-shrink: 0;
+  margin-left: auto;
 }
 
 #conn-status.connected {
