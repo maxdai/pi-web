@@ -397,7 +397,7 @@ class PiWebClient {
     }
 
     // Loaded resources
-    this.renderLoadedResources(state.commands, state.tools);
+    this.renderLoadedResources(state.commands, state.tools, state.extensions);
 
     // First footer line: pwd (branch) • session name
     const pwd = state.cwd || '';
@@ -409,7 +409,7 @@ class PiWebClient {
     this.renderStats(state.sessionStats, state);
   }
 
-  renderLoadedResources(commands, tools) {
+  renderLoadedResources(commands, tools, extensions) {
     if (!this.loadedResourcesEl) return;
     this.loadedResourcesEl.innerHTML = '';
 
@@ -490,6 +490,37 @@ class PiWebClient {
         div.dataset.expanded = expanded ? 'false' : 'true';
         body.style.display = expanded ? 'none' : 'block';
         header.firstChild.textContent = expanded ? 'Tools (click to expand)' : 'Tools (click to collapse)';
+      });
+      this.loadedResourcesEl.appendChild(div);
+    }
+
+    // Separate Extensions block below Tools: loaded extension name + version
+    if (extensions && extensions.length > 0) {
+      const div = document.createElement('div');
+      div.className = 'resources-block';
+      div.dataset.expanded = 'false';
+      div.style.marginTop = '6px';
+
+      const header = document.createElement('div');
+      header.className = 'resources-header';
+      header.textContent = `Extensions (${extensions.length})`;
+
+      const body = document.createElement('div');
+      body.className = 'resources-body';
+      body.style.display = 'none';
+      body.innerHTML = extensions
+        .map((e) => `<div class="resources-item ext-item"><span>${this.escapeHtml(e.name)}</span><span class="ext-version">${this.escapeHtml(e.version)}</span></div>`)
+        .join('');
+
+      div.appendChild(header);
+      div.appendChild(body);
+      div.addEventListener('click', () => {
+        const expanded = div.dataset.expanded === 'true';
+        div.dataset.expanded = expanded ? 'false' : 'true';
+        body.style.display = expanded ? 'none' : 'block';
+        header.textContent = expanded
+          ? `Extensions (${extensions.length}) · click to expand`
+          : `Extensions (${extensions.length}) · click to collapse`;
       });
       this.loadedResourcesEl.appendChild(div);
     }

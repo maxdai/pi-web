@@ -324,6 +324,7 @@ export class PiWebServer {
       gitBranch: this.getGitBranch(this.session.sessionManager.getCwd()),
       commands: this.getCommands(),
       tools: this.getActiveTools(),
+      extensions: this.getLoadedExtensions(),
     };
     try {
       state.sessionStats = this.session.getSessionStats();
@@ -408,6 +409,41 @@ export class PiWebServer {
         .getAllTools()
         .filter((t) => active.has(t.name))
         .map((t) => ({ name: t.name, description: t.description }));
+    } catch {
+      return [];
+    }
+  }
+
+  /** Loaded extensions with their package names and versions (sidebar list). */
+  private getLoadedExtensions(): Array<{ name: string; version: string }> {
+    try {
+      const result = this.session.resourceLoader.getExtensions();
+      const list: Array<{ name: string; version: string }> = [];
+      const seen = new Set<string>();
+      for (const ext of result.extensions) {
+        // ext.path points at the extension entry (e.g. .../lib/node_modules/
+        // pi-magic-context/dist/index.js); walk up to the nearest package.json
+        // for the name/version.
+        let dir = dirname(ext.path);
+        while (dir !== dirname(dir)) {
+          const pkgFile = join(dir, "package.json");
+          if (existsSync(pkgFile)) {
+            try {
+              const pkg = JSON.parse(readFileSync(pkgFile, "utf8")) as { name?: string; version?: string };
+              const key = pkg.name ?? ext.path;
+              if (!seen.has(key)) {
+                seen.add(key);
+                list.push({ name: pkg.name ?? key, version: pkg.version ?? "?" });
+              }
+            } catch {
+              // unreadable package.json - skip
+            }
+            break;
+          }
+          dir = dirname(dir);
+        }
+      }
+      return list;
     } catch {
       return [];
     }
