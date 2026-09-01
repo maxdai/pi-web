@@ -786,15 +786,9 @@ class PiWebClient {
     body.className = 'special-body body-text';
     div.appendChild(labelEl);
     div.appendChild(body);
-    // Click to expand/collapse, but NOT when the pointer was dragged (selecting
-    // text) - same drag-vs-click logic as tool blocks.
-    let downX = 0, downY = 0;
-    div.addEventListener('mousedown', (e) => { downX = e.clientX; downY = e.clientY; });
-    div.addEventListener('click', (e) => {
-      const dx = e.clientX - downX, dy = e.clientY - downY;
-      if (dx * dx + dy * dy > 9) return; // dragged: preserve selection
-      this.toggleSpecial(div);
-    });
+    // Click to expand/collapse, but NOT when the pointer was dragged (see
+    // bindExpandToggle - same drag-vs-click logic as tool blocks).
+    this.bindExpandToggle(div, (d) => this.toggleSpecial(d));
     this.contentEl.appendChild(div);
     return div;
   }
@@ -1159,6 +1153,25 @@ class PiWebClient {
     }
   }
 
+  /**
+   * Add expand/collapse-on-click to a block, while preserving text selection.
+   *
+   * A drag that selects text ends with mouseup -> click; toggling then would
+   * re-render the block and wipe the selection. Record the mousedown
+   * position and skip the toggle when the pointer moved more than 3px
+   * (anything beyond that is a drag, not a click - 3px tolerates hand tremor
+   * on a plain click).
+   */
+  bindExpandToggle(div, toggleFn) {
+    let downX = 0, downY = 0;
+    div.addEventListener('mousedown', (e) => { downX = e.clientX; downY = e.clientY; });
+    div.addEventListener('click', (e) => {
+      const dx = e.clientX - downX, dy = e.clientY - downY;
+      if (dx * dx + dy * dy > 9) return; // dragged: preserve selection
+      toggleFn(div);
+    });
+  }
+
   createToolBlock(toolName, args, toolCallId) {
     const div = document.createElement('div');
     div.className = 'tool-block pending';
@@ -1211,17 +1224,9 @@ class PiWebClient {
     div.appendChild(content);
     div.appendChild(bottom);
 
-    // Click to expand/collapse, but NOT when the pointer was dragged: a drag
-    // (e.g. selecting output text) ends with mouseup -> click, and toggling
-    // would re-render the output and wipe the selection. Track mousedown
-    // position; if the mouse moved >3px it was a drag, skip the toggle.
-    let downX = 0, downY = 0;
-    div.addEventListener('mousedown', (e) => { downX = e.clientX; downY = e.clientY; });
-    div.addEventListener('click', (e) => {
-      const dx = e.clientX - downX, dy = e.clientY - downY;
-      if (dx * dx + dy * dy > 9) return; // dragged: preserve selection
-      this.toggleToolExpand(div);
-    });
+    // Click to expand/collapse, but NOT when the pointer was dragged (see
+    // bindExpandToggle - a drag that selected text must preserve selection).
+    this.bindExpandToggle(div, (d) => this.toggleToolExpand(d));
 
     this.contentEl.appendChild(div);
     return div;

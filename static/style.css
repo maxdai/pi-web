@@ -63,6 +63,8 @@ body.theme-light {
   box-sizing: border-box;
   margin: 0;
   padding: 0;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 html, body {
@@ -162,8 +164,7 @@ body {
   border: 1px solid var(--border);
   border-radius: 6px;
   padding: 6px 10px;
-  cursor: pointer;
-  user-select: none;
+  cursor: text;
   font-size: 12px;
 }
 
@@ -268,17 +269,17 @@ body {
   background: var(--tool-pending-bg);
   margin: 4px 0;
   font-size: 13px;
-  cursor: pointer;
 }
 
 .tool-block .tool-title,
-.tool-block .tool-args,
 .tool-block .tool-meta {
   user-select: none;
+  cursor: pointer;
 }
 
-/* Tool output must stay selectable/copyable (browser default), with a
-   text cursor to signal selectability (the block still toggles on click). */
+/* Tool args (the JSON parameter summary) and output are informative
+   content: selectable/copyable with a text cursor. */
+.tool-block .tool-args,
 .tool-block .tool-output {
   user-select: text;
   cursor: text;
@@ -349,7 +350,6 @@ body {
   margin: 4px 0;
   padding: 6px 12px;
   border-radius: 6px;
-  cursor: pointer;
 }
 
 .special-block .special-label {
@@ -358,12 +358,14 @@ body {
   font-size: 12px;
   margin-bottom: 4px;
   user-select: none;
+  cursor: pointer;
 }
 
 .special-block .special-body {
   color: var(--text);
   font-size: 13px;
   user-select: text;
+  cursor: text;
 }
 
 .special-block .special-body > *:first-child {
