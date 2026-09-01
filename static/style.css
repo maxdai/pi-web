@@ -269,7 +269,19 @@ body {
   margin: 4px 0;
   font-size: 13px;
   cursor: pointer;
+}
+
+.tool-block .tool-title,
+.tool-block .tool-args,
+.tool-block .tool-meta {
   user-select: none;
+}
+
+/* Tool output must stay selectable/copyable (browser default), with a
+   text cursor to signal selectability (the block still toggles on click). */
+.tool-block .tool-output {
+  user-select: text;
+  cursor: text;
 }
 
 .tool-block.success {
@@ -338,7 +350,6 @@ body {
   padding: 6px 12px;
   border-radius: 6px;
   cursor: pointer;
-  user-select: none;
 }
 
 .special-block .special-label {
@@ -346,11 +357,13 @@ body {
   font-weight: bold;
   font-size: 12px;
   margin-bottom: 4px;
+  user-select: none;
 }
 
 .special-block .special-body {
   color: var(--text);
   font-size: 13px;
+  user-select: text;
 }
 
 .special-block .special-body > *:first-child {

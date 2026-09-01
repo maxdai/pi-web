@@ -786,7 +786,15 @@ class PiWebClient {
     body.className = 'special-body body-text';
     div.appendChild(labelEl);
     div.appendChild(body);
-    div.addEventListener('click', () => this.toggleSpecial(div));
+    // Click to expand/collapse, but NOT when the pointer was dragged (selecting
+    // text) - same drag-vs-click logic as tool blocks.
+    let downX = 0, downY = 0;
+    div.addEventListener('mousedown', (e) => { downX = e.clientX; downY = e.clientY; });
+    div.addEventListener('click', (e) => {
+      const dx = e.clientX - downX, dy = e.clientY - downY;
+      if (dx * dx + dy * dy > 9) return; // dragged: preserve selection
+      this.toggleSpecial(div);
+    });
     this.contentEl.appendChild(div);
     return div;
   }
@@ -1203,8 +1211,17 @@ class PiWebClient {
     div.appendChild(content);
     div.appendChild(bottom);
 
-    // Click to expand/collapse
-    div.addEventListener('click', () => this.toggleToolExpand(div));
+    // Click to expand/collapse, but NOT when the pointer was dragged: a drag
+    // (e.g. selecting output text) ends with mouseup -> click, and toggling
+    // would re-render the output and wipe the selection. Track mousedown
+    // position; if the mouse moved >3px it was a drag, skip the toggle.
+    let downX = 0, downY = 0;
+    div.addEventListener('mousedown', (e) => { downX = e.clientX; downY = e.clientY; });
+    div.addEventListener('click', (e) => {
+      const dx = e.clientX - downX, dy = e.clientY - downY;
+      if (dx * dx + dy * dy > 9) return; // dragged: preserve selection
+      this.toggleToolExpand(div);
+    });
 
     this.contentEl.appendChild(div);
     return div;
