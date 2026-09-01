@@ -549,8 +549,11 @@ body {
    pendingMessagesContainer). Moved into the message flow on completion. */
 #bash-pending {
   display: none;
-  padding: 4px 12px;
-  border-top: 1px solid var(--border);
+  padding: 8px 12px;
+  margin: 6px 8px 4px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--code-bg);
   font-size: 13px;
   /* ~10 lines of output visible; scrolling inside the block for more */
   max-height: calc(10 * 1.5em);
@@ -567,6 +570,38 @@ body {
   background: transparent;
   cursor: pointer;
   vertical-align: middle;
+}
+
+.bash-running {
+  margin-left: 8px;
+  font-size: 11px;
+  color: var(--accent);
+  vertical-align: middle;
+}
+
+.bash-running::before {
+  content: '⟳';
+  display: inline-block;
+  margin-right: 4px;
+  animation: bash-spin 1s linear infinite;
+}
+
+@keyframes bash-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.bash-stream-status {
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--accent);
+}
+
+.bash-stream-status::before {
+  content: '⟳';
+  display: inline-block;
+  margin-right: 4px;
+  animation: bash-spin 1s linear infinite;
 }
 
 .bash-stop-btn:hover {

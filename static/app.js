@@ -1331,6 +1331,12 @@ class PiWebClient {
     if (!div) {
       div = this.createToolBlock('bash', { command: this.pendingBashCommand || '' }, key);
       div.className = 'tool-block pending';
+      // Running indicator (spinner + label) - makes it obvious the stream
+      // is still live even when output is quiet; removed on bash_result.
+      const run = document.createElement('span');
+      run.className = 'bash-running';
+      run.textContent = '⟳ running';
+      div.querySelector('.tool-title')?.appendChild(run);
       // Stop button in the title row (TUI Ctrl+C equivalent): abort_bash
       // kills only this running bash. Removed when the block finalizes.
       const stopBtn = document.createElement('button');
@@ -1351,7 +1357,14 @@ class PiWebClient {
       const bashPending = document.getElementById('bash-pending');
       if (bashPending) {
         bashPending.appendChild(div);
+        // Area-level status line at the TAIL (always visible even when the
+        // block's own title scrolled out of view while output streams).
+        const statusLine = document.createElement('div');
+        statusLine.className = 'bash-stream-status';
+        statusLine.textContent = '⟳ running…';
+        bashPending.appendChild(statusLine);
         bashPending.style.display = 'block';
+        bashPending.scrollTop = bashPending.scrollHeight; // keep tail visible
       } else {
         this.contentEl.appendChild(div);
       }
@@ -1362,6 +1375,12 @@ class PiWebClient {
     const full = (div.dataset.fullOutput || '') + delta;
     div.dataset.fullOutput = full;
     this.applyToolPreview(div);
+    // Keep the stream tail (and its running status line) visible inside the
+    // pending area while output is coming in.
+    const bashPending = document.getElementById('bash-pending');
+    if (bashPending && bashPending.contains(div)) {
+      bashPending.scrollTop = bashPending.scrollHeight;
+    }
     if (this.wasAtBottom()) this.scrollToBottom();
   }
 
@@ -1384,12 +1403,16 @@ class PiWebClient {
     const bashPending = document.getElementById('bash-pending');
     if (bashPending && bashPending.contains(div)) {
       this.contentEl.appendChild(div);
+      // Remove the area-level running status line, then hide the empty area.
+      bashPending.querySelectorAll('.bash-stream-status').forEach((el) => el.remove());
       if (bashPending.children.length === 0) {
         bashPending.style.display = 'none';
       }
       this.scrollToBottom();
     }
-    // Bash done: the stop button is no longer relevant.
+    // Bash done: the running indicator and stop button are no longer
+    // relevant.
+    div.querySelector('.bash-running')?.remove();
     div.querySelector('.bash-stop-btn')?.remove();
 
     const isError = result.exitCode !== undefined && result.exitCode !== 0;
