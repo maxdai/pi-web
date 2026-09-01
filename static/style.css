@@ -320,12 +320,27 @@ body {
   font-size: 12px;
 }
 
+/* Label the args area so it is visually distinct from the output below
+   (both are JSON-ish monospace text; without this users cannot tell where
+   the parameters end and the result begins). */
+.tool-block .tool-args::before {
+  content: 'Args: ';
+  color: var(--dim);
+  font-weight: 600;
+}
+
 .tool-block .tool-output {
-  color: var(--muted);
+  color: var(--text);
   margin-top: 4px;
   white-space: pre-wrap;
   font-family: monospace;
   font-size: 12px;
+}
+
+.tool-block .tool-output::before {
+  content: 'Output: ';
+  color: var(--dim);
+  font-weight: 600;
 }
 
 .tool-block .tool-meta {
