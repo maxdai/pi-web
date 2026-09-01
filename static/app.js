@@ -443,7 +443,7 @@ class PiWebClient {
         sections.push(this.resourceSection('Prompts', groups.prompt.map((c) => c.name)));
       }
       if (groups.extension.length > 0) {
-        sections.push(this.resourceSection('Extensions', groups.extension.map((c) => c.name)));
+        sections.push(this.resourceSection('Extension Cmds', groups.extension.map((c) => c.name)));
       }
       body.innerHTML = sections.join('');
 
