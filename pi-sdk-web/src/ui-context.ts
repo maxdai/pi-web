@@ -90,6 +90,14 @@ export class WebUIContext implements ExtensionUIContext {
   private webTheme: Theme = createWebTheme();
   /** Latest setStatus values per key, so late-connecting browsers get current state */
   private readonly statusMap = new Map<string, string>();
+  /** Latest setWidget lines per key (persistent widgets, e.g. TodoOverlay):
+   * replayed to late-connecting browsers like setStatus snapshots. */
+  private readonly widgetMap = new Map<string, { lines: string[] | undefined; placement?: string }>();
+
+  /** Current widget snapshot (key -> lines) for new connections. */
+  getWidgetSnapshot(): Record<string, { lines: string[] | undefined; placement?: string }> {
+    return Object.fromEntries(this.widgetMap);
+  }
 
   constructor(sink: UiEventSink) {
     this.sink = sink;
@@ -131,6 +139,7 @@ export class WebUIContext implements ExtensionUIContext {
     }
     this.pending.clear();
     this.statusMap.clear();
+    this.widgetMap.clear();
   }
 
   /** Handle a browser `extension_ui_response` message. */
@@ -223,14 +232,41 @@ export class WebUIContext implements ExtensionUIContext {
   }
 
   setWidget(key: string, content: unknown, options?: ExtensionWidgetOptions): void {
+    let lines: string[] | undefined;
+    if (Array.isArray(content)) {
+      lines = content.map((l) => String(l));
+    } else if (typeof content === "function") {
+      // Some extensions (e.g. magic-context's TodoOverlay) pass a TUI
+      // component factory instead of string lines. Web has no TUI renderer,
+      // but the factory yields a render(width) -> string[] that we can
+      // evaluate with a no-op tui stub and broadcast as text lines - the
+      // browser renders them (with ANSI colors) in the widgets panel.
+      try {
+        const stubTui = { requestRender: () => {}, invalidate: () => {} };
+        const component = (content as (tui: unknown, theme: Theme) => { render(w: number): string[] })(
+          stubTui,
+          this.webTheme,
+        );
+        const render = component && component.render;
+        if (typeof render === "function") {
+          const width = 78;
+          const out = render(width);
+          if (Array.isArray(out)) lines = out.map((l) => String(l));
+        }
+      } catch {
+        // fall through with no lines - widget renders empty
+      }
+    }
     this.sink({
       type: "extension_ui_request",
       id: crypto.randomUUID(),
       method: "setWidget",
       widgetKey: key,
-      widgetLines: Array.isArray(content) ? content : undefined,
+      widgetLines: lines,
       widgetPlacement: options?.placement,
     });
+    // Store for late-connecting browsers (replayed on WS connect).
+    this.widgetMap.set(key, { lines, placement: options?.placement });
   }
 
   // ------------------------------------------------------------------

@@ -1944,8 +1944,18 @@ class PiWebClient {
   }
 
   appendNotifyLine(message, type) {
+    // TUI's showStatus reuses the LAST status line: consecutive notifies
+    // update it in place (a sticky status); a new line starts only when
+    // something else (a message) was inserted in between. Mirror that here.
+    const last = this.contentEl.lastElementChild;
+    if (last && last.classList.contains('notify-line') && last.dataset.notifyType === (type || '')) {
+      last.innerHTML = ansiToHtml(String(message));
+      this.scrollToBottom();
+      return;
+    }
     const div = document.createElement('div');
     div.className = 'notify-line' + (type ? ` notify-${type}` : '');
+    div.dataset.notifyType = type || '';
     div.innerHTML = ansiToHtml(String(message));
     this.contentEl.appendChild(div);
     this.scrollToBottom();

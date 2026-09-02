@@ -302,6 +302,19 @@ export class PiWebServer {
     if (Object.keys(extStatus).length > 0) {
       this.sendJson(ws, { type: "ext_status", data: extStatus });
     }
+    // Current widgets (setWidget may have fired before this client connected,
+    // e.g. magic-context's todos overlay) - replay as individual requests so
+    // the browser's extension_ui_request handler renders them.
+    for (const [key, w] of Object.entries(this.uiContext.getWidgetSnapshot())) {
+      this.sendJson(ws, {
+        type: "extension_ui_request",
+        id: crypto.randomUUID(),
+        method: "setWidget",
+        widgetKey: key,
+        widgetLines: w.lines,
+        widgetPlacement: w.placement,
+      });
+    }
   }
 
   private sendJson(ws: WebSocket, obj: unknown): void {
@@ -821,28 +834,14 @@ export class PiWebServer {
     // (appendEntry -> modal), same as before.
     const cmdPath = (cmd.sourceInfo && cmd.sourceInfo.path) || "";
     const customOnly = /pi-magic-context|magic-context/.test(cmdPath);
-    const ui = this.uiContext as unknown as { sink: (obj: Record<string, unknown>) => void };
-    const originalSink = ui.sink;
     try {
-      // While the command runs, notify() broadcasts are tagged with the
-      // command name as title, so the browser shows them as a titled modal
-      // (colored, Markdown-rendered) instead of a plain stream line.
-      ui.sink = (obj) => {
-        const req = obj as { method?: string };
-        if (req && req.method === "notify") {
-          // Tag command-time notifies with the command name as title so the
-          // browser renders them as a titled modal (colored, Markdown).
-          originalSink({ ...obj, title: `/${name}` });
-        } else {
-          originalSink(obj);
-        }
-      };
+      // No sink wrapping: notify() broadcasts go through as-is (no title),
+      // so the frontend renders them as persistent status lines - the same
+      // as TUI's notify -> showStatus (a dim line appended to the chat),
+      // whether or not they come from a command. Command *results* (custom
+      // entries) still become titled modals via the captured entries below.
       await cmd.handler(args, this.buildCommandContext(customOnly ? false : true));
-    } catch (e) {
-      ui.sink = originalSink;
-      throw e;
     } finally {
-      ui.sink = originalSink;
       unsubscribe();
     }
 
