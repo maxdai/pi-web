@@ -398,9 +398,9 @@ export class PiWebServer {
       // pi-sdk-web built-ins: commands provided by this package itself
       // (not tied to any extension), e.g. /usage which collects Pi session
       // usage natively (usage-render.ts) instead of running the extension's
-      // command. Source "sdk" mirrors the package name (pi-sdk-web).
+      // command. Source "maxdai" = the package author's npm identity.
       if (!commands.some((c) => (c as { name?: string }).name === "usage")) {
-        commands.push({ name: "usage", description: "Show usage statistics (tokens/cost, all sessions)", source: "sdk", sourceInfo: { path: "pi-sdk-web", source: "sdk", scope: "global", origin: "cli" } });
+        commands.push({ name: "usage", description: "Show usage statistics (tokens/cost, all sessions)", source: "maxdai", sourceInfo: { path: "pi-sdk-web", source: "maxdai", scope: "global", origin: "cli" } });
       }
       return commands;
     } catch {
