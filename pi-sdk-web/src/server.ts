@@ -658,6 +658,13 @@ export class PiWebServer {
         await this.executeCommand(name, args);
         break;
       }
+      case "usage": {
+        // /usage panel scope switch (session | all) - re-render with the
+        // chosen data range.
+        const scope = data.scope === "all" ? "all" : "session";
+        await this.handleUsageCommand(scope);
+        break;
+      }
       case "session":
         // Read-only session info (TUI /session equivalent)
         this.broadcastSessionInfo();
@@ -792,7 +799,7 @@ export class PiWebServer {
     // Pi's session files (usage-render.ts) and show the panel - the
     // pi-usage-extension is no longer required (it reads the same files).
     if (name === "usage") {
-      await this.handleUsageCommand();
+      await this.handleUsageCommand("session");
       return;
     }
     const cmd = this.session.extensionRunner.getCommand(name);
@@ -862,11 +869,13 @@ export class PiWebServer {
     // --- /usage (pi-web-native) handled early in executeCommand ---
   }
 
-  /** Collect usage from Pi session files and broadcast the panel payload. */
-  private async handleUsageCommand(): Promise<void> {
+  /** Collect usage from Pi session files and broadcast the panel payload.
+   * scope "session" = current session only; "all" = every session. */
+  private async handleUsageCommand(scope: "session" | "all" = "session"): Promise<void> {
     try {
       const { buildUsageData } = await import("./usage-render.ts");
-      const data = buildUsageData();
+      const sessionId = scope === "session" ? String(this.session.sessionId ?? "") : undefined;
+      const data = buildUsageData(sessionId);
       if (data) {
         this.broadcast({ type: "usage_data", data });
       } else {
@@ -875,7 +884,7 @@ export class PiWebServer {
           id: crypto.randomUUID(),
           method: "notify",
           title: "/usage",
-          message: "No usage data found yet (no Pi session files with usage).",
+          message: scope === "session" ? "No usage data for this session yet." : "No usage data found yet (no Pi session files with usage).",
           notifyType: "info",
         });
       }

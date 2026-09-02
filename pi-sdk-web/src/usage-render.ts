@@ -462,11 +462,14 @@ function periodStart(key: string, now: number): number {
 
 /**
  * Aggregate collected session usage into the structured payload the web
- * panel renders. Returns null when no usage data exists.
+ * panel renders. Returns null when no usage data exists. When sessionId
+ * is given, only that session's usage is aggregated (scope: current
+ * session); otherwise all sessions.
  */
-export function buildUsageData(): UsageDataPayload | null {
+export function buildUsageData(sessionId?: string): UsageDataPayload | null {
   const files = collectUsage();
-  if (files.length === 0) return null;
+  const scoped = sessionId ? files.filter((f) => f.sessionId === sessionId) : files;
+  if (scoped.length === 0) return null;
   const now = Date.now();
 
   // per-tab accumulators
@@ -485,7 +488,7 @@ export function buildUsageData(): UsageDataPayload | null {
   const hourly = new Map<number, { cost: number; tokens: number; messages: number }>();
   const hourStart = (ts: number): number => Math.floor(ts / 3600_000) * 3600_000;
 
-  for (const file of files) {
+  for (const file of scoped) {
     for (const m of file.messages) {
       const ts = m.timestamp;
       {

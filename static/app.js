@@ -1972,15 +1972,26 @@ class PiWebClient {
 
   renderUsagePanel(data) {
     if (!data || !data.tabs) return;
+    // Preserve the user's current choices (tab/view/scope/expanded) across
+    // data refresh (e.g. scope switch Session|All must not reset them);
+    // defaults are set only on first open.
+    if (!this.usageTab) this.usageTab = 'thisWeek';
+    if (!this.usageView) this.usageView = 'table';
+    if (!this.usageScope) this.usageScope = 'session';
     this.usageData = data;
-    this.usageTab = 'thisWeek';
-    this.usageView = 'table';
-    this.usageExpanded = new Set();
     const overlay = document.getElementById('usage-overlay');
     if (!overlay) return;
     overlay.style.display = 'flex';
     this.renderUsageTabs();
     this.renderUsageBody();
+  }
+
+  // Switch the usage scope (session | all) - re-fetch from the server.
+  setUsageScope(scope) {
+    if (this.usageScope === scope) return;
+    this.usageScope = scope;
+    this.renderUsageTabs();
+    this.send({ type: 'usage', scope });
   }
 
   closeUsagePanel() {
@@ -2011,7 +2022,7 @@ class PiWebClient {
       });
       tabsEl.appendChild(tab);
     }
-    // View switcher: Table / Insights / Graph
+    // View switcher: Table / Insights / Graph + scope (Session | All)
     const viewsEl = document.getElementById('usage-views');
     if (viewsEl) {
       viewsEl.innerHTML = '';
@@ -2025,6 +2036,17 @@ class PiWebClient {
           this.renderUsageBody();
         });
         viewsEl.appendChild(v);
+      }
+      const scopeSep = document.createElement('span');
+      scopeSep.className = 'usage-scope-sep';
+      scopeSep.textContent = '|';
+      viewsEl.appendChild(scopeSep);
+      for (const [key, label] of [['session', 'Session'], ['all', 'All']]) {
+        const s = document.createElement('span');
+        s.className = 'usage-view' + (key === this.usageScope ? ' active' : '');
+        s.textContent = label;
+        s.addEventListener('click', () => this.setUsageScope(key));
+        viewsEl.appendChild(s);
       }
     }
   }
