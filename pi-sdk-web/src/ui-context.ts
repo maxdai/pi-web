@@ -248,12 +248,61 @@ export class WebUIContext implements ExtensionUIContext {
   setHeader(): void {}
   custom(): Promise<never> {
     // Pi's custom() shows an extension-drawn TUI component. Web has no TUI
-    // renderer, so a full component can't be displayed. Same headless stub
-    // as Pi's RPC mode (rpc-mode.ts: "Custom UI not supported in RPC mode"):
-    // settle immediately so commands awaiting the panel don't hang.
-    // Commands whose extensions branch on hasUI (magic-context ctx-status)
-    // are routed to their text fallback by executeCommand (hasUI:false);
-    // any other custom() caller just gets a no-op close.
+    // renderer, so the component can't be *displayed* - but the factory is
+    // still invoked with no-op stubs so the extension's own logic runs
+    // (e.g. /usage starts its data collection inside the factory), then we
+    // settle immediately: display-only panels (user-driven close) would
+    // otherwise hang the command forever, and data-producing panels
+    // (loader -> done(value)) have their result read from the extension's
+    // own cache file afterwards when needed (see usage-render.ts). So
+    // custom() never blocks the command.
+    // Extensions that branch on hasUI before custom (magic-context
+    // ctx-status) are routed to their text fallback by executeCommand
+    // (hasUI:false) and never reach this.
+    try {
+      // Arguments are (factory, options) at runtime; the declared
+      // signature stays interface-compatible, read them dynamically.
+      const args = arguments as unknown as [
+        (
+          tui: unknown,
+          theme: unknown,
+          keybindings: unknown,
+          done: (result: unknown) => void,
+        ) => unknown,
+        { onHandle?: (handle: unknown) => void },
+      ];
+      const factory = args[0];
+      const options = args[1];
+      if (typeof factory === "function") {
+        // No-op TUI stub: enough surface for factories that need a render
+        // handle; rendering itself is never performed on Web.
+        const stubTui = {
+          requestRender: () => {},
+          invalidate: () => {},
+          setFocus: () => {},
+          getWidth: () => 100,
+        };
+        // Theme stub: color helpers degrade to plain text.
+        const stubTheme = {
+          fg: (_k: string, s: string) => s,
+          bold: (s: string) => s,
+          dim: (s: string) => s,
+          get theme() {
+            return undefined;
+          },
+        };
+        const component = factory(stubTui, stubTheme, {}, () => {});
+        // Component built and its logic ran (data collection started);
+        // NOT disposed - async work inside may still be running and own
+        // its resources. settle immediately.
+        void component;
+      }
+      if (options && typeof options.onHandle === "function") {
+        options.onHandle({ setHidden: () => {}, focus: () => {} });
+      }
+    } catch {
+      // factory threw - ignore, still settle
+    }
     return Promise.resolve(undefined as never);
   }
   pasteToEditor(): void {}

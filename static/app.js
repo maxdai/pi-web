@@ -355,6 +355,9 @@ class PiWebClient {
       case 'scoped_models':
         this.handleScopedModels(data.data);
         break;
+      case 'usage_data':
+        this.renderUsagePanel(data.data);
+        break;
       case 'sessions':
         this.handleSessions(data.data);
         break;
@@ -1705,7 +1708,19 @@ class PiWebClient {
       if (e.key === 'Escape' && this.modalOverlay && this.modalOverlay.style.display !== 'none') {
         this.closeModal();
       }
+      const usageOverlay = document.getElementById('usage-overlay');
+      if (e.key === 'Escape' && usageOverlay && usageOverlay.style.display !== 'none') {
+        this.closeUsagePanel();
+      }
     });
+    const usageClose = document.getElementById('usage-close');
+    if (usageClose) usageClose.addEventListener('click', () => this.closeUsagePanel());
+    const usageOverlayEl = document.getElementById('usage-overlay');
+    if (usageOverlayEl) {
+      usageOverlayEl.addEventListener('click', (e) => {
+        if (e.target === usageOverlayEl) this.closeUsagePanel();
+      });
+    }
   }
 
   // ------------------------------------------------------------------
@@ -1948,6 +1963,279 @@ class PiWebClient {
       toast.classList.add('toast-hide');
       setTimeout(() => toast.remove(), 300);
     }, type === 'error' ? 8000 : 5000);
+  }
+
+  // ------------------------------------------------------------------
+  // Usage panel (dedicated big panel for /usage, rendered from the
+  // server-aggregated usage_data payload)
+  // ------------------------------------------------------------------
+
+  renderUsagePanel(data) {
+    if (!data || !data.tabs) return;
+    this.usageData = data;
+    this.usageTab = 'thisWeek';
+    this.usageView = 'table';
+    this.usageExpanded = new Set();
+    const overlay = document.getElementById('usage-overlay');
+    if (!overlay) return;
+    overlay.style.display = 'flex';
+    this.renderUsageTabs();
+    this.renderUsageBody();
+  }
+
+  closeUsagePanel() {
+    const overlay = document.getElementById('usage-overlay');
+    if (overlay) overlay.style.display = 'none';
+  }
+
+  renderUsageTabs() {
+    const tabsEl = document.getElementById('usage-tabs');
+    if (!tabsEl) return;
+    const labels = {
+      today: 'Today',
+      thisWeek: 'This Week',
+      lastWeek: 'Last Week',
+      last30Days: 'Last 30 Days',
+      allTime: 'All Time',
+    };
+    tabsEl.innerHTML = '';
+    for (const key of Object.keys(labels)) {
+      const tab = document.createElement('span');
+      tab.className = 'usage-tab' + (key === this.usageTab ? ' active' : '');
+      tab.textContent = labels[key];
+      tab.addEventListener('click', () => {
+        this.usageTab = key;
+        this.usageExpanded.clear();
+        this.renderUsageTabs();
+        this.renderUsageBody();
+      });
+      tabsEl.appendChild(tab);
+    }
+    // View switcher: Table / Insights / Graph
+    const viewsEl = document.getElementById('usage-views');
+    if (viewsEl) {
+      viewsEl.innerHTML = '';
+      for (const [key, label] of [['table', 'Table'], ['insights', 'Insights'], ['graph', 'Graph']]) {
+        const v = document.createElement('span');
+        v.className = 'usage-view' + (key === this.usageView ? ' active' : '');
+        v.textContent = label;
+        v.addEventListener('click', () => {
+          this.usageView = key;
+          this.renderUsageTabs();
+          this.renderUsageBody();
+        });
+        viewsEl.appendChild(v);
+      }
+    }
+  }
+
+  fmtTokens(n) {
+    if (n >= 1e9) return (n / 1e9).toFixed(2) + 'B';
+    if (n >= 1e6) return (n / 1e6).toFixed(2) + 'M';
+    if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K';
+    return String(Math.round(n));
+  }
+
+  fmtCost(c) {
+    if (!c || c <= 0) return '-';
+    if (c < 0.01) return '$' + c.toFixed(4);
+    if (c < 10) return '$' + c.toFixed(2);
+    return '$' + c.toFixed(1);
+  }
+
+  usageRow(stat) {
+    const t = stat.tokens || {};
+    return [
+      this.fmtTokens(t.input),
+      this.fmtTokens(t.output),
+      this.fmtTokens((t.cacheRead || 0) + (t.cacheWrite || 0)),
+      this.fmtTokens((t.total === undefined ? (t.input || 0) + (t.output || 0) + (t.cacheRead || 0) + (t.cacheWrite || 0) : t.total)),
+      this.fmtCost(stat.cost),
+      String(stat.messages),
+      String(stat.sessions),
+    ];
+  }
+
+  renderUsageBody() {
+    const body = document.getElementById('usage-body');
+    if (!body) return;
+    const period = this.usageData.tabs[this.usageTab];
+    if (!period) return;
+    body.innerHTML = '';
+    body.scrollTop = 0;
+
+    if (this.usageView === 'table') {
+      const table = document.createElement('table');
+      table.className = 'usage-table';
+      const head = document.createElement('thead');
+      head.innerHTML = '<tr><th>Provider / Model</th><th>Msgs</th><th>Cost</th><th>Tokens</th><th>↑In</th><th>↓Out</th><th>Cache</th><th>Sessions</th></tr>';
+      table.appendChild(head);
+      const tbody = document.createElement('tbody');
+
+      const rowFor = (name, stat, isModel, isTotals) => {
+        const tr = document.createElement('tr');
+        if (isTotals) tr.className = 'usage-totals';
+        else if (isModel) tr.className = 'usage-model-row';
+        else tr.className = 'usage-provider-row';
+        const nameTd = document.createElement('td');
+        nameTd.className = 'usage-name';
+        nameTd.textContent = name;
+        const [, cost, tokens, input, output, cache, msgs, sessions] = [null, this.fmtCost(stat.cost), this.fmtTokens(stat.tokens ? stat.tokens.total : 0), this.fmtTokens(stat.tokens ? stat.tokens.input : 0), this.fmtTokens(stat.tokens ? stat.tokens.output : 0), this.fmtTokens(stat.tokens ? (stat.tokens.cacheRead + stat.tokens.cacheWrite) : 0), String(stat.messages), String(stat.sessions)];
+        tr.appendChild(nameTd);
+        for (const cell of [msgs, cost, tokens, input, output, cache, sessions]) {
+          const td = document.createElement('td');
+          td.textContent = cell;
+          td.className = 'usage-num';
+          tr.appendChild(td);
+        }
+        return tr;
+      };
+
+      for (const p of period.providers) {
+        const key = 'p:' + p.name;
+        const expanded = this.usageExpanded.has(key);
+        const tr = rowFor(p.name, p, false, false);
+        tr.classList.add('usage-clickable');
+        tr.addEventListener('click', () => {
+          if (this.usageExpanded.has(key)) this.usageExpanded.delete(key);
+          else this.usageExpanded.add(key);
+          this.renderUsageBody();
+        });
+        tbody.appendChild(tr);
+        if (expanded) {
+          for (const m of p.models || []) {
+            tbody.appendChild(rowFor('  └ ' + m.name, m, true, false));
+          }
+        }
+      }
+      const totals = period.totals;
+      tbody.appendChild(rowFor('Total', totals, false, true));
+      table.appendChild(tbody);
+      body.appendChild(table);
+    } else if (this.usageView === 'insights') {
+      const list = document.createElement('div');
+      list.className = 'usage-insights';
+      const ins = period.insights || [];
+      if (ins.length === 0) {
+        list.innerHTML = '<div class="usage-insight">No insights for this period.</div>';
+      }
+      for (const i of ins) {
+        const div = document.createElement('div');
+        div.className = 'usage-insight ' + (i.kind === 'alarm' ? 'alarm' : 'structure');
+        const stat = document.createElement('span');
+        stat.className = 'usage-insight-stat';
+        stat.textContent = i.stat;
+        const text = document.createElement('span');
+        text.textContent = i.headline;
+        div.appendChild(stat);
+        div.appendChild(text);
+        if (i.advice) {
+          const advice = document.createElement('div');
+          advice.className = 'usage-insight-advice';
+          advice.textContent = i.advice;
+          div.appendChild(advice);
+        }
+        list.appendChild(div);
+      }
+      body.appendChild(list);
+    } else if (this.usageView === 'graph') {
+      // Simple CSS bar chart: cost per provider (this period) + hourly tokens trend
+      const container = document.createElement('div');
+      container.className = 'usage-graph';
+      if (period.providers.length === 0) {
+        container.innerHTML = '<div class="usage-insight">No data for this period.</div>';
+        body.appendChild(container);
+        return;
+      }
+      const maxCost = Math.max(...period.providers.map((p) => p.cost), 1e-9);
+      let html = '<div class="usage-graph-title">Cost by provider</div><div class="usage-bars">';
+      for (const p of period.providers) {
+        const w = ((p.cost / maxCost) * 100).toFixed(1);
+        html += `<div class="usage-bar-row"><span class="usage-bar-label">${this.escapeHtml(p.name)}</span><div class="usage-bar-track"><div class="usage-bar" style="width:${w}%"></div></div><span class="usage-bar-val">${this.fmtCost(p.cost)}</span></div>`;
+      }
+      html += '</div>';
+      // Hourly tokens trend for the current tab. The server provides one
+      // global hourly series + per-tab windows; filtering (per tab) and
+      // gap-filling are render-side concerns.
+      const hourly = this.usageData.hourly ? this.usageData.hourly : null;
+      const window = (this.usageData.tabWindow || {})[this.usageTab] || null;
+      if (hourly && hourly.length > 0) {
+        // Filter to the tab's window, then fill the x-axis with a
+        // continuous hour sequence so idle hours appear as empty columns.
+        // Axis start rule: if the earliest data predates the period start,
+        // show the whole period (zeros included); if data only exists
+        // inside the period, start from the first hour with data (e.g.
+        // allTime never starts at epoch - it starts at first usage).
+        let seq = hourly;
+        if (window && window[1] > window[0]) {
+          const H = 3600_000;
+          const inWindow = hourly.filter((b) => b.hour >= window[0] && b.hour < window[1]);
+          const periodStartHour = Math.floor(window[0] / H) * H;
+          // Rule: compare the GLOBAL earliest data hour with the period
+          // start. If data predates the period (global first < period
+          // start), show the whole period (zeros included). Only when the
+          // very first usage ever is inside this period do we start from
+          // the first data hour (e.g. allTime starts at first usage, not
+          // epoch).
+          const globalFirstHour = hourly[0].hour; // hourly is time-sorted
+          const startHour = globalFirstHour > periodStartHour ? globalFirstHour : periodStartHour;
+          const endHour = Math.floor(window[1] / H) * H;
+          const byHour = new Map(inWindow.map((b) => [b.hour, b]));
+          seq = [];
+          for (let h = startHour; h <= endHour; h += H) {
+            const b = byHour.get(h);
+            seq.push(b ? { ...b } : { hour: h, cost: 0, tokens: 0, messages: 0 });
+          }
+        }
+        // Cap the column count (~120) so very long windows (allTime) stay
+        // manageable; the hourly chart scrolls horizontally to show idle
+        // hours, so a generous count is fine.
+        let buckets = seq;
+        const maxCols = 120;
+        if (buckets.length > maxCols) {
+          const step = Math.ceil(buckets.length / maxCols);
+          const agg = [];
+          for (let i = 0; i < buckets.length; i += step) {
+            const slice = buckets.slice(i, Math.min(i + step, buckets.length));
+            const start = slice[0].hour;
+            const end = slice[slice.length - 1].hour + 3600_000;
+            agg.push({
+              hour: start,
+              tokens: slice.reduce((s, b) => s + b.tokens, 0),
+              cost: slice.reduce((s, b) => s + b.cost, 0),
+              messages: slice.reduce((s, b) => s + b.messages, 0),
+              spanEnd: end,
+              spanCount: slice.length,
+            });
+          }
+          buckets = agg;
+        }
+        const maxT = Math.max(...buckets.map((b) => b.tokens), 1e-9);
+        // Fixed-height bars (px) - avoids percentage-height resolution
+        // issues in nested flex containers.
+        const BAR_MAX_PX = 96;
+        // Label every ~6th column with its time (sparse to avoid crowding).
+        const labelStep = Math.ceil(buckets.length / 8);
+        html += '<div class="usage-graph-title" style="margin-top:14px">Hourly tokens (recent)</div><div class="usage-hourly">';
+        for (let i = 0; i < buckets.length; i++) {
+          const b = buckets[i];
+          const hPx = b.tokens > 0 ? Math.max(2, Math.round((b.tokens / maxT) * BAR_MAX_PX)) : 0;
+          const d = new Date(b.hour);
+          const spanText = b.spanCount ? ` (${b.spanCount}h)` : '';
+          const showLabel = i % labelStep === 0 || i === buckets.length - 1;
+          const label = showLabel
+            ? d.toLocaleDateString(undefined, { month: 'numeric', day: 'numeric' }) + '\n' + d.toLocaleTimeString(undefined, { hour: '2-digit' })
+            : '';
+          // Day/night banding: hour 6..17 (local) = day, else night
+          const hourOfDay = d.getHours();
+          const band = hourOfDay >= 6 && hourOfDay < 18 ? 'day' : 'night';
+          html += `<div class="usage-hour-col ${band}" title="${d.toLocaleString()}${spanText} — ${this.fmtTokens(b.tokens)}"><div class="usage-hour-bar-wrap"><div class="usage-hour-bar" style="height:${hPx}px"></div></div><div class="usage-hour-label">${this.escapeHtml(label).replace(/\n/g, '<br>')}</div></div>`;
+        }
+        html += '</div>';
+      }
+      container.innerHTML = html;
+      body.appendChild(container);
+    }
   }
 
   handleModels(models) {

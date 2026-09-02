@@ -844,6 +844,33 @@ export class PiWebServer {
         notifyType: "info",
       });
     }
+
+    // Usage extension: the /usage command collects data (via custom(), whose
+    // factory runs the collection) and keeps its cache file up to date.
+    // Aggregate the cache into structured data and send it as a dedicated
+    // message; the frontend renders its own usage panel (independent
+    // integration in usage-render.ts - no effect on other commands).
+    if (name === "usage") {
+      try {
+        const { buildUsageData } = await import("./usage-render.ts");
+        const data = buildUsageData();
+        if (data) {
+          this.broadcast({ type: "usage_data", data });
+        } else {
+          this.broadcast({
+            type: "extension_ui_request",
+            id: crypto.randomUUID(),
+            method: "notify",
+            title: "/usage",
+            message: "No usage data found. Run `/usage` in the TUI first to build the usage cache.",
+            notifyType: "info",
+          });
+        }
+      } catch {
+        // integration failed silently - command output (if any) already
+        // broadcast above
+      }
+    }
   }
 
   private buildCommandContext(hasUI: boolean): ExtensionCommandContext {
