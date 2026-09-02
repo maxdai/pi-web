@@ -1974,10 +1974,12 @@ class PiWebClient {
     if (!data || !data.tabs) return;
     // Preserve the user's current choices (tab/view/scope/expanded) across
     // data refresh (e.g. scope switch Session|All must not reset them);
-    // defaults are set only on first open.
+    // defaults are set only on first open. usageExpanded must exist for the
+    // tab/provider click handlers (created once, kept afterwards).
     if (!this.usageTab) this.usageTab = 'thisWeek';
     if (!this.usageView) this.usageView = 'table';
     if (!this.usageScope) this.usageScope = 'session';
+    if (!this.usageExpanded) this.usageExpanded = new Set();
     this.usageData = data;
     const overlay = document.getElementById('usage-overlay');
     if (!overlay) return;
