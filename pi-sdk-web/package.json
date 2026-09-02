@@ -11,7 +11,7 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json && node -e \"require('node:fs').cpSync('../static', 'dist/static', { recursive: true }); require('node:fs').mkdirSync('dist/pi-bin', { recursive: true }); require('node:fs').renameSync('dist/pii-cli.js', 'dist/pi-bin/pii-cli.js'); require('node:fs').chmodSync('dist/pi-bin/pii-cli.js', 0o755); require('node:fs').cpSync('../pii/pii', 'dist/pi-bin/pii'); require('node:fs').cpSync('../server', 'dist/pi-bin/server', { recursive: true, filter: (s) => !s.includes('__pycache__') })\"",
+    "build": "tsc -p tsconfig.json && node -e \"require('node:fs').cpSync('../static', 'dist/static', { recursive: true }); require('node:fs').mkdirSync('dist/pi-bin', { recursive: true }); require('node:fs').chmodSync('dist/cli.js', 0o755); require('node:fs').renameSync('dist/pii-cli.js', 'dist/pi-bin/pii-cli.js'); require('node:fs').chmodSync('dist/pi-bin/pii-cli.js', 0o755); require('node:fs').cpSync('../pii/pii', 'dist/pi-bin/pii'); require('node:fs').cpSync('../server', 'dist/pi-bin/server', { recursive: true, filter: (s) => !s.includes('__pycache__') })\"",
     "dev": "tsx src/cli.ts",
     "verify": "tsx src/verify-sdk.ts",
     "prepublishOnly": "npm run build"
