@@ -781,6 +781,13 @@ export class PiWebServer {
    * modal (mirroring the TUI dialog behavior).
    */
   private async executeCommand(name: string, args: string): Promise<void> {
+    // /usage is now a pi-web-native feature: collect usage directly from
+    // Pi's session files (usage-render.ts) and show the panel - the
+    // pi-usage-extension is no longer required (it reads the same files).
+    if (name === "usage") {
+      await this.handleUsageCommand();
+      return;
+    }
     const cmd = this.session.extensionRunner.getCommand(name);
     if (!cmd) throw new Error(`Unknown command: ${name}`);
 
@@ -845,31 +852,35 @@ export class PiWebServer {
       });
     }
 
-    // Usage extension: the /usage command collects data (via custom(), whose
-    // factory runs the collection) and keeps its cache file up to date.
-    // Aggregate the cache into structured data and send it as a dedicated
-    // message; the frontend renders its own usage panel (independent
-    // integration in usage-render.ts - no effect on other commands).
-    if (name === "usage") {
-      try {
-        const { buildUsageData } = await import("./usage-render.ts");
-        const data = buildUsageData();
-        if (data) {
-          this.broadcast({ type: "usage_data", data });
-        } else {
-          this.broadcast({
-            type: "extension_ui_request",
-            id: crypto.randomUUID(),
-            method: "notify",
-            title: "/usage",
-            message: "No usage data found. Run `/usage` in the TUI first to build the usage cache.",
-            notifyType: "info",
-          });
-        }
-      } catch {
-        // integration failed silently - command output (if any) already
-        // broadcast above
+    // --- /usage (pi-web-native) handled early in executeCommand ---
+  }
+
+  /** Collect usage from Pi session files and broadcast the panel payload. */
+  private async handleUsageCommand(): Promise<void> {
+    try {
+      const { buildUsageData } = await import("./usage-render.ts");
+      const data = buildUsageData();
+      if (data) {
+        this.broadcast({ type: "usage_data", data });
+      } else {
+        this.broadcast({
+          type: "extension_ui_request",
+          id: crypto.randomUUID(),
+          method: "notify",
+          title: "/usage",
+          message: "No usage data found yet (no Pi session files with usage).",
+          notifyType: "info",
+        });
       }
+    } catch (e) {
+      this.broadcast({
+        type: "extension_ui_request",
+        id: crypto.randomUUID(),
+        method: "notify",
+        title: "/usage",
+        message: `Usage collection failed: ${e instanceof Error ? e.message : String(e)}`,
+        notifyType: "error",
+      });
     }
   }
 

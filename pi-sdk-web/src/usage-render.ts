@@ -1,31 +1,27 @@
 /**
- * Usage extension integration (independent module).
+ * Usage statistics for the pi-web panel (standalone module).
  *
- * pi-usage-extension's `/usage` command draws a TUI dashboard via
- * ctx.ui.custom() which Web cannot render. However, running the command
- * (through WebUIContext.custom() which now executes the factory) makes the
- * extension collect usage data and write its cache file
- * (`~/.pi/agent/usage-extension-cache.json`). This module reads that cache
- * after the command runs and renders an equivalent summary as Markdown,
- * shown as a titled modal - without coupling into the main server flow.
+ * Data is collected directly from Pi's own session files
+ * (~/.pi/agent/sessions/**\/*.jsonl): each assistant message carries
+ * provider/model/timestamp/usage{input,output,cacheRead,cacheWrite,
+ * reasoning,cost}, and auxiliary entries (compaction/branch_summary)
+ * carry usage too. The collection mirrors the semantics used by the
+ * pi-usage-extension (which reads the same session files and normalizes
+ * them to a cache) - but this module is independent: it parses the
+ * session files itself, so /usage works without the extension installed.
  *
- * Cache format (v7): { version, names: string[], files: { [sessionFile]: {
- *   size, mtimeMs, sessionId, cwd, parentSession,
- *   messages: 13-tuple[][], toolUsages: 5-tuple[][] } } }
- * message tuple: [provider, model, cost, inputTokens, outputTokens,
- *   cacheReadTokens, cacheWriteTokens, timestampMs, thinkingLevel,
- *   reasoningTokens, afterCompaction(0|1), source(0 assistant|1 auxiliary),
- *   sourceId]
+ * The module aggregates the messages into the structured UsageDataPayload
+ * (5 time tabs x provider/model x metrics + insights + global hourly
+ * series + tab windows); the frontend renders.
  */
 
-import { existsSync, readFileSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { join, sep } from "node:path";
 import { homedir } from "node:os";
 
-export const USAGE_CACHE_FILE = "usage-extension-cache.json";
-const USAGE_CACHE_DIRS = [
-  join(process.env.PI_HOME?.replace(/^~/, homedir()) ?? homedir(), ".pi", "agent"),
-  join(homedir(), ".pi", "agent"),
+const SESSIONS_DIRS = [
+  join(process.env.PI_HOME?.replace(/^~/, homedir()) ?? homedir(), ".pi", "agent", "sessions"),
+  join(homedir(), ".pi", "agent", "sessions"),
 ];
 
 interface UsageMessage {
@@ -50,82 +46,193 @@ interface UsageFile {
   parentSession: string;
 }
 
-function findCachePath(): string | null {
-  for (const dir of USAGE_CACHE_DIRS) {
-    const p = join(dir, USAGE_CACHE_FILE);
-    if (existsSync(p)) return p;
+function sessionsDir(): string | null {
+  for (const dir of SESSIONS_DIRS) {
+    if (existsSync(dir)) return dir;
   }
   return null;
 }
 
-/** mtime of the usage cache file, or null when absent. */
-export function usageCacheMtime(): number | null {
-  const path = findCachePath();
-  if (!path) return null;
+/** Recursively collect all .jsonl session files under dir (sorted). */
+function collectSessionFiles(dir: string, out: string[]): void {
+  let entries: { name: string; isDirectory(): boolean; isFile(): boolean }[];
   try {
-    return statSync(path).mtimeMs;
+    entries = readdirSync(dir, { withFileTypes: true }) as unknown as { name: string; isDirectory(): boolean; isFile(): boolean }[];
   } catch {
-    return null;
+    return;
+  }
+  for (const e of entries) {
+    const p = join(dir, e.name);
+    if (e.isDirectory()) collectSessionFiles(p, out);
+    else if (e.isFile() && e.name.endsWith(".jsonl")) out.push(p);
   }
 }
 
-/** Read and normalize the usage cache; null when absent/unreadable. */
-export function loadUsageCache(): {
-  files: UsageFile[];
-  names: string[];
-} | null {
-  const path = findCachePath();
-  if (!path) return null;
-  try {
-    const raw = JSON.parse(readFileSync(path, "utf8")) as {
-      version?: number;
-      names?: string[];
-      files?: Record<string, unknown>;
-    };
-    const names = raw.names ?? [];
-    const files: UsageFile[] = [];
-    for (const file of Object.values(raw.files ?? {})) {
-      const f = file as {
-        messages?: unknown;
-        sessionId?: string;
-        cwd?: string;
-        parentSession?: string;
-      };
-      const messages: UsageMessage[] = [];
-      if (Array.isArray(f.messages)) {
-        for (const tuple of f.messages) {
-          if (!Array.isArray(tuple) || tuple.length !== 13) continue;
-          const provider = names[tuple[0] as number];
-          const model = names[tuple[1] as number];
-          const thinkingLevel = names[tuple[8] as number];
-          if (typeof provider !== "string" || typeof model !== "string") continue;
-          messages.push({
-            provider,
-            model,
-            thinkingLevel,
-            cost: Number(tuple[2]) || 0,
-            input: Number(tuple[3]) || 0,
-            output: Number(tuple[4]) || 0,
-            cacheRead: Number(tuple[5]) || 0,
-            cacheWrite: Number(tuple[6]) || 0,
-            timestamp: Number(tuple[7]) || 0,
-            reasoning: Number(tuple[9]) || 0,
-            afterCompaction: tuple[10] === 1,
-            source: tuple[11] === 1 ? "auxiliary" : "assistant",
-          });
-        }
-      }
-      files.push({
-        messages,
-        sessionId: f.sessionId ?? "",
-        cwd: f.cwd ?? "",
-        parentSession: f.parentSession ?? "",
-      });
-    }
-    return { files, names };
-  } catch {
-    return null;
+interface RawUsage {
+  input?: number;
+  output?: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+  reasoning?: number;
+  totalTokens?: number;
+  cost?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; total?: number };
+}
+
+function parseUsageAmount(value: unknown): { cost: number; input: number; output: number; cacheRead: number; cacheWrite: number; reasoning: number } | null {
+  const u = value as RawUsage | undefined;
+  if (!u || typeof u !== "object") return null;
+  return {
+    cost: Number(u.cost?.total) || 0,
+    input: Number(u.input) || 0,
+    output: Number(u.output) || 0,
+    cacheRead: Number(u.cacheRead) || 0,
+    cacheWrite: Number(u.cacheWrite) || 0,
+    reasoning: Number(u.reasoning) || 0,
+  };
+}
+
+function tsOf(messageTimestamp: unknown, entryTimestamp: unknown): number {
+  if (typeof messageTimestamp === "number") return messageTimestamp;
+  if (typeof messageTimestamp === "string") {
+    const n = new Date(messageTimestamp).getTime();
+    if (!Number.isNaN(n)) return n;
   }
+  if (typeof entryTimestamp === "string") {
+    const n = new Date(entryTimestamp).getTime();
+    if (!Number.isNaN(n)) return n;
+  }
+  return 0;
+}
+
+function auxMessage(usage: { cost: number; input: number; output: number; cacheRead: number; cacheWrite: number; reasoning: number }, ts: number, sourceId: string): UsageMessage {
+  return {
+    provider: "aux",
+    model: "auxiliary",
+    thinkingLevel: undefined,
+    cost: usage.cost,
+    input: usage.input,
+    output: usage.output,
+    cacheRead: usage.cacheRead,
+    cacheWrite: usage.cacheWrite,
+    timestamp: ts,
+    reasoning: usage.reasoning,
+    afterCompaction: false,
+    source: "auxiliary",
+  };
+}
+
+/**
+ * Parse one session jsonl into its usage messages (the same semantics as
+ * the pi-usage-extension: assistant messages contribute their own usage,
+ * compaction/branch_summary entries contribute auxiliary usage).
+ */
+function parseSessionFile(path: string): UsageFile {
+  let sessionId = "";
+  let cwd = "";
+  let parentSession = "";
+  let thinkingLevel: string | undefined;
+  let compactionPending = false;
+  const messages: UsageMessage[] = [];
+
+  let content: string;
+  try {
+    content = readFileSync(path, "utf8");
+  } catch {
+    return { sessionId, cwd, parentSession, messages };
+  }
+
+  for (const line of content.split("\n")) {
+    if (!line.trim()) continue;
+    let entry: Record<string, unknown>;
+    try {
+      entry = JSON.parse(line) as Record<string, unknown>;
+    } catch {
+      continue; // malformed line
+    }
+    switch (entry.type) {
+      case "session": {
+        if (typeof entry.id === "string") sessionId = entry.id;
+        if (typeof entry.cwd === "string") cwd = entry.cwd;
+        if (typeof entry.parentSession === "string") parentSession = entry.parentSession;
+        break;
+      }
+      case "thinking_level_change": {
+        if (typeof entry.thinkingLevel === "string") thinkingLevel = entry.thinkingLevel;
+        break;
+      }
+      case "compaction": {
+        const usage = parseUsageAmount(entry.usage);
+        if (usage) messages.push(auxMessage(usage, tsOf(undefined, entry.timestamp), typeof entry.id === "string" ? entry.id : ""));
+        compactionPending = true;
+        break;
+      }
+      case "branch_summary": {
+        const usage = parseUsageAmount(entry.usage);
+        if (usage) messages.push(auxMessage(usage, tsOf(undefined, entry.timestamp), typeof entry.id === "string" ? entry.id : ""));
+        break;
+      }
+      case "message": {
+        const msg = entry.message as { role?: string; usage?: unknown; provider?: string; model?: string; timestamp?: unknown; content?: unknown[] } | undefined;
+        if (!msg) break;
+        if (msg.role === "assistant" && msg.usage && msg.provider && msg.model) {
+          const usage = parseUsageAmount(msg.usage);
+          if (usage) {
+            messages.push({
+              provider: msg.provider,
+              model: msg.model,
+              thinkingLevel,
+              cost: usage.cost,
+              input: usage.input,
+              output: usage.output,
+              cacheRead: usage.cacheRead,
+              cacheWrite: usage.cacheWrite,
+              timestamp: tsOf(msg.timestamp, entry.timestamp),
+              reasoning: usage.reasoning,
+              afterCompaction: compactionPending,
+              source: "assistant",
+            });
+            compactionPending = false;
+          }
+        }
+        break;
+      }
+      default:
+        break;
+    }
+  }
+
+  return { sessionId, cwd, parentSession, messages };
+}
+
+/** Collect usage across all session files. Empty array when none found. */
+export function collectUsage(): UsageFile[] {
+  const root = sessionsDir();
+  if (!root) return [];
+  const files: string[] = [];
+  collectSessionFiles(root, files);
+  const out: UsageFile[] = [];
+  for (const f of files) {
+    const parsed = parseSessionFile(f);
+    if (parsed.messages.length > 0 || parsed.sessionId) out.push(parsed);
+  }
+  return out;
+}
+
+/** A coarse freshness stamp: sum of session-file mtimes, for cheap invalidation. */
+export function sessionsStamp(): number {
+  const root = sessionsDir();
+  if (!root) return 0;
+  const files: string[] = [];
+  collectSessionFiles(root, files);
+  let sum = 0;
+  for (const f of files) {
+    try {
+      sum += statSync(f).mtimeMs;
+    } catch {
+      // ignore
+    }
+  }
+  return sum;
 }
 
 function startOfDay(ts: number): number {
@@ -172,9 +279,9 @@ function fmtCost(n: number): string {
 
 /** Render a Markdown usage summary (today / this week / all time). */
 export function renderUsageSummary(): string {
-  const cache = loadUsageCache();
-  if (!cache) {
-    return "## Usage\n\nNo usage data found. Run `/usage` in the TUI first to build the usage cache.";
+  const files = collectUsage();
+  if (files.length === 0) {
+    return "## Usage\n\nNo usage data found yet.";
   }
   const now = Date.now();
   const todayStart = startOfDay(now);
@@ -185,7 +292,7 @@ export function renderUsageSummary(): string {
   const all = emptyTotals();
   const byModel = new Map<string, Totals>();
 
-  for (const file of cache.files) {
+  for (const file of files) {
     for (const m of file.messages) {
       const t = m.timestamp;
       const targets = [all];
@@ -354,12 +461,12 @@ function periodStart(key: string, now: number): number {
 }
 
 /**
- * Aggregate the cache into the structured payload the web panel renders.
- * Returns null when no cache exists yet.
+ * Aggregate collected session usage into the structured payload the web
+ * panel renders. Returns null when no usage data exists.
  */
 export function buildUsageData(): UsageDataPayload | null {
-  const cache = loadUsageCache();
-  if (!cache) return null;
+  const files = collectUsage();
+  if (files.length === 0) return null;
   const now = Date.now();
 
   // per-tab accumulators
@@ -378,7 +485,7 @@ export function buildUsageData(): UsageDataPayload | null {
   const hourly = new Map<number, { cost: number; tokens: number; messages: number }>();
   const hourStart = (ts: number): number => Math.floor(ts / 3600_000) * 3600_000;
 
-  for (const file of cache.files) {
+  for (const file of files) {
     for (const m of file.messages) {
       const ts = m.timestamp;
       {
@@ -443,7 +550,7 @@ export function buildUsageData(): UsageDataPayload | null {
     }
   }
 
-  const payload: UsageDataPayload = { tabs: {}, hourly: [], tabWindow: {}, collectedAt: usageCacheMtime() };
+  const payload: UsageDataPayload = { tabs: {}, hourly: [], tabWindow: {}, collectedAt: sessionsStamp() };
   // Graph x-axis windows per tab: [start, end]. today: midnight->now;
   // thisWeek: monday->now; lastWeek: monday->next Monday; last30Days:
   // start->now; allTime: 0 -> now (frontend clips to first data).
