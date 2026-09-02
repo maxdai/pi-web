@@ -247,6 +247,13 @@ export class WebUIContext implements ExtensionUIContext {
   setFooter(): void {}
   setHeader(): void {}
   custom(): Promise<never> {
+    // Pi's custom() shows an extension-drawn TUI component. Web has no TUI
+    // renderer, so a full component can't be displayed. Same headless stub
+    // as Pi's RPC mode (rpc-mode.ts: "Custom UI not supported in RPC mode"):
+    // settle immediately so commands awaiting the panel don't hang.
+    // Commands whose extensions branch on hasUI (magic-context ctx-status)
+    // are routed to their text fallback by executeCommand (hasUI:false);
+    // any other custom() caller just gets a no-op close.
     return Promise.resolve(undefined as never);
   }
   pasteToEditor(): void {}

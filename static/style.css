@@ -907,6 +907,7 @@ body {
   color: var(--text);
   font-size: 13px;
   line-height: 1.5;
+  white-space: pre-wrap;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
   opacity: 1;
   transition: opacity 0.3s;
@@ -917,6 +918,27 @@ body {
 }
 
 .toast-error {
+  border-left-color: var(--error);
+}
+
+/* Extension notify lines appended to the chat stream (TUI showStatus
+   equivalent): persistent dim status text, colored by type. */
+.notify-line {
+  color: var(--dim);
+  font-size: 12px;
+  padding: 2px 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  border-left: 3px solid transparent;
+}
+
+.notify-warning {
+  color: var(--warning);
+  border-left-color: var(--warning);
+}
+
+.notify-error {
+  color: var(--error);
   border-left-color: var(--error);
 }
 

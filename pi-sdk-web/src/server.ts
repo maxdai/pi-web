@@ -793,9 +793,35 @@ export class PiWebServer {
       }
     };
     const unsubscribe = this.session.subscribe(listener);
+    // hasUI by extension: most extensions degrade gracefully to notify()
+    // (our notify -> browser dialog/toast), but a few (magic-context) use
+    // ctx.ui.custom() - an extension-drawn TUI panel we can't render. For
+    // those, hasUI:false routes them to their own text fallback
+    // (appendEntry -> modal), same as before.
+    const cmdPath = (cmd.sourceInfo && cmd.sourceInfo.path) || "";
+    const customOnly = /pi-magic-context|magic-context/.test(cmdPath);
+    const ui = this.uiContext as unknown as { sink: (obj: Record<string, unknown>) => void };
+    const originalSink = ui.sink;
     try {
-      await cmd.handler(args, this.buildCommandContext());
+      // While the command runs, notify() broadcasts are tagged with the
+      // command name as title, so the browser shows them as a titled modal
+      // (colored, Markdown-rendered) instead of a plain stream line.
+      ui.sink = (obj) => {
+        const req = obj as { method?: string };
+        if (req && req.method === "notify") {
+          // Tag command-time notifies with the command name as title so the
+          // browser renders them as a titled modal (colored, Markdown).
+          originalSink({ ...obj, title: `/${name}` });
+        } else {
+          originalSink(obj);
+        }
+      };
+      await cmd.handler(args, this.buildCommandContext(customOnly ? false : true));
+    } catch (e) {
+      ui.sink = originalSink;
+      throw e;
     } finally {
+      ui.sink = originalSink;
       unsubscribe();
     }
 
@@ -820,13 +846,15 @@ export class PiWebServer {
     }
   }
 
-  private buildCommandContext(): ExtensionCommandContext {
+  private buildCommandContext(hasUI: boolean): ExtensionCommandContext {
     const sm = this.session.sessionManager;
     return {
       ui: this.uiContext,
-      // No dialog-capable UI: extension commands fall back to text output
+      // hasUI is decided per command (see executeCommand): true for
+      // extensions that degrade to notify(), false for custom-panel-only
+      // extensions (magic-context) so they use their text fallback.
       mode: "print",
-      hasUI: false,
+      hasUI,
       cwd: sm.getCwd(),
       sessionManager: sm,
       modelRegistry: new ModelRegistry(this.session.modelRuntime),

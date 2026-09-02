@@ -1915,8 +1915,9 @@ class PiWebClient {
 
   openExtensionNotify(req) {
     // Command output notifications (title starts with "/", e.g. /ctx-status) keep
-    // the modal. Other extension notifies are lightweight toasts (TUI shows
-    // notify as a transient status message, not a dialog).
+    // the modal. Other extension notifies are appended to the chat stream as
+    // persistent status lines, matching TUI's notify -> showStatus (a dim text
+    // appended to the chat container; NOT a transient toast).
     if (req.title && String(req.title).startsWith('/')) {
       this.openModal(req.title || 'Notification', 'extension-notify');
       this.currentExtRequest = req;
@@ -1924,7 +1925,15 @@ class PiWebClient {
       this.modalList.innerHTML = `<div class="modal-message body-text">${this.renderMarkdown(req.message || '')}</div>`;
       return;
     }
-    this.showToast(req.message || '', req.notifyType);
+    this.appendNotifyLine(req.message || '', req.notifyType);
+  }
+
+  appendNotifyLine(message, type) {
+    const div = document.createElement('div');
+    div.className = 'notify-line' + (type ? ` notify-${type}` : '');
+    div.innerHTML = ansiToHtml(String(message));
+    this.contentEl.appendChild(div);
+    this.scrollToBottom();
   }
 
   showToast(message, type) {
