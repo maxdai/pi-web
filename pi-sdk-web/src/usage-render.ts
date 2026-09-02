@@ -15,7 +15,7 @@
  * series + tab windows); the frontend renders.
  */
 
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, sep } from "node:path";
 import { homedir } from "node:os";
 
@@ -219,128 +219,6 @@ export function collectUsage(): UsageFile[] {
 }
 
 /** A coarse freshness stamp: sum of session-file mtimes, for cheap invalidation. */
-export function sessionsStamp(): number {
-  const root = sessionsDir();
-  if (!root) return 0;
-  const files: string[] = [];
-  collectSessionFiles(root, files);
-  let sum = 0;
-  for (const f of files) {
-    try {
-      sum += statSync(f).mtimeMs;
-    } catch {
-      // ignore
-    }
-  }
-  return sum;
-}
-
-function startOfDay(ts: number): number {
-  const d = new Date(ts);
-  d.setHours(0, 0, 0, 0);
-  return d.getTime();
-}
-
-function startOfWeek(ts: number): number {
-  const d = new Date(ts);
-  const day = d.getDay() === 0 ? 6 : d.getDay() - 1;
-  d.setHours(0, 0, 0, 0);
-  d.setDate(d.getDate() - day);
-  return d.getTime();
-}
-
-interface Totals {
-  cost: number;
-  input: number;
-  output: number;
-  cacheRead: number;
-  cacheWrite: number;
-  messages: number;
-  sessions: Set<string>;
-}
-
-function emptyTotals(): Totals {
-  return { cost: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, messages: 0, sessions: new Set() };
-}
-
-function fmt(n: number): string {
-  return n >= 1e9
-    ? `${(n / 1e9).toFixed(2)}B`
-    : n >= 1e6
-      ? `${(n / 1e6).toFixed(2)}M`
-      : n >= 1e3
-        ? `${(n / 1e3).toFixed(1)}K`
-        : `${Math.round(n)}`;
-}
-
-function fmtCost(n: number): string {
-  return `$${n.toFixed(n >= 1 ? 2 : 4)}`;
-}
-
-/** Render a Markdown usage summary (today / this week / all time). */
-export function renderUsageSummary(): string {
-  const files = collectUsage();
-  if (files.length === 0) {
-    return "## Usage\n\nNo usage data found yet.";
-  }
-  const now = Date.now();
-  const todayStart = startOfDay(now);
-  const weekStart = startOfWeek(now);
-
-  const today = emptyTotals();
-  const week = emptyTotals();
-  const all = emptyTotals();
-  const byModel = new Map<string, Totals>();
-
-  for (const file of files) {
-    for (const m of file.messages) {
-      const t = m.timestamp;
-      const targets = [all];
-      if (t >= todayStart) targets.push(today);
-      if (t >= weekStart) targets.push(week);
-      for (const target of targets) {
-        target.cost += m.cost;
-        target.input += m.input;
-        target.output += m.output;
-        target.cacheRead += m.cacheRead;
-        target.cacheWrite += m.cacheWrite;
-        target.messages += 1;
-        target.sessions.add(file.sessionId);
-      }
-      const key = `${m.provider}/${m.model}`;
-      const byModelEntry = byModel.get(key) ?? emptyTotals();
-      byModelEntry.cost += m.cost;
-      byModelEntry.input += m.input;
-      byModelEntry.output += m.output;
-      byModelEntry.cacheRead += m.cacheRead;
-      byModelEntry.cacheWrite += m.cacheWrite;
-      byModelEntry.messages += 1;
-      byModel.set(key, byModelEntry);
-    }
-  }
-
-  const row = (label: string, t: Totals): string =>
-    `| ${label} | ${fmt(t.input)} | ${fmt(t.output)} | ${fmt(t.cacheRead)} | ${fmt(t.cacheWrite)} | $${t.cost.toFixed(4)} | ${t.messages} | ${t.sessions.size} |`;
-  const lines: string[] = [
-    "## Usage",
-    "",
-    "| Period | Input | Output | Cache R | Cache W | Cost | Msgs | Sessions |",
-    "| --- | --- | --- | --- | --- | --- | --- | --- |",
-    row("Today", today),
-    row("This week", week),
-    row("All time", all),
-  ];
-
-  if (byModel.size > 0) {
-    const sorted = [...byModel.entries()].sort((a, b) => b[1].cost - a[1].cost).slice(0, 10);
-    lines.push("", "### By model (all time)", "", "| Model | Input | Output | Cost | Msgs |", "| --- | --- | --- | --- | --- |");
-    for (const [key, t] of sorted) {
-      lines.push(`| ${key} | ${fmt(t.input)} | ${fmt(t.output)} | $${t.cost.toFixed(4)} | ${t.messages} |`);
-    }
-  }
-  return lines.join("\n");
-}
-
 // ---------------------------------------------------------------------------
 // Structured usage data for the web panel (server aggregates, frontend
 // renders). Mirrors the extension's UsageData shape (5 time tabs, providers
@@ -553,7 +431,7 @@ export function buildUsageData(sessionId?: string): UsageDataPayload | null {
     }
   }
 
-  const payload: UsageDataPayload = { tabs: {}, hourly: [], tabWindow: {}, collectedAt: sessionsStamp() };
+  const payload: UsageDataPayload = { tabs: {}, hourly: [], tabWindow: {}, collectedAt: Date.now() };
   // Graph x-axis windows per tab: [start, end]. today: midnight->now;
   // thisWeek: monday->now; lastWeek: monday->next Monday; last30Days:
   // start->now; allTime: 0 -> now (frontend clips to first data).
