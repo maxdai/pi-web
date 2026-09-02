@@ -395,6 +395,13 @@ export class PiWebServer {
       for (const s of this.session.resourceLoader.getSkills().skills) {
         commands.push({ name: `skill:${s.name}`, description: s.description, source: "skill", sourceInfo: s.sourceInfo });
       }
+      // pi-web built-ins: commands provided by pi-web itself (not tied to
+      // any extension), e.g. /usage which now collects Pi session usage
+      // natively (usage-render.ts) instead of running the extension's
+      // command.
+      if (!commands.some((c) => (c as { name?: string }).name === "usage")) {
+        commands.push({ name: "usage", description: "Show usage statistics (tokens/cost, all sessions)", source: "piweb", sourceInfo: { path: "pi-web", source: "piweb", scope: "global", origin: "cli" } });
+      }
       return commands;
     } catch {
       return [];
