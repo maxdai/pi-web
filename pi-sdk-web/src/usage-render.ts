@@ -27,7 +27,6 @@ const SESSIONS_DIRS = [
 interface UsageMessage {
   provider: string;
   model: string;
-  thinkingLevel?: string;
   cost: number;
   input: number;
   output: number;
@@ -35,7 +34,6 @@ interface UsageMessage {
   cacheWrite: number;
   timestamp: number;
   reasoning: number;
-  afterCompaction: boolean;
   source: "assistant" | "auxiliary";
 }
 
@@ -104,11 +102,10 @@ function tsOf(messageTimestamp: unknown, entryTimestamp: unknown): number {
   return 0;
 }
 
-function auxMessage(usage: { cost: number; input: number; output: number; cacheRead: number; cacheWrite: number; reasoning: number }, ts: number, sourceId: string): UsageMessage {
+function auxMessage(usage: { cost: number; input: number; output: number; cacheRead: number; cacheWrite: number; reasoning: number }, ts: number): UsageMessage {
   return {
     provider: "aux",
     model: "auxiliary",
-    thinkingLevel: undefined,
     cost: usage.cost,
     input: usage.input,
     output: usage.output,
@@ -116,7 +113,6 @@ function auxMessage(usage: { cost: number; input: number; output: number; cacheR
     cacheWrite: usage.cacheWrite,
     timestamp: ts,
     reasoning: usage.reasoning,
-    afterCompaction: false,
     source: "auxiliary",
   };
 }
@@ -130,7 +126,6 @@ function parseSessionFile(path: string): UsageFile {
   let sessionId = "";
   let cwd = "";
   let parentSession = "";
-  let thinkingLevel: string | undefined;
   let compactionPending = false;
   const messages: UsageMessage[] = [];
 
@@ -157,18 +152,17 @@ function parseSessionFile(path: string): UsageFile {
         break;
       }
       case "thinking_level_change": {
-        if (typeof entry.thinkingLevel === "string") thinkingLevel = entry.thinkingLevel;
         break;
       }
       case "compaction": {
         const usage = parseUsageAmount(entry.usage);
-        if (usage) messages.push(auxMessage(usage, tsOf(undefined, entry.timestamp), typeof entry.id === "string" ? entry.id : ""));
+        if (usage) messages.push(auxMessage(usage, tsOf(undefined, entry.timestamp)));
         compactionPending = true;
         break;
       }
       case "branch_summary": {
         const usage = parseUsageAmount(entry.usage);
-        if (usage) messages.push(auxMessage(usage, tsOf(undefined, entry.timestamp), typeof entry.id === "string" ? entry.id : ""));
+        if (usage) messages.push(auxMessage(usage, tsOf(undefined, entry.timestamp)));
         break;
       }
       case "message": {
@@ -180,7 +174,6 @@ function parseSessionFile(path: string): UsageFile {
             messages.push({
               provider: msg.provider,
               model: msg.model,
-              thinkingLevel,
               cost: usage.cost,
               input: usage.input,
               output: usage.output,
@@ -188,7 +181,6 @@ function parseSessionFile(path: string): UsageFile {
               cacheWrite: usage.cacheWrite,
               timestamp: tsOf(msg.timestamp, entry.timestamp),
               reasoning: usage.reasoning,
-              afterCompaction: compactionPending,
               source: "assistant",
             });
             compactionPending = false;
@@ -302,7 +294,7 @@ function addTokens(a: UsageTokenStats, b: UsageTokenStats): void {
 }
 
 /** Format a cost value the way the extension does (0 -> "-"). */
-export function formatUsageCost(cost: number): string {
+function formatUsageCost(cost: number): string {
   if (cost === 0) return "-";
   if (cost < 0.01) return `$${cost.toFixed(4)}`;
   if (cost < 1) return `$${cost.toFixed(2)}`;
@@ -312,7 +304,7 @@ export function formatUsageCost(cost: number): string {
 }
 
 /** Format a token count compactly (12.3K, 4.5M, ...). */
-export function formatUsageTokens(n: number): string {
+function formatUsageTokens(n: number): string {
   if (n >= 1e9) return `${(n / 1e9).toFixed(2)}B`;
   if (n >= 1e6) return `${(n / 1e6).toFixed(2)}M`;
   if (n >= 1e3) return `${(n / 1e3).toFixed(1)}K`;
