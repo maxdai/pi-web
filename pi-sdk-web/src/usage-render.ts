@@ -490,7 +490,9 @@ export function buildUsageData(sessionId?: string): UsageDataPayload | null {
           insights.push({
             kind: "alarm",
             stat: formatUsageCost(topModel.cost),
-            headline: `${topModel.name} is the costliest model (${((topModel.cost / totalCost) * 100).toFixed(0)}% of total)`,
+            // Model names can repeat across providers (e.g. deepseek-v4-
+            // flash on several providers) - show provider/model.
+            headline: `${top.name}/${topModel.name} is the costliest model (${((topModel.cost / totalCost) * 100).toFixed(0)}% of total)`,
             advice: "Check whether its output quality justifies the price.",
           });
         }
