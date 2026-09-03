@@ -1475,3 +1475,13 @@ body {
 #usage-close:hover {
   color: var(--text);
 }
+
+.configured-badge {
+  font-size: 9px;
+  color: var(--dim);
+  background: var(--tool-pending-bg);
+  padding: 1px 4px;
+  border-radius: 3px;
+  margin-left: 4px;
+  vertical-align: middle;
+}

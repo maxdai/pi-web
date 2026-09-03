@@ -611,6 +611,11 @@ export class PiWebServer {
         break;
       }
       case "get_scoped_models":
+        // Refresh model catalogs (e.g. pi-deepinfra's lazy catalog swap)
+        // before broadcasting, so late-swapped models (zai-org/GLM-5.3-
+        // Flash etc.) appear in the list like they do in the TUI. Timeout
+        // is bounded by the refresh implementation (network wait).
+        await this.session.modelRuntime.refresh().catch(() => {});
         this.broadcast({
           type: "scoped_models",
           data: {
@@ -620,6 +625,11 @@ export class PiWebServer {
               thinkingLevel: s.thinkingLevel,
             })),
             available: this.session.modelRuntime.getAvailableSnapshot(),
+            // Settings' enabled-model patterns. TUI's scoped-models selector
+            // also shows configured patterns that have no matching provider
+            // model (diagnostic no-match) - mirror that so configured models
+            // (e.g. deepinfra/zai-org/GLM-5.3-Flash) aren't missing here.
+            configured: this.session.settingsManager.getEnabledModels() ?? [],
           },
         });
         break;

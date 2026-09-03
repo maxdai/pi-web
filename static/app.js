@@ -2369,7 +2369,18 @@ class PiWebClient {
 
   handleScopedModels(data) {
     if (this.modalMode !== 'scoped-models') return;
-    this.scopedModelsAll = data.available || [];
+    const available = data.available || [];
+    // Merge settings' configured model patterns (e.g. deepinfra/zai-org/
+    // GLM-5.3-Flash) that have no matching provider model - TUI's selector
+    // shows these as configured entries (no-match diagnostics) too.
+    const known = new Set(available.map((m) => `${m.provider}/${m.id}`));
+    const configured = (data.configured || [])
+      .filter((p) => !known.has(p))
+      .map((p) => {
+        const slash = p.indexOf('/');
+        return { provider: p.slice(0, slash), id: p.slice(slash + 1), configured: true };
+      });
+    this.scopedModelsAll = [...available, ...configured];
     this.scopedModelsData = data;
     this.scopedModelsSelected = new Set(
       (data.scoped || []).map((s) => `${s.provider}/${s.id}`),
@@ -2395,7 +2406,7 @@ class PiWebClient {
         return (
           `<div class="modal-item scoped-model ${checked ? 'selected' : ''}" data-key="${key}">` +
           `<span class="modal-check">${checked ? '☑' : '☐'}</span>` +
-          `<span class="modal-item-name">${this.escapeHtml(key)}</span>` +
+          `<span class="modal-item-name">${this.escapeHtml(key)}${m.configured ? ' <span class="configured-badge">[configured]</span>' : ''}</span>` +
           `</div>`
         );
       })
