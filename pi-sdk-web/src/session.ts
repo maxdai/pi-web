@@ -8,10 +8,7 @@
 import { join, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
-  DefaultResourceLoader,
-  SettingsManager,
   SessionManager,
-  getAgentDir,
   type InlineExtension,
   type SessionInfo,
 } from "@earendil-works/pi-coding-agent";

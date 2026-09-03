@@ -16,7 +16,7 @@
  */
 
 import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { join, sep } from "node:path";
+import { join } from "node:path";
 import { homedir } from "node:os";
 
 const SESSIONS_DIRS = [
@@ -72,7 +72,6 @@ interface RawUsage {
   cacheRead?: number;
   cacheWrite?: number;
   reasoning?: number;
-  totalTokens?: number;
   cost?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; total?: number };
 }
 
@@ -126,7 +125,6 @@ function parseSessionFile(path: string): UsageFile {
   let sessionId = "";
   let cwd = "";
   let parentSession = "";
-  let compactionPending = false;
   const messages: UsageMessage[] = [];
 
   let content: string;
@@ -162,7 +160,6 @@ function parseSessionFile(path: string): UsageFile {
           // create a 1970 spike in the hourly graph or leak out of all tabs.
           if (ts > 0) messages.push(auxMessage(usage, ts));
         }
-        compactionPending = true;
         break;
       }
       case "branch_summary": {
@@ -193,7 +190,6 @@ function parseSessionFile(path: string): UsageFile {
               reasoning: usage.reasoning,
               source: "assistant",
             });
-            compactionPending = false;
           }
         }
         break;

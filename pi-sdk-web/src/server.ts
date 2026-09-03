@@ -19,7 +19,6 @@ import {
   ModelRegistry,
   VERSION,
   type AgentSession,
-  type AgentSessionEvent,
   type ExtensionCommandContext,
   type SessionStats,
 } from "@earendil-works/pi-coding-agent";

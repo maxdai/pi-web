@@ -214,7 +214,6 @@ class PiWebClient {
     this.streaming = {
       active: false,
       el: null,
-      role: 'assistant',
     };
 
     // Tool call rendering state: map toolCallId -> element
@@ -617,10 +616,6 @@ class PiWebClient {
     }
   }
 
-  getStats() {
-    this.send({ type: 'get_stats' });
-  }
-
   // ------------------------------------------------------------------
   // Markdown rendering
   // ------------------------------------------------------------------
@@ -853,7 +848,6 @@ class PiWebClient {
   toggleSpecial(div) {
     const expanded = div.dataset.expanded === 'true';
     div.dataset.expanded = expanded ? 'false' : 'true';
-    div.classList.toggle('expanded', !expanded);
     this.applySpecialBlock(div);
   }
 
@@ -864,7 +858,7 @@ class PiWebClient {
     }
     this.toolTimers.clear();
     this.toolEls.clear();
-    this.streaming = { active: false, el: null, role: 'assistant' };
+    this.streaming = { active: false, el: null };
     // Drop stale UI state from the previous session (on /resume reload)
     const widgets = document.getElementById('widgets');
     if (widgets) {
@@ -1011,7 +1005,7 @@ class PiWebClient {
   }
 
   resetStreaming() {
-    this.streaming = { active: false, el: null, role: 'assistant' };
+    this.streaming = { active: false, el: null };
   }
 
   // ------------------------------------------------------------------
@@ -1169,7 +1163,7 @@ class PiWebClient {
     div.appendChild(body);
     this.contentEl.appendChild(div);
 
-    this.streaming = { active: true, el: div, body: body, role: 'assistant' };
+    this.streaming = { active: true, el: div, body: body };
     this.renderAssistantContent(message, body);
   }
 
@@ -1322,7 +1316,6 @@ class PiWebClient {
   toggleToolExpand(div) {
     const expanded = div.dataset.expanded === 'true';
     div.dataset.expanded = expanded ? 'false' : 'true';
-    div.classList.toggle('expanded', !expanded);
     this.applyToolPreview(div);
   }
 
@@ -2031,20 +2024,6 @@ class PiWebClient {
     this.scrollToBottom();
   }
 
-  showToast(message, type) {
-    let container = document.getElementById('toast-container');
-    if (!container) return;
-    const toast = document.createElement('div');
-    toast.className = 'toast' + (type ? ` toast-${type}` : '');
-    // Extension notify messages may carry ANSI escapes (theme.fg); render them.
-    toast.innerHTML = ansiToHtml(String(message));
-    container.appendChild(toast);
-    setTimeout(() => {
-      toast.classList.add('toast-hide');
-      setTimeout(() => toast.remove(), 300);
-    }, type === 'error' ? 8000 : 5000);
-  }
-
   // ------------------------------------------------------------------
   // Usage panel (dedicated big panel for /usage, rendered from the
   // server-aggregated usage_data payload)
@@ -2147,19 +2126,6 @@ class PiWebClient {
     return '$' + c.toFixed(1);
   }
 
-  usageRow(stat) {
-    const t = stat.tokens || {};
-    return [
-      this.fmtTokens(t.input),
-      this.fmtTokens(t.output),
-      this.fmtTokens((t.cacheRead || 0) + (t.cacheWrite || 0)),
-      this.fmtTokens((t.total === undefined ? (t.input || 0) + (t.output || 0) + (t.cacheRead || 0) + (t.cacheWrite || 0) : t.total)),
-      this.fmtCost(stat.cost),
-      String(stat.messages),
-      String(stat.sessions),
-    ];
-  }
-
   renderUsageBody() {
     const body = document.getElementById('usage-body');
     if (!body) return;
@@ -2199,7 +2165,6 @@ class PiWebClient {
         const key = 'p:' + p.name;
         const expanded = this.usageExpanded.has(key);
         const tr = rowFor(p.name, p, false, false);
-        tr.classList.add('usage-clickable');
         tr.addEventListener('click', () => {
           if (this.usageExpanded.has(key)) this.usageExpanded.delete(key);
           else this.usageExpanded.add(key);
@@ -2392,7 +2357,6 @@ class PiWebClient {
       this.modalList.innerHTML = '<div class="modal-message">No other sessions available</div>';
       return;
     }
-    this.resumeSessions = sessions;
     this.renderModalItems(
       sessions.map((s) => ({ name: s.name || s.id, desc: s.cwd, value: s.path })),
       (item) => {
