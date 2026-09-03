@@ -156,13 +156,23 @@ function parseSessionFile(path: string): UsageFile {
       }
       case "compaction": {
         const usage = parseUsageAmount(entry.usage);
-        if (usage) messages.push(auxMessage(usage, tsOf(undefined, entry.timestamp)));
+        if (usage) {
+          const ts = tsOf(undefined, entry.timestamp);
+          // ts===0 means no timestamp was recoverable - skip so it can't
+          // create a 1970 spike in the hourly graph or leak out of all tabs.
+          if (ts > 0) messages.push(auxMessage(usage, ts));
+        }
         compactionPending = true;
         break;
       }
       case "branch_summary": {
         const usage = parseUsageAmount(entry.usage);
-        if (usage) messages.push(auxMessage(usage, tsOf(undefined, entry.timestamp)));
+        if (usage) {
+          const ts = tsOf(undefined, entry.timestamp);
+          // ts===0 means no timestamp was recoverable - skip so it can't
+          // create a 1970 spike in the hourly graph or leak out of all tabs.
+          if (ts > 0) messages.push(auxMessage(usage, ts));
+        }
         break;
       }
       case "message": {
@@ -330,6 +340,19 @@ function periodStart(key: string, now: number): number {
   return 0; // allTime
 }
 
+/** Exclusive upper bound of a tab window (see periodStart: lastWeek ends at
+ * this Monday 00:00; today/thisWeek/last30Days/allTime end at 'now'). */
+function periodEnd(key: string, now: number): number {
+  if (key === "lastWeek") {
+    const d = new Date(now);
+    d.setHours(0, 0, 0, 0);
+    const day = d.getDay() === 0 ? 6 : d.getDay() - 1;
+    d.setDate(d.getDate() - day);
+    return d.getTime();
+  }
+  return now;
+}
+
 /**
  * Aggregate collected session usage into the structured payload the web
  * panel renders. Returns null when no usage data exists. When sessionId
@@ -373,7 +396,8 @@ export function buildUsageData(sessionId?: string): UsageDataPayload | null {
       }
       for (const key of TAB_KEYS) {
         const start = periodStart(key, now);
-        if (ts < start) continue;
+        const end = periodEnd(key, now);
+        if (ts < start || ts >= end) continue;
         const tab = tabs[key];
         tab.totals.messages += 1;
         tab.totals.cost += m.cost;

@@ -970,7 +970,9 @@ class PiWebClient {
       default:
         break;
     }
-    this.scrollToBottom();
+    // Only auto-scroll when the user is already at the bottom (reading
+    // history must not be yanked down by incoming events).
+    if (this.wasAtBottom()) this.scrollToBottom();
   }
 
   onMessageStart(message) {
@@ -1799,6 +1801,12 @@ class PiWebClient {
   }
 
   closeModal() {
+    // If an extension dialog (select/confirm/input/editor) was open, notify
+    // the server that it was cancelled - otherwise the extension's promise
+    // never settles.
+    if (this.currentExtRequest && this.currentExtRequest.id) {
+      this.send({ type: 'extension_ui_response', id: this.currentExtRequest.id, cancelled: true });
+    }
     this.modalOverlay.style.display = 'none';
     this.modalList.innerHTML = '';
     this.modalSearch.value = '';

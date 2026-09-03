@@ -180,6 +180,18 @@ export class PiWebServer {
       // would stay hidden until the new session's first turn event.
       const extStatus = this.uiContext.getStatusSnapshot();
       this.broadcast({ type: "ext_status", data: extStatus });
+      // Same for widgets (e.g. todos overlay): clearContent() wipes #widgets
+      // and there is no other channel after switching.
+      for (const [key, w] of Object.entries(this.uiContext.getWidgetSnapshot())) {
+        this.broadcast({
+          type: "extension_ui_request",
+          id: crypto.randomUUID(),
+          method: "setWidget",
+          widgetKey: key,
+          widgetLines: w.lines,
+          widgetPlacement: w.placement,
+        });
+      }
     }
   }
 
@@ -740,7 +752,13 @@ export class PiWebServer {
     this.unsubscribe = null;
     try {
       const result = await this.runtime.switchSession(path);
-      if (result.cancelled) return;
+      if (result.cancelled) {
+        // switchSession was cancelled (e.g. session_before_switch veto): the
+        // old session is still live and its events stopped - resubscribe to
+        // keep the server usable.
+        await this.bindCurrentSession(false);
+        return;
+      }
     } catch (err) {
       // Rebind hook already ran on failure? No: on error the old session may be
       // gone - resubscribe defensively to keep the server usable.
