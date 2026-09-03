@@ -248,12 +248,16 @@ body {
   overflow-x: hidden;
   padding: 8px;
   min-width: 0;
+  /* Bordered, rounded message area (distinct region vs sidebar/footer) */
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin: 3px 0;
 }
 
 #sidebar {
   width: 200px;
   flex-shrink: 0;
-  border-left: 1px solid var(--border);
+  /* scroll-view now has its own right border - no duplicate divider */
   padding: 8px;
   overflow-y: auto;
 }
