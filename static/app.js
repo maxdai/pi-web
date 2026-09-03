@@ -189,6 +189,12 @@ class PiWebClient {
     this.loadedResourcesEl = document.getElementById('loaded-resources');
     this.footerEl = document.getElementById('footer-line');
     this.inputEl = document.getElementById('input');
+    // Input history (TUI parity): all submitted inputs (messages, !bash,
+    // /commands) plus this session's user messages from history, browsed
+    // with the ↑/↓ buttons next to the input box.
+    this.inputHistory = [];
+    this.historyIndex = -1; // -1 = not browsing (composing new input)
+    this.historyDraft = '';
     this.sendBtn = document.getElementById('send-btn');
     this.abortBtn = document.getElementById('abort-btn');
     this.commandMenuEl = document.getElementById('command-menu');
@@ -1117,6 +1123,11 @@ class PiWebClient {
 
   appendUserMessage(message) {
     const text = this.messageText(message);
+    // History population (TUI renderInitialMessages populateHistory):
+    // session user messages seed the input history, deduped.
+    if (text && this.inputHistory[this.inputHistory.length - 1] !== text) {
+      this.inputHistory.push(text);
+    }
     const div = document.createElement('div');
     div.className = 'message user';
     const role = document.createElement('div');
@@ -1570,9 +1581,41 @@ class PiWebClient {
   // Input
   // ------------------------------------------------------------------
 
+  navigateHistory(dir) {
+    // dir: -1 = previous (older), +1 = next (newer). Browsing starts from
+    // the newest entry when the input is empty; editing resets the browse.
+    if (this.inputHistory.length === 0) return;
+    if (this.historyIndex === -1) {
+      // Not browsing yet: stash the current draft, start at newest entry.
+      this.historyDraft = this.inputEl.value;
+      this.historyIndex = this.inputHistory.length - 1;
+    } else {
+      this.historyIndex += dir;
+    }
+    if (this.historyIndex >= this.inputHistory.length) {
+      // Past the newest entry: restore the draft, stop browsing.
+      this.historyIndex = -1;
+      this.inputEl.value = this.historyDraft;
+    } else if (this.historyIndex < 0) {
+      this.historyIndex = 0;
+      this.inputEl.value = this.inputHistory[0];
+    } else {
+      this.inputEl.value = this.inputHistory[this.historyIndex];
+    }
+    // Keep caret at end, keep focus in the box.
+    this.inputEl.setSelectionRange(this.inputEl.value.length, this.inputEl.value.length);
+  }
+
   sendMessage() {
     const text = this.inputEl.value.trim();
     if (!text) return;
+    // Record every submitted input (messages, !bash, /commands) in the
+    // history - TUI parity (handleSubmit addToHistory on all paths).
+    if (this.inputHistory[this.inputHistory.length - 1] !== text) {
+      this.inputHistory.push(text);
+    }
+    this.historyIndex = -1;
+    this.historyDraft = '';
     if (text.startsWith('!')) {
       // TUI parity: "!cmd" runs bash (output goes to LLM context);
       // "!!cmd" runs bash with excludeFromContext (output NOT sent to LLM).
@@ -1682,6 +1725,11 @@ class PiWebClient {
     if (this.sendBtn) {
       this.sendBtn.addEventListener('click', () => this.sendMessage());
     }
+    // Input history navigation (↑/↓ buttons beside the input box)
+    const histPrev = document.getElementById('history-prev');
+    const histNext = document.getElementById('history-next');
+    if (histPrev) histPrev.addEventListener('click', () => this.navigateHistory(-1));
+    if (histNext) histNext.addEventListener('click', () => this.navigateHistory(1));
     if (this.abortBtn) {
       this.abortBtn.addEventListener('click', () => {
         this.send({ type: 'abort' });

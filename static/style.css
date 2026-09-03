@@ -1485,3 +1485,28 @@ body {
   margin-left: 4px;
   vertical-align: middle;
 }
+
+/* Input history navigation (↑/↓ buttons beside the input box) */
+.history-nav {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+}
+
+.history-nav button {
+  width: 24px;
+  height: 20px;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--dim);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.history-nav button:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
