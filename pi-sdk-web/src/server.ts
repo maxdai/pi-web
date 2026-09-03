@@ -116,7 +116,23 @@ export class PiWebServer {
     // Some components (ws internals, MCP-style extensions) accumulate 'close'
     // listeners on the server; raise the limit to avoid MaxListenersExceededWarning
     this.httpServer.setMaxListeners(50);
-    this.wsServer = new WebSocketServer({ server: this.httpServer, path: "/ws" });
+    this.wsServer = new WebSocketServer({
+      server: this.httpServer,
+      path: "/ws",
+      // CSWSH guard: only accept same-origin connections (the page itself).
+      // ws://127.0.0.1:<port> has no Origin header requirement in browsers,
+      // but cross-origin pages would send their own Origin - reject those.
+      verifyClient: (info: { origin: string; secure: boolean; req: unknown }) => {
+        const origin = info.origin;
+        if (!origin) return true; // non-browser clients (no Origin header)
+        try {
+          const u = new URL(origin);
+          return u.hostname === "127.0.0.1" || u.hostname === "localhost" || u.hostname === "::1";
+        } catch {
+          return false;
+        }
+      },
+    });
     this.wsServer.setMaxListeners(50);
     this.wsServer.on("connection", (ws) => this.handleConnection(ws));
 
