@@ -674,6 +674,8 @@ body {
   color: var(--accent);
   font-weight: 600;
   margin-bottom: 2px;
+  cursor: pointer;
+  user-select: none;
 }
 
 .widget-body {

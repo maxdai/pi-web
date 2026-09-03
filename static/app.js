@@ -1095,21 +1095,35 @@ class PiWebClient {
     }
 
     let el = widgetsEl.querySelector(`[data-widget-key="${CSS.escape(key)}"]`);
+    let body;
     if (!el) {
       el = document.createElement('div');
       el.className = 'widget-block';
       el.dataset.widgetKey = key;
+      el.dataset.expanded = 'false'; // collapsible; collapsed by default
       const title = document.createElement('div');
       title.className = 'widget-title';
-      const body = document.createElement('div');
+      body = document.createElement('div');
       body.className = 'widget-body';
+      body.style.display = 'none'; // collapsed by default
+      // Click the title to expand/collapse (keeps the widget compact).
+      title.addEventListener('click', () => {
+        const expanded = el.dataset.expanded === 'true';
+        el.dataset.expanded = expanded ? 'false' : 'true';
+        body.style.display = expanded ? 'none' : 'block';
+        title.textContent = (expanded ? '▸ ' : '▾ ') + el.dataset.widgetKey;
+      });
       el.appendChild(title);
       el.appendChild(body);
       widgetsEl.appendChild(el);
+    } else {
+      body = el.querySelector('.widget-body');
     }
-    el.querySelector('.widget-title').textContent = key;
+    // Header label with collapsible indicator (kept in sync).
+    const titleEl = el.querySelector('.widget-title');
+    titleEl.textContent = (el.dataset.expanded === 'true' ? '▾ ' : '▸ ') + key;
     // ANSI escapes (extension theme) render as colored spans per line.
-    el.querySelector('.widget-body').innerHTML = (req.widgetLines || [])
+    body.innerHTML = (req.widgetLines || [])
       .map((line) => ansiToHtml(String(line)))
       .join('<br>');
     widgetsEl.style.display = 'block';
