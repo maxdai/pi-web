@@ -879,6 +879,11 @@ class PiWebClient {
   // ------------------------------------------------------------------
 
   renderEvent(ev) {
+    // Capture stickiness BEFORE the handler mutates the DOM: updates that
+    // grow content (message_update, tool deltas) increase scrollHeight, so
+    // checking wasAtBottom() after the fact would miss "user was already at
+    // the bottom" and stop following the stream.
+    const wasAtBottom = this.wasAtBottom();
     switch (ev.type) {
       case 'agent_start':
         this.status.working++;
@@ -964,9 +969,9 @@ class PiWebClient {
       default:
         break;
     }
-    // Only auto-scroll when the user is already at the bottom (reading
-    // history must not be yanked down by incoming events).
-    if (this.wasAtBottom()) this.scrollToBottom();
+    // Auto-scroll only if the user was at the bottom before the event
+    // (reading history must not be yanked down by incoming events).
+    if (wasAtBottom) this.scrollToBottom();
   }
 
   onMessageStart(message) {
