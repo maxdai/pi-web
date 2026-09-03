@@ -1123,6 +1123,11 @@ class PiWebClient {
 
   appendUserMessage(message) {
     const text = this.messageText(message);
+    // History population (TUI renderInitialMessages populateHistory):
+    // session user messages seed the input history, deduped.
+    if (text && this.inputHistory[this.inputHistory.length - 1] !== text) {
+      this.inputHistory.push(text);
+    }
     const div = document.createElement('div');
     div.className = 'message user';
     const role = document.createElement('div');
@@ -1605,11 +1610,7 @@ class PiWebClient {
     const text = this.inputEl.value.trim();
     if (!text) return;
     // Record every submitted input (messages, !bash, /commands) in the
-    // history - TUI parity (handleSubmit addToHistory on all paths). Only
-    // the ORIGINAL input text is recorded: Pi expands /prompt & friends into
-    // the user message, and session user messages are that expansion - so
-    // the history must not be filled from rendered messages (would show
-    // expanded text instead of the command line).
+    // history - TUI parity (handleSubmit addToHistory on all paths).
     if (this.inputHistory[this.inputHistory.length - 1] !== text) {
       this.inputHistory.push(text);
     }
