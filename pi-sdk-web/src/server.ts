@@ -12,7 +12,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { readFile, unlink } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { dirname, join, resolve, sep } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   AgentSessionRuntime,
@@ -31,6 +31,19 @@ const DEFAULT_PORT = 4080;
 // Static frontend: prefer the in-package copy (built by `npm run build` for
 // global installs), fall back to the repo-root static/ during development.
 const PACKAGE_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+
+/** Format a local file extension path for the sidebar: relative to baseDir,
+ * with the ".pi/extensions/" prefix and the entry suffix (".ts"/".js"/"/index")
+ * stripped, e.g. ".../.pi/extensions/import-repro.ts" -> "import-repro",
+ * ".../extensions/refresh-deepinfra/index.ts" -> "refresh-deepinfra". */
+function describeLocalExtension(entryPath: string, baseDir?: string): string {
+  const rel = baseDir
+    ? relative(baseDir, entryPath).replace(/\\/g, "/")
+    : entryPath.replace(/\\/g, "/");
+  let name = rel.replace(/^extensions\//, "");
+  name = name.replace(/\/index\.[jt]s$/, "").replace(/\.[jt]s$/, "");
+  return name || rel;
+}
 // Static frontend source:
 //  - dev (tsx runs src/server.ts): always the repo-root static/ (live files)
 //  - published (dist/server.js): the built copy at dist/static (packaged)
@@ -468,9 +481,23 @@ export class PiWebServer {
       const list: Array<{ name: string; version: string }> = [];
       const seen = new Set<string>();
       for (const ext of result.extensions) {
-        // ext.path points at the extension entry (e.g. .../lib/node_modules/
-        // pi-magic-context/dist/index.js); walk up to the nearest package.json
-        // for the name/version.
+        const sourceInfo = (ext as { sourceInfo?: { origin?: string; scope?: string; baseDir?: string } })
+          .sourceInfo;
+        // Local file extensions (~/.pi/agent/extensions/*.ts or project
+        // .pi/extensions/*.ts): the nearest package.json is the HOST repo's
+        // (e.g. Pi's own monorepo root) and would show a misleading name.
+        // Show the extension file name + scope instead.
+        if (sourceInfo?.origin === "top-level") {
+          const name = describeLocalExtension(ext.path, sourceInfo.baseDir);
+          const key = `local:${ext.path}`;
+          if (!seen.has(key)) {
+            seen.add(key);
+            list.push({ name, version: sourceInfo.scope ?? "local" });
+          }
+          continue;
+        }
+        // Package extensions: walk up to the nearest package.json (e.g.
+        // .../node_modules/pi-magic-context/dist/index.js -> pi-magic-context)
         let dir = dirname(ext.path);
         while (dir !== dirname(dir)) {
           const pkgFile = join(dir, "package.json");
