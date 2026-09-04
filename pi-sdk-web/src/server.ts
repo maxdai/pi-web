@@ -481,6 +481,12 @@ export class PiWebServer {
       const list: Array<{ name: string; version: string }> = [];
       const seen = new Set<string>();
       for (const ext of result.extensions) {
+        // Inline extensions (Pi built-ins like <inline:llama.cpp>, hidden:
+        // true) are virtual - no package.json, no disk entry. Skip them so
+        // the sidebar lists only real, on-disk extensions.
+        if (ext.path.startsWith("<") && ext.path.endsWith(">")) {
+          continue;
+        }
         const sourceInfo = (ext as { sourceInfo?: { origin?: string; scope?: string; baseDir?: string } })
           .sourceInfo;
         // Local file extensions (~/.pi/agent/extensions/*.ts or project
