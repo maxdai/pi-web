@@ -513,7 +513,14 @@ export class PiWebServer {
               const key = pkg.name ?? ext.path;
               if (!seen.has(key)) {
                 seen.add(key);
-                list.push({ name: pkg.name ?? key, version: pkg.version ?? "?" });
+                // Append the install scope (user/project, from sourceInfo) so
+                // package extensions show the same dimension as local ones.
+                const scope = sourceInfo?.scope;
+                const version = pkg.version ?? "?";
+                list.push({
+                  name: pkg.name ?? key,
+                  version: scope ? `${version} · ${scope}` : version,
+                });
               }
             } catch {
               // unreadable package.json - skip
