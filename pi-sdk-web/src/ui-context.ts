@@ -242,14 +242,38 @@ export class WebUIContext implements ExtensionUIContext {
       // evaluate with a no-op tui stub and broadcast as text lines - the
       // browser renders them (with ANSI colors) in the widgets panel.
       try {
-        const stubTui = { requestRender: () => {}, invalidate: () => {} };
-        const component = (content as (tui: unknown, theme: Theme) => { render(w: number): string[] })(
+        const width = 78;
+        let component: { render(w: number): string[] } | undefined;
+        const stubTui = {
+          // TUI semantics: after registration, updates flow through
+          // tui.requestRender() -> the component's render() is re-invoked
+          // with CURRENT state. Without this a widget is frozen at its
+          // first-registration content (magic-context's todos overlay
+          // updates via requestRender, never via setWidget, so the browser
+          // kept showing the initial todo list).
+          requestRender: () => {
+            if (!component || typeof component.render !== "function") return;
+            let fresh: string[] | undefined;
+            try {
+              const out = component.render(width);
+              if (Array.isArray(out)) fresh = out.map((l) => String(l));
+            } catch {
+              // A throwing render must not wipe the widget: keep last lines.
+              return;
+            }
+            this.broadcastWidget(key, fresh, options?.placement);
+          },
+          invalidate: () => {
+            // TUI calls invalidate while tearing the widget down; the web
+            // host never tears a widget down on its own.
+          },
+        };
+        component = (content as (tui: unknown, theme: Theme) => { render(w: number): string[] })(
           stubTui,
           this.webTheme,
         );
         const render = component && component.render;
         if (typeof render === "function") {
-          const width = 78;
           const out = render(width);
           if (Array.isArray(out)) lines = out.map((l) => String(l));
         }
@@ -257,16 +281,25 @@ export class WebUIContext implements ExtensionUIContext {
         // fall through with no lines - widget renders empty
       }
     }
+    this.broadcastWidget(key, lines, options?.placement);
+  }
+
+  /** Broadcast a widget update and store it as the snapshot for new clients. */
+  private broadcastWidget(
+    key: string,
+    lines: string[] | undefined,
+    placement: string | undefined,
+  ): void {
     this.sink({
       type: "extension_ui_request",
       id: crypto.randomUUID(),
       method: "setWidget",
       widgetKey: key,
       widgetLines: lines,
-      widgetPlacement: options?.placement,
+      widgetPlacement: placement,
     });
     // Store for late-connecting browsers (replayed on WS connect).
-    this.widgetMap.set(key, { lines, placement: options?.placement });
+    this.widgetMap.set(key, { lines, placement });
   }
 
   // ------------------------------------------------------------------
