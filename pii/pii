@@ -6,7 +6,8 @@
   pii r <name>      Resume the session with the given name via `pi --session <id>`
   pii r <name> --web [port]   Start web mode (default port 4080)
   pii delete <name> Delete all sessions with the given name (asks for confirmation)
-  pii delete (unnamed)  Delete all sessions without a display name
+  pii delete (unnamed)  Delete all sessions without a display name (quote the
+                        argument in shells: pii delete "(unnamed)")
 """
 import json
 import os
