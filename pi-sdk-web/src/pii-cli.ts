@@ -11,6 +11,7 @@
  *   pii list [-l]
  *   pii r <name> [--web [port]]
  *   pii delete <name>
+ *   pii delete (unnamed)
  */
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";

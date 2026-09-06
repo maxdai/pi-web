@@ -6,6 +6,7 @@
   pii r <name>      Resume the session with the given name via `pi --session <id>`
   pii r <name> --web [port]   Start web mode (default port 4080)
   pii delete <name> Delete all sessions with the given name (asks for confirmation)
+  pii delete (unnamed)  Delete all sessions without a display name
 """
 import json
 import os
@@ -129,10 +130,15 @@ def confirm(prompt):
 
 
 def cmd_delete(name):
-    hits = [r for r in sessions() if r["name"] == name]
+    # "(unnamed)" matches sessions without a session_info name (listed as
+    # (unnamed) by cmd_list) - same pattern as Pi's "(unnamed)" display.
+    if name == "(unnamed)":
+        hits = [r for r in sessions() if not r["name"]]
+    else:
+        hits = [r for r in sessions() if r["name"] == name]
     if not hits:
         print(f"No session named '{name}'", file=sys.stderr)
-        names = sorted({r["name"] for r in sessions()})
+        names = sorted({r["name"] for r in sessions() if r["name"]})
         if names:
             print(f"Available names: {', '.join(names)}", file=sys.stderr)
         sys.exit(1)
@@ -141,8 +147,9 @@ def cmd_delete(name):
     else:
         print(f"{len(hits)} sessions named '{name}':")
     for r in hits:
+        label = r["name"] or "(unnamed)"
         print(f"  {r['id']}  {r['cwd']}  {r['file']}")
-        if not confirm(f"Delete {r['id']}? [y/N] "):
+        if not confirm(f"Delete {label} ({r['id']})? [y/N] "):
             print(f"  Skipped {r['id']}")
             continue
         try:
