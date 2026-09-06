@@ -519,7 +519,11 @@ body {
   padding: 0;
   font-size: 0.9em;
   line-height: 1.5;
-  white-space: pre;
+  /* Wrap long lines instead of horizontal scrolling (user preference:
+     no x-scroll in message content). pre-wrap breaks at spaces;
+     overflow-wrap:anywhere also breaks unbroken long tokens (base64 etc). */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .body-text blockquote,
