@@ -910,16 +910,13 @@ export class PiWebServer {
       }
     };
     const unsubscribe = this.session.subscribe(listener);
-    // hasUI by extension: most extensions degrade gracefully to notify()
-    // (our notify -> browser dialog/toast), but a few (magic-context) use
-    // ctx.ui.custom() - an extension-drawn TUI panel we can't render. For
-    // those, hasUI:false routes them to their own text fallback
-    // (appendEntry -> modal), same as before.
+    // hasUI per extension: extensions whose command handler draws a TUI
+    // panel via ctx.ui.custom() when hasUI=true need hasUI:false so they
+    // use their text fallback instead (pi-web can't render custom()).
+    // magic-context /ctx-status -> appendEntry (custom entry -> modal);
+    // aft-pi /aft-status (its only command) -> ui.notify(text).
+    // Everything else gets hasUI:true so notify-based output works.
     const cmdPath = (cmd.sourceInfo && cmd.sourceInfo.path) || "";
-    // Extensions whose command handlers draw a TUI panel via ctx.ui.custom()
-    // when hasUI=true - pi-web has no TUI renderer for custom(), so route
-    // them to hasUI:false and let their text fallback produce the output.
-    // magic-context: /ctx-status. aft-pi: /aft-status (its only command).
     const customOnly = /pi-magic-context|magic-context|aft-pi/.test(cmdPath);
     // While a command runs, tag extension notify() broadcasts with the
     // command name as title so the browser renders them as a titled,
