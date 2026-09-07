@@ -916,7 +916,11 @@ export class PiWebServer {
     // those, hasUI:false routes them to their own text fallback
     // (appendEntry -> modal), same as before.
     const cmdPath = (cmd.sourceInfo && cmd.sourceInfo.path) || "";
-    const customOnly = /pi-magic-context|magic-context/.test(cmdPath);
+    // Extensions whose command handlers draw a TUI panel via ctx.ui.custom()
+    // when hasUI=true - pi-web has no TUI renderer for custom(), so route
+    // them to hasUI:false and let their text fallback produce the output.
+    // magic-context: /ctx-status. aft-pi: /aft-status (its only command).
+    const customOnly = /pi-magic-context|magic-context|aft-pi/.test(cmdPath);
     try {
       // No sink wrapping: notify() broadcasts go through as-is (no title),
       // so the frontend renders them as persistent status lines - the same
