@@ -921,14 +921,27 @@ export class PiWebServer {
     // them to hasUI:false and let their text fallback produce the output.
     // magic-context: /ctx-status. aft-pi: /aft-status (its only command).
     const customOnly = /pi-magic-context|magic-context|aft-pi/.test(cmdPath);
+    // While a command runs, tag extension notify() broadcasts with the
+    // command name as title so the browser renders them as a titled,
+    // Markdown modal (e.g. /ctx-status, /aft-status) - the command's status
+    // report is a dialog, not a transient stream line. Restores the design
+    // in 68b56f1 (recorded in pi-web-design.md §14.9); 41112f5 had dropped
+    // the wrapping, so command notifies fell back to persistent status
+    // lines while custom-entry commands (/ctx-status) kept the modal.
+    const ui = this.uiContext as unknown as { sink: (obj: Record<string, unknown>) => void };
+    const originalSink = ui.sink;
     try {
-      // No sink wrapping: notify() broadcasts go through as-is (no title),
-      // so the frontend renders them as persistent status lines - the same
-      // as TUI's notify -> showStatus (a dim line appended to the chat),
-      // whether or not they come from a command. Command *results* (custom
-      // entries) still become titled modals via the captured entries below.
+      ui.sink = (obj) => {
+        const req = obj as { method?: string };
+        if (req && req.method === "notify") {
+          originalSink({ ...obj, title: `/${name}` });
+        } else {
+          originalSink(obj);
+        }
+      };
       await cmd.handler(args, this.buildCommandContext(customOnly ? false : true));
     } finally {
+      ui.sink = originalSink;
       unsubscribe();
     }
 
