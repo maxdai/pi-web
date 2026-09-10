@@ -375,6 +375,9 @@ class PiWebClient {
       case 'ext_status':
         this.applyExtStatusSnapshot(data.data);
         break;
+      case 'dialog_dismissed':
+        this.dismissExtensionDialog(data);
+        break;
       case 'extension_ui_request':
         this.handleExtensionUIRequest(data);
         break;
@@ -1994,6 +1997,21 @@ class PiWebClient {
       this.send({ type: 'extension_ui_response', id: req.id, cancelled: true });
       this.closeModal();
     });
+  }
+
+  /** Server-side dismissal (timeout / abort / session switch): the dialog was
+   * already settled server-side, so close the modal and say why - do NOT send
+   * an extension_ui_response (there is nothing left to answer). */
+  dismissExtensionDialog({ id, reason } = {}) {
+    if (!id || !this.currentExtRequest || this.currentExtRequest.id !== id) return;
+    const title = this.currentExtRequest.title || 'Dialog';
+    const why =
+      reason === 'aborted' ? 'operation aborted'
+      : reason === 'session-switch' ? 'session switched'
+      : 'no answer received in time';
+    this.currentExtRequest = null; // closeModal() must not answer for us
+    this.closeModal();
+    this.appendNotifyLine(`${title} — auto-dismissed (${why})`, 'warning');
   }
 
   openExtensionNotify(req) {

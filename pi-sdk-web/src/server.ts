@@ -111,7 +111,12 @@ export class PiWebServer {
     this.runtime = runtime;
     this.port = options.port ?? DEFAULT_PORT;
     this.staticDir = options.staticDir ?? STATIC_DIR;
-    this.uiContext = new WebUIContext((obj) => this.broadcast(obj));
+    this.uiContext = new WebUIContext((obj) => this.broadcast(obj), {
+      // Dialog timeout tier: with a browser attached the user may step away,
+      // so dialogs wait long; with none attached they settle after a short
+      // grace period instead of blocking the agent loop forever.
+      hasClients: () => this.clients.size > 0,
+    });
   }
 
   // ------------------------------------------------------------------
@@ -354,6 +359,13 @@ export class PiWebServer {
         widgetLines: w.lines,
         widgetPlacement: w.placement,
       });
+    }
+    // Pending extension dialogs (select/confirm/input/editor): the request may
+    // have been broadcast while this browser was away (closed tab, reload), so
+    // re-send it - otherwise the dialog would sit here unanswered and block the
+    // agent loop. The id is preserved so the response resolves the same dialog.
+    for (const request of this.uiContext.getPendingDialogs()) {
+      this.sendJson(ws, { type: "extension_ui_request", ...request });
     }
   }
 

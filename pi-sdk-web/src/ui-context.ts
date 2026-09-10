@@ -23,8 +23,38 @@ import { fileURLToPath } from "node:url";
 export type UiEventSink = (obj: unknown) => void;
 
 interface PendingDialog {
+  /** Settles the dialog promise (parse + cleanup happen in createDialog). */
   resolve: (value: unknown) => void;
+  /** Wire payload (with id) so a browser connecting later can be re-sent it. */
+  request: Record<string, unknown>;
   timer?: ReturnType<typeof setTimeout>;
+  signal?: AbortSignal;
+  onAbort?: () => void;
+}
+
+/**
+ * Default dialog timeouts (pi-web specific guard).
+ *
+ * TUI and RPC block until the client answers - the user is at the terminal, or
+ * the RPC client owns the timeout. A browser tab can be closed mid-turn, so a
+ * dialog nobody can see would block the agent loop forever. Two tiers:
+ *
+ * - browser attached: the user may have stepped away; wait long, then settle
+ *   with the dialog's default value (confirm -> false, others -> undefined);
+ * - no browser attached: a closed tab must not stall the loop, but a page
+ *   reload/reconnect takes a moment - short grace period, not instant.
+ *
+ * Extensions that pass their own `timeout` (ms) keep it.
+ */
+const DIALOG_TIMEOUT_MS = 10 * 60_000;
+const DIALOG_TIMEOUT_NO_CLIENT_MS = 60_000;
+
+export interface WebUIContextOptions {
+  /** Whether a browser is currently attached (provided by the server). */
+  hasClients?: () => boolean;
+  /** Override the timeout defaults above (tuning / tests). */
+  dialogTimeoutMs?: number;
+  dialogTimeoutNoClientMs?: number;
 }
 
 /**
@@ -93,14 +123,20 @@ export class WebUIContext implements ExtensionUIContext {
   /** Latest setWidget lines per key (persistent widgets, e.g. TodoOverlay):
    * replayed to late-connecting browsers like setStatus snapshots. */
   private readonly widgetMap = new Map<string, { lines: string[] | undefined; placement?: string }>();
+  private readonly hasClients: () => boolean;
+  private readonly dialogTimeoutMs: number;
+  private readonly dialogTimeoutNoClientMs: number;
 
   /** Current widget snapshot (key -> lines) for new connections. */
   getWidgetSnapshot(): Record<string, { lines: string[] | undefined; placement?: string }> {
     return Object.fromEntries(this.widgetMap);
   }
 
-  constructor(sink: UiEventSink) {
+  constructor(sink: UiEventSink, options: WebUIContextOptions = {}) {
     this.sink = sink;
+    this.hasClients = options.hasClients ?? (() => false);
+    this.dialogTimeoutMs = options.dialogTimeoutMs ?? DIALOG_TIMEOUT_MS;
+    this.dialogTimeoutNoClientMs = options.dialogTimeoutNoClientMs ?? DIALOG_TIMEOUT_NO_CLIENT_MS;
     // Pi's ExtensionRunner wraps the ui context with `{...ui}` (a shallow
     // spread) when building the extension ctx - class prototype members
     // (methods AND the theme getter) would be LOST by that spread (only own
@@ -133,21 +169,27 @@ export class WebUIContext implements ExtensionUIContext {
 
   /** Drop state tied to the previous session (dialogs + status snapshots). */
   clearSessionState(): void {
-    for (const pending of this.pending.values()) {
-      if (pending.timer) clearTimeout(pending.timer);
+    // Copy first: settling deletes from the map while we iterate.
+    for (const [id, pending] of [...this.pending.entries()]) {
       pending.resolve(undefined);
+      // The browser may still show the dialog; close it there too.
+      this.dismissDialog(id, "session-switch");
     }
     this.pending.clear();
     this.statusMap.clear();
     this.widgetMap.clear();
   }
 
+  /** Pending dialogs (wire payloads) for replay to a newly connected browser. */
+  getPendingDialogs(): Array<Record<string, unknown>> {
+    return [...this.pending.values()].map((entry) => entry.request);
+  }
+
   /** Handle a browser `extension_ui_response` message. */
   respond(id: string, response: { value?: string; confirmed?: boolean; cancelled?: boolean }): boolean {
     const pending = this.pending.get(id);
     if (!pending) return false;
-    this.pending.delete(id);
-    if (pending.timer) clearTimeout(pending.timer);
+    // Cleanup happens inside settle() (timer / abort listener / map entry).
     if (response.cancelled) {
       pending.resolve(undefined);
     } else if (response.confirmed !== undefined) {
@@ -158,23 +200,58 @@ export class WebUIContext implements ExtensionUIContext {
     return true;
   }
 
+  /** Tell the browser to close a dialog that already settled server-side. */
+  private dismissDialog(id: string, reason: "timeout" | "aborted" | "session-switch"): void {
+    this.sink({ type: "dialog_dismissed", id, reason });
+  }
+
   private createDialog<T>(
     request: Record<string, unknown>,
+    opts: ExtensionUIDialogOptions | undefined,
     defaultValue: T,
     parse: (value: unknown) => T,
   ): Promise<T> {
     const id = crypto.randomUUID();
+    // Same as Pi's RPC/TUI: an already-aborted dialog settles immediately.
+    if (opts?.signal?.aborted) return Promise.resolve(defaultValue);
     return new Promise<T>((resolve) => {
-      const timeoutMs = typeof request.timeout === "number" ? request.timeout : undefined;
-      const timer = timeoutMs
-        ? setTimeout(() => {
-            this.pending.delete(id);
-            resolve(defaultValue);
-          }, timeoutMs)
-        : undefined;
+      let settled = false;
+      const cleanup = () => {
+        const entry = this.pending.get(id);
+        if (!entry) return;
+        if (entry.timer) clearTimeout(entry.timer);
+        if (entry.signal && entry.onAbort) entry.signal.removeEventListener("abort", entry.onAbort);
+        this.pending.delete(id);
+      };
+      const settle = (value: unknown, useDefault: boolean) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        resolve(useDefault ? defaultValue : parse(value));
+      };
+      // Extension timeout (ms) wins; otherwise the web guard applies so a
+      // closed browser cannot block the agent loop forever.
+      const timeoutMs =
+        typeof opts?.timeout === "number"
+          ? opts.timeout
+          : this.hasClients()
+            ? this.dialogTimeoutMs
+            : this.dialogTimeoutNoClientMs;
+      const timer = setTimeout(() => {
+        settle(undefined, true);
+        this.dismissDialog(id, "timeout");
+      }, timeoutMs);
+      const onAbort = () => {
+        settle(undefined, true);
+        this.dismissDialog(id, "aborted");
+      };
+      opts?.signal?.addEventListener("abort", onAbort, { once: true });
       this.pending.set(id, {
-        resolve: (value) => resolve(parse(value)),
+        resolve: (value) => settle(value, false),
+        request: { ...request, id },
         timer,
+        signal: opts?.signal,
+        onAbort,
       });
       this.sink({ type: "extension_ui_request", id, ...request });
     });
@@ -187,25 +264,32 @@ export class WebUIContext implements ExtensionUIContext {
   select(title: string, options: string[], opts?: ExtensionUIDialogOptions): Promise<string | undefined> {
     return this.createDialog(
       { method: "select", title, options, timeout: opts?.timeout },
+      opts,
       undefined,
       (v) => (typeof v === "string" ? v : undefined),
     );
   }
 
   confirm(title: string, message: string, opts?: ExtensionUIDialogOptions): Promise<boolean> {
-    return this.createDialog({ method: "confirm", title, message, timeout: opts?.timeout }, false, (v) => v === true);
+    return this.createDialog(
+      { method: "confirm", title, message, timeout: opts?.timeout },
+      opts,
+      false,
+      (v) => v === true,
+    );
   }
 
   input(title: string, placeholder?: string, opts?: ExtensionUIDialogOptions): Promise<string | undefined> {
     return this.createDialog(
       { method: "input", title, placeholder, timeout: opts?.timeout },
+      opts,
       undefined,
       (v) => (typeof v === "string" ? v : undefined),
     );
   }
 
   editor(title: string, prefill?: string): Promise<string | undefined> {
-    return this.createDialog({ method: "editor", title, prefill }, undefined, (v) =>
+    return this.createDialog({ method: "editor", title, prefill }, undefined, undefined, (v) =>
       typeof v === "string" ? v : undefined,
     );
   }
