@@ -111,12 +111,10 @@ export class PiWebServer {
     this.runtime = runtime;
     this.port = options.port ?? DEFAULT_PORT;
     this.staticDir = options.staticDir ?? STATIC_DIR;
-    this.uiContext = new WebUIContext((obj) => this.broadcast(obj), {
-      // Dialog timeout tier: with a browser attached the user may step away,
-      // so dialogs wait long; with none attached they settle after a short
-      // grace period instead of blocking the agent loop forever.
-      hasClients: () => this.clients.size > 0,
-    });
+    // Dialog timeouts follow client presence (see WebUIContext): attached ->
+    // wait indefinitely (TUI parity), detached -> fallback guard so a closed
+    // tab cannot block the agent loop. handleConnection / ws close update it.
+    this.uiContext = new WebUIContext((obj) => this.broadcast(obj));
   }
 
   // ------------------------------------------------------------------
@@ -268,6 +266,7 @@ export class PiWebServer {
       } catch {
         // One broken client must not block delivery to the others
         this.clients.delete(client);
+        if (this.clients.size === 0) this.uiContext.setBrowserAttached(false);
       }
     }
   }
@@ -335,8 +334,16 @@ export class PiWebServer {
 
   private handleConnection(ws: WebSocket): void {
     this.clients.add(ws);
-    ws.on("close", () => this.clients.delete(ws));
-    ws.on("error", () => this.clients.delete(ws));
+    // A browser is watching again: pending dialogs stop counting down (see
+    // WebUIContext.setBrowserAttached) - the user gets unlimited time.
+    this.uiContext.setBrowserAttached(true);
+    const onGone = () => {
+      this.clients.delete(ws);
+      // Last browser left: arm the fallback so dialogs cannot block the loop.
+      if (this.clients.size === 0) this.uiContext.setBrowserAttached(false);
+    };
+    ws.on("close", onGone);
+    ws.on("error", onGone);
     ws.on("message", (data) => this.handleClientMessage(ws, String(data)));
 
     // Initial state (state + history), mirroring the Python bridge

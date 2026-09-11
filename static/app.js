@@ -204,6 +204,8 @@ class PiWebClient {
     this.modalList = document.getElementById('modal-list');
     this.modalClose = document.getElementById('modal-close');
     this.modalMode = null; // 'model' | 'thinking'
+    this.dialogCountdownTimer = null; // extension dialog countdown (TUI parity)
+    this.dialogCountdownBase = '';
     this.hasConnectedBefore = false;
     this.commandMenuIndex = -1;
     this.extStatus = {};
@@ -1794,11 +1796,35 @@ class PiWebClient {
 
   openModal(title, mode) {
     this.modalMode = mode;
+    this.stopDialogCountdown();
     this.modalTitle.textContent = title;
     this.modalSearch.value = '';
     this.modalList.innerHTML = '';
     this.modalOverlay.style.display = 'flex';
     this.modalSearch.focus();
+  }
+
+  /** Countdown for extension dialogs that carry a deadline (an extension's own
+   * opts.timeout). TUI shows the same "(Ns)" ticker; without a deadline the
+   * dialog waits indefinitely while a browser is attached. */
+  startDialogCountdown(req) {
+    this.stopDialogCountdown();
+    if (!req || typeof req.deadline !== 'number') return;
+    this.dialogCountdownBase = this.modalTitle.textContent || '';
+    const tick = () => {
+      const remain = Math.max(0, Math.ceil((req.deadline - Date.now()) / 1000));
+      this.modalTitle.textContent = `${this.dialogCountdownBase} (${remain}s)`;
+      if (remain <= 0) this.stopDialogCountdown();
+    };
+    tick();
+    this.dialogCountdownTimer = setInterval(tick, 1000);
+  }
+
+  stopDialogCountdown() {
+    if (this.dialogCountdownTimer) {
+      clearInterval(this.dialogCountdownTimer);
+      this.dialogCountdownTimer = null;
+    }
   }
 
   closeModal() {
@@ -1814,6 +1840,7 @@ class PiWebClient {
     this.modalSearch.style.display = 'block';
     this.modalMode = null;
     this.currentExtRequest = null;
+    this.stopDialogCountdown();
     this.inputEl.focus();
   }
 
@@ -1920,6 +1947,7 @@ class PiWebClient {
   openExtensionSelect(req) {
     this.openModal(req.title || 'Select', 'extension-select');
     this.currentExtRequest = req;
+    this.startDialogCountdown(req);
     this.modalSearch.style.display = 'block';
     const items = (req.options || []).map((opt) => ({ name: opt, desc: '', value: opt }));
     this.renderModalItems(items, (item) => {
@@ -1930,6 +1958,7 @@ class PiWebClient {
   openExtensionConfirm(req) {
     this.openModal(req.title || 'Confirm', 'extension-confirm');
     this.currentExtRequest = req;
+    this.startDialogCountdown(req);
     this.modalSearch.style.display = 'none';
     this.modalList.innerHTML = `
       <div class="modal-message">${this.escapeHtml(req.message || '')}</div>
@@ -1950,6 +1979,7 @@ class PiWebClient {
   openExtensionInput(req) {
     this.openModal(req.title || 'Input', 'extension-input');
     this.currentExtRequest = req;
+    this.startDialogCountdown(req);
     this.modalSearch.style.display = 'none';
     this.modalList.innerHTML = `
       <div class="modal-message">${this.escapeHtml(req.message || '')}</div>
@@ -1979,6 +2009,7 @@ class PiWebClient {
   openExtensionEditor(req) {
     this.openModal(req.title || 'Editor', 'extension-editor');
     this.currentExtRequest = req;
+    this.startDialogCountdown(req);
     this.modalSearch.style.display = 'none';
     this.modalList.innerHTML = `
       <div class="modal-message">${this.escapeHtml(req.title || '')}</div>

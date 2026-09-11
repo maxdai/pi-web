@@ -27,34 +27,41 @@ interface PendingDialog {
   resolve: (value: unknown) => void;
   /** Wire payload (with id) so a browser connecting later can be re-sent it. */
   request: Record<string, unknown>;
+  /** Timer currently armed for this dialog (extension timeout or fallback). */
   timer?: ReturnType<typeof setTimeout>;
+  /** Absolute deadline (epoch ms) when the extension supplied a timeout. */
+  deadline?: number;
+  /** The extension's own `opts.timeout` - honoured as-is, TUI parity. */
+  extensionTimeout?: number;
+  /** True while `timer` is the no-browser fallback (cancelled on reconnect). */
+  fallbackTimer: boolean;
   signal?: AbortSignal;
   onAbort?: () => void;
 }
 
 /**
- * Default dialog timeouts (pi-web specific guard).
+ * Fallback dialog timeout (pi-web specific guard).
  *
- * TUI and RPC block until the client answers - the user is at the terminal, or
- * the RPC client owns the timeout. A browser tab can be closed mid-turn, so a
- * dialog nobody can see would block the agent loop forever. Two tiers:
+ * TUI and RPC wait for an answer indefinitely - the user is at the terminal,
+ * or the RPC client owns the timeout. With a browser attached pi-web does the
+ * same: a dialog waits forever, so an answer is never taken away from the user
+ * just because they were busy elsewhere.
  *
- * - browser attached: the user may have stepped away; wait long, then settle
- *   with the dialog's default value (confirm -> false, others -> undefined);
- * - no browser attached: a closed tab must not stall the loop, but a page
- *   reload/reconnect takes a moment - short grace period, not instant.
+ * The one case that needs a guard is a browser that is NOT attached (tab
+ * closed mid-turn): nobody can answer, and an extension awaiting the dialog
+ * would block the agent loop forever. Then - and only then - the dialog
+ * settles after this grace period with its default value (confirm -> false,
+ * others -> undefined). Reconnecting cancels the fallback, so a user who comes
+ * back gets as much time as they need.
  *
- * Extensions that pass their own `timeout` (ms) keep it.
+ * Extensions that pass their own `timeout` (ms) keep it exactly (that timer is
+ * their decision, never cancelled here).
  */
-const DIALOG_TIMEOUT_MS = 10 * 60_000;
-const DIALOG_TIMEOUT_NO_CLIENT_MS = 60_000;
+const DIALOG_FALLBACK_TIMEOUT_MS = 10 * 60_000;
 
 export interface WebUIContextOptions {
-  /** Whether a browser is currently attached (provided by the server). */
-  hasClients?: () => boolean;
-  /** Override the timeout defaults above (tuning / tests). */
-  dialogTimeoutMs?: number;
-  dialogTimeoutNoClientMs?: number;
+  /** Override the no-browser fallback timeout (tuning / tests). */
+  fallbackTimeoutMs?: number;
 }
 
 /**
@@ -123,9 +130,9 @@ export class WebUIContext implements ExtensionUIContext {
   /** Latest setWidget lines per key (persistent widgets, e.g. TodoOverlay):
    * replayed to late-connecting browsers like setStatus snapshots. */
   private readonly widgetMap = new Map<string, { lines: string[] | undefined; placement?: string }>();
-  private readonly hasClients: () => boolean;
-  private readonly dialogTimeoutMs: number;
-  private readonly dialogTimeoutNoClientMs: number;
+  private readonly fallbackTimeoutMs: number;
+  /** Whether a browser is attached right now (updated by the server). */
+  private browserAttached = false;
 
   /** Current widget snapshot (key -> lines) for new connections. */
   getWidgetSnapshot(): Record<string, { lines: string[] | undefined; placement?: string }> {
@@ -134,9 +141,7 @@ export class WebUIContext implements ExtensionUIContext {
 
   constructor(sink: UiEventSink, options: WebUIContextOptions = {}) {
     this.sink = sink;
-    this.hasClients = options.hasClients ?? (() => false);
-    this.dialogTimeoutMs = options.dialogTimeoutMs ?? DIALOG_TIMEOUT_MS;
-    this.dialogTimeoutNoClientMs = options.dialogTimeoutNoClientMs ?? DIALOG_TIMEOUT_NO_CLIENT_MS;
+    this.fallbackTimeoutMs = options.fallbackTimeoutMs ?? DIALOG_FALLBACK_TIMEOUT_MS;
     // Pi's ExtensionRunner wraps the ui context with `{...ui}` (a shallow
     // spread) when building the extension ctx - class prototype members
     // (methods AND the theme getter) would be LOST by that spread (only own
@@ -205,6 +210,39 @@ export class WebUIContext implements ExtensionUIContext {
     this.sink({ type: "dialog_dismissed", id, reason });
   }
 
+  /**
+   * Browser presence changed (WS connect/disconnect). Only dialogs without an
+   * extension timeout are affected: while a browser is attached they wait
+   * forever (TUI parity - never take an answer away from the user), while no
+   * browser is attached a fallback timer keeps a closed tab from blocking the
+   * agent loop. Reconnecting cancels the fallback.
+   */
+  setBrowserAttached(attached: boolean): void {
+    if (this.browserAttached === attached) return;
+    this.browserAttached = attached;
+    for (const [id, entry] of [...this.pending.entries()]) {
+      if (entry.extensionTimeout !== undefined) continue; // extension's own timer
+      if (attached) {
+        if (entry.fallbackTimer && entry.timer) {
+          clearTimeout(entry.timer);
+          entry.timer = undefined;
+          entry.fallbackTimer = false;
+        }
+      } else if (!entry.timer) {
+        this.armFallbackTimer(id, entry);
+      }
+    }
+  }
+
+  /** Arm the no-browser fallback (settles with the dialog default). */
+  private armFallbackTimer(id: string, entry: PendingDialog): void {
+    entry.fallbackTimer = true;
+    entry.timer = setTimeout(() => {
+      entry.resolve(undefined);
+      this.dismissDialog(id, "timeout");
+    }, this.fallbackTimeoutMs);
+  }
+
   private createDialog<T>(
     request: Record<string, unknown>,
     opts: ExtensionUIDialogOptions | undefined,
@@ -229,31 +267,37 @@ export class WebUIContext implements ExtensionUIContext {
         cleanup();
         resolve(useDefault ? defaultValue : parse(value));
       };
-      // Extension timeout (ms) wins; otherwise the web guard applies so a
-      // closed browser cannot block the agent loop forever.
-      const timeoutMs =
-        typeof opts?.timeout === "number"
-          ? opts.timeout
-          : this.hasClients()
-            ? this.dialogTimeoutMs
-            : this.dialogTimeoutNoClientMs;
-      const timer = setTimeout(() => {
-        settle(undefined, true);
-        this.dismissDialog(id, "timeout");
-      }, timeoutMs);
       const onAbort = () => {
         settle(undefined, true);
         this.dismissDialog(id, "aborted");
       };
       opts?.signal?.addEventListener("abort", onAbort, { once: true });
-      this.pending.set(id, {
+
+      const extensionTimeout =
+        typeof opts?.timeout === "number" && opts.timeout > 0 ? opts.timeout : undefined;
+      const deadline = extensionTimeout !== undefined ? Date.now() + extensionTimeout : undefined;
+      const entry: PendingDialog = {
         resolve: (value) => settle(value, false),
-        request: { ...request, id },
-        timer,
+        // `deadline` lets the browser show the same countdown TUI does.
+        request: deadline !== undefined ? { ...request, id, deadline } : { ...request, id },
+        deadline,
+        extensionTimeout,
+        fallbackTimer: false,
         signal: opts?.signal,
         onAbort,
-      });
-      this.sink({ type: "extension_ui_request", id, ...request });
+      };
+      this.pending.set(id, entry);
+      if (extensionTimeout !== undefined) {
+        // The extension asked for this deadline - honour it exactly (TUI
+        // shows the same countdown and auto-dismisses on expiry).
+        entry.timer = setTimeout(() => {
+          settle(undefined, true);
+          this.dismissDialog(id, "timeout");
+        }, extensionTimeout);
+      } else if (!this.browserAttached) {
+        this.armFallbackTimer(id, entry);
+      }
+      this.sink({ type: "extension_ui_request", id, ...request, ...(deadline !== undefined ? { deadline } : {}) });
     });
   }
 
