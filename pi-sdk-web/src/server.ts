@@ -76,6 +76,33 @@ const STATS_REFRESH_EVENTS = new Set([
   "thinking_level_changed",
 ]);
 
+// ---------------------------------------------------------------------------
+// WebSocket backpressure guard.
+//
+// `ws.send()` queues in process memory without bound when the peer reads
+// slowly - a backgrounded/throttled tab is the common case. A long turn (LLM
+// deltas) or a long `!! … --follow` stream then grows the process until the
+// V8 heap dies (observed: FATAL ERROR: Reached heap limit after ~70 minutes).
+//
+// Two limits, per client:
+//   SOFT - above this, *self-healing* delta events are skipped rather than
+//          queued. They carry no unique information: message_update /
+//          tool_execution_update re-render from the full payload of the next
+//          event, and message_end / tool_execution_end / bash_result deliver
+//          the complete state.
+//   HARD - above this the client is treated as gone and terminated. The
+//          browser reconnects (static/app.js) and reloads, fetching fresh
+//          session history - so nothing is lost, and memory is bounded.
+// ---------------------------------------------------------------------------
+const WS_BUFFER_SOFT_LIMIT = 8 * 1024 * 1024;
+const WS_BUFFER_HARD_LIMIT = 64 * 1024 * 1024;
+const DROPPABLE_DELTA_EVENTS = new Set(["message_update", "tool_execution_update"]);
+
+/** RSS watermarks (MB) at which to log one diagnostic line: growth curve plus
+ * what each client has queued, so a future OOM report says where it went. */
+const MEMORY_LOG_THRESHOLDS_MB = [512, 1024, 1536, 2048];
+const MEMORY_LOG_INTERVAL_MS = 30_000;
+
 const MIME: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
   ".css": "text/css; charset=utf-8",
@@ -101,6 +128,11 @@ export class PiWebServer {
   private wsServer: WebSocketServer | null = null;
   private readonly clients = new Set<WebSocket>();
   private unsubscribe: (() => void) | null = null;
+  /** Clients currently over the soft buffer limit (delta skipping active). */
+  private readonly backpressured = new WeakSet<WebSocket>();
+  /** Memory watermarks already logged (diagnostics), and throttle clock. */
+  private readonly memoryLogged = new Set<number>();
+  private lastMemoryCheck = 0;
 
   /** Current session (may change on /resume session switching). */
   private get session(): AgentSession {
@@ -259,8 +291,36 @@ export class PiWebServer {
     } catch {
       return;
     }
-    for (const client of this.clients) {
+    const type = (obj as { type?: unknown }).type;
+    const droppable = typeof type === "string" && DROPPABLE_DELTA_EVENTS.has(type);
+    for (const client of [...this.clients]) {
       if (client.readyState !== WebSocket.OPEN) continue;
+      const buffered = client.bufferedAmount;
+      if (buffered > WS_BUFFER_HARD_LIMIT) {
+        // Far beyond reading - treat as gone. The browser reconnects and
+        // reloads, so no state is lost, and memory stays bounded.
+        console.warn(
+          `pi-web: client not reading (${(buffered / 1048576).toFixed(0)}MB queued) - closing it; ` +
+            "the browser will reconnect and reload history",
+        );
+        this.backpressured.delete(client);
+        client.terminate();
+        continue;
+      }
+      if (droppable && buffered > WS_BUFFER_SOFT_LIMIT) {
+        if (!this.backpressured.has(client)) {
+          this.backpressured.add(client);
+          console.warn(
+            `pi-web: client is behind (${(buffered / 1048576).toFixed(1)}MB queued) - ` +
+              "skipping stream deltas until it catches up",
+          );
+        }
+        continue;
+      }
+      if (this.backpressured.has(client) && buffered < WS_BUFFER_SOFT_LIMIT / 2) {
+        this.backpressured.delete(client);
+        console.warn("pi-web: client caught up - stream deltas resumed");
+      }
       try {
         client.send(message);
       } catch {
@@ -268,6 +328,30 @@ export class PiWebServer {
         this.clients.delete(client);
         if (this.clients.size === 0) this.uiContext.setBrowserAttached(false);
       }
+    }
+    this.maybeLogMemory();
+  }
+
+  /**
+   * One diagnostic line per RSS watermark (plus what each client has queued),
+   * so a future out-of-memory report shows where the growth went. Throttled:
+   * `broadcast` runs per streaming delta and memoryUsage() is not free.
+   */
+  private maybeLogMemory(): void {
+    const now = Date.now();
+    if (now - this.lastMemoryCheck < MEMORY_LOG_INTERVAL_MS) return;
+    this.lastMemoryCheck = now;
+    const { rss, heapUsed, heapTotal } = process.memoryUsage();
+    const rssMb = rss / 1048576;
+    for (const threshold of MEMORY_LOG_THRESHOLDS_MB) {
+      if (rssMb < threshold || this.memoryLogged.has(threshold)) continue;
+      this.memoryLogged.add(threshold);
+      const queued =
+        [...this.clients].map((c) => `${(c.bufferedAmount / 1048576).toFixed(1)}MB`).join(", ") || "no clients";
+      console.warn(
+        `pi-web: memory ${rssMb.toFixed(0)}MB (heap ${(heapUsed / 1048576).toFixed(0)}/` +
+          `${(heapTotal / 1048576).toFixed(0)}MB), queued per client: ${queued}`,
+      );
     }
   }
 
@@ -377,9 +461,16 @@ export class PiWebServer {
   }
 
   private sendJson(ws: WebSocket, obj: unknown): void {
-    if (ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify(obj));
+    if (ws.readyState !== WebSocket.OPEN) return;
+    // Same hard limit as broadcast(): the initial state/history snapshot is
+    // the largest single payload, so a client that never reads it must not be
+    // allowed to queue forever.
+    if (ws.bufferedAmount > WS_BUFFER_HARD_LIMIT) {
+      console.warn("pi-web: client not reading its initial snapshot - closing it");
+      ws.terminate();
+      return;
     }
+    ws.send(JSON.stringify(obj));
   }
 
   private buildState(): Record<string, unknown> {
