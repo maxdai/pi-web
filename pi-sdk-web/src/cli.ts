@@ -17,7 +17,10 @@ import {
   type CreateAgentSessionRuntimeFactory,
 } from "@earendil-works/pi-coding-agent";
 import { existsSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { totalmem } from "node:os";
 import { fileURLToPath } from "node:url";
+import { getHeapStatistics } from "node:v8";
 import { dirname, join } from "node:path";
 import { findSessionByName, listSessions, loadBuiltinExtensions } from "./session.ts";
 import { PiWebServer } from "./server.ts";
@@ -52,6 +55,80 @@ if (PI_CLI_ENTRY && process.argv[1] !== PI_CLI_ENTRY) {
 }
 
 const DEFAULT_PORT = 4080;
+
+// ---------------------------------------------------------------------------
+// Heap headroom for long sessions.
+//
+// A large session plus in-process extensions (magic-context's local embedding
+// model, historians, indexes) can outgrow Node's default old-space limit -
+// ~2.2GB on a 15GB host - and abort the server mid-turn with
+// "FATAL ERROR: Reached heap limit". pi-web therefore restarts itself once
+// with a larger --max-old-space-size, but only for the long-running `r`
+// command and only when the host has memory to spare.
+//
+// Override the target with PI_WEB_MAX_OLD_SPACE_MB=<mb>. An explicit
+// --max-old-space-size in NODE_OPTIONS / argv is always respected untouched,
+// and the restart happens at most once (PI_WEB_HEAP_REEXEC guard).
+// ---------------------------------------------------------------------------
+const DEFAULT_MAX_OLD_SPACE_MB = 4096;
+
+/** Current V8 old-space limit in MB (what the crash log calls the heap limit). */
+function heapLimitMb(): number {
+  return getHeapStatistics().heap_size_limit / (1024 * 1024);
+}
+
+function requestedHeapMb(): number {
+  const raw = Number(process.env.PI_WEB_MAX_OLD_SPACE_MB);
+  if (Number.isFinite(raw) && raw >= 512 && raw <= 32_768) return Math.floor(raw);
+  return DEFAULT_MAX_OLD_SPACE_MB;
+}
+
+/** Did the user (or a wrapper) already choose a heap size themselves? */
+function hasExplicitHeapFlag(): boolean {
+  const fromEnv = (process.env.NODE_OPTIONS ?? "").split(/\s+/);
+  return [...process.execArgv, ...fromEnv].some((arg) =>
+    /^--max[-_]old[-_]space[-_]size(=|$)/.test(arg),
+  );
+}
+
+/**
+ * Re-exec with a larger heap when needed. Returns true when a child has been
+ * started (the caller must stop: this process only waits for it).
+ */
+function ensureHeapHeadroom(): boolean {
+  if (process.env.PI_WEB_HEAP_REEXEC === "1") return false; // already restarted
+  if (hasExplicitHeapFlag()) return false; // user decided - leave it alone
+  const target = requestedHeapMb();
+  if (heapLimitMb() >= target * 0.95) return false; // close enough already
+  const totalMb = totalmem() / (1024 * 1024);
+  if (totalMb < target * 2) {
+    console.log(
+      `heap: keeping the default limit (${heapLimitMb().toFixed(0)}MB) - ` +
+        `raising it to ${target}MB needs ~${target * 2}MB of RAM, host has ${totalMb.toFixed(0)}MB`,
+    );
+    return false;
+  }
+  console.log(
+    `heap: restarting with --max-old-space-size=${target} (current limit ${heapLimitMb().toFixed(0)}MB)`,
+  );
+  const child = spawn(
+    process.execPath,
+    [`--max-old-space-size=${target}`, fileURLToPath(import.meta.url), ...process.argv.slice(2)],
+    { stdio: "inherit", env: { ...process.env, PI_WEB_HEAP_REEXEC: "1" } },
+  );
+  // Stay alive without acting on the signal ourselves: the child is in the
+  // same process group and runs its own graceful shutdown, and we exit with
+  // its status once it is done.
+  process.on("SIGINT", () => {});
+  process.on("SIGTERM", () => {});
+  child.on("exit", (code, signal) => process.exit(signal ? 1 : (code ?? 1)));
+  child.on("error", (err: Error) => {
+    console.error(`heap: failed to restart with a larger heap: ${err.message}`);
+    process.exit(1);
+  });
+  return true;
+}
+
 const DOC = `pi-web - browser Web access for Pi (via Pi SDK)
 
 Usage:
@@ -137,6 +214,7 @@ async function cmdResume(name: string, port: number): Promise<void> {
   const server = new PiWebServer(runtime, { port });
   await server.start();
   console.log(`server at http://127.0.0.1:${port}/ (session: ${info.name ?? info.id})`);
+  console.log(`heap limit: ${heapLimitMb().toFixed(0)}MB`);
 
   let shuttingDown = false;
   const shutdown = async (signal: string) => {
@@ -192,6 +270,9 @@ async function main(): Promise<void> {
       }
     }
     if (!name) throw new Error("usage: pi-web r <name> [--port <port>]");
+    // Before anything heavy (session open, extensions): make sure this process
+    // has enough heap. A restart here means the child takes over the command.
+    if (ensureHeapHeadroom()) return;
     await cmdResume(name, port ?? DEFAULT_PORT);
     return;
   }

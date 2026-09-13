@@ -154,12 +154,19 @@ pi-web list                 # 列出所有 session
 
 > 从你自己的终端启动（继承 shell 环境变量，如 `DEEPSEEK_API_KEY`，否则对应 provider 的模型不可用）。
 
+**堆内存**：大会话加上进程内扩展（本地 embedding、historian、索引）可能超过 Node 默认的堆上限（本机约 2.2GB），导致 `FATAL ERROR: Reached heap limit` 中途崩溃。`pi-web r` 启动时若发现上限不足，会**自动以更大的 `--max-old-space-size`（默认 4096MB）重启一次**，并在终端打印生效值（`heap limit: 4288MB`）。
+
+- 自定义目标：`PI_WEB_MAX_OLD_SPACE_MB=8192 pi-web r <name>`；
+- 自己指定过 `--max-old-space-size`（argv 或 `NODE_OPTIONS`）时**完全尊重你的设置**，不再自动调整；
+- 宿主机内存不足目标的两倍时保持默认，不会强行提升。
+
 ### 启动后
 
 终端显示：
 
 ```
 server at http://127.0.0.1:4080/
+heap limit: 4288MB
 ```
 
 用浏览器打开该地址即可。
