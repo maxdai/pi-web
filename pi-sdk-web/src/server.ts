@@ -26,6 +26,7 @@ import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { WebSocket, WebSocketServer } from "ws";
 import { listSessions } from "./session.ts";
 import { WebUIContext } from "./ui-context.ts";
+import { logError, logWarn } from "./log.ts";
 
 const DEFAULT_PORT = 4080;
 // Static frontend: prefer the in-package copy (built by `npm run build` for
@@ -232,7 +233,7 @@ export class PiWebServer {
         try {
           process.chdir(cwd);
         } catch {
-          console.error(`Session cwd not found (${cwd}), keeping current directory`);
+          logError(`Session cwd not found (${cwd}), keeping current directory`);
         }
       }
       this.broadcastState();
@@ -299,7 +300,7 @@ export class PiWebServer {
       if (buffered > WS_BUFFER_HARD_LIMIT) {
         // Far beyond reading - treat as gone. The browser reconnects and
         // reloads, so no state is lost, and memory stays bounded.
-        console.warn(
+        logWarn(
           `pi-web: client not reading (${(buffered / 1048576).toFixed(0)}MB queued) - closing it; ` +
             "the browser will reconnect and reload history",
         );
@@ -310,7 +311,7 @@ export class PiWebServer {
       if (droppable && buffered > WS_BUFFER_SOFT_LIMIT) {
         if (!this.backpressured.has(client)) {
           this.backpressured.add(client);
-          console.warn(
+          logWarn(
             `pi-web: client is behind (${(buffered / 1048576).toFixed(1)}MB queued) - ` +
               "skipping stream deltas until it catches up",
           );
@@ -319,7 +320,7 @@ export class PiWebServer {
       }
       if (this.backpressured.has(client) && buffered < WS_BUFFER_SOFT_LIMIT / 2) {
         this.backpressured.delete(client);
-        console.warn("pi-web: client caught up - stream deltas resumed");
+        logWarn("pi-web: client caught up - stream deltas resumed");
       }
       try {
         client.send(message);
@@ -348,7 +349,7 @@ export class PiWebServer {
       this.memoryLogged.add(threshold);
       const queued =
         [...this.clients].map((c) => `${(c.bufferedAmount / 1048576).toFixed(1)}MB`).join(", ") || "no clients";
-      console.warn(
+      logWarn(
         `pi-web: memory ${rssMb.toFixed(0)}MB (heap ${(heapUsed / 1048576).toFixed(0)}/` +
           `${(heapTotal / 1048576).toFixed(0)}MB), queued per client: ${queued}`,
       );
@@ -466,7 +467,7 @@ export class PiWebServer {
     // the largest single payload, so a client that never reads it must not be
     // allowed to queue forever.
     if (ws.bufferedAmount > WS_BUFFER_HARD_LIMIT) {
-      console.warn("pi-web: client not reading its initial snapshot - closing it");
+      logWarn("pi-web: client not reading its initial snapshot - closing it");
       ws.terminate();
       return;
     }

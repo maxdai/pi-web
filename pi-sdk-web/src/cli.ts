@@ -24,6 +24,7 @@ import { getHeapStatistics } from "node:v8";
 import { dirname, join } from "node:path";
 import { findSessionByName, listSessions, loadBuiltinExtensions } from "./session.ts";
 import { PiWebServer } from "./server.ts";
+import { logError, logInfo } from "./log.ts";
 
 // ---------------------------------------------------------------------------
 // Pretend to be Pi for in-process extensions.
@@ -102,13 +103,13 @@ function ensureHeapHeadroom(): boolean {
   if (heapLimitMb() >= target * 0.95) return false; // close enough already
   const totalMb = totalmem() / (1024 * 1024);
   if (totalMb < target * 2) {
-    console.log(
+    logInfo(
       `heap: keeping the default limit (${heapLimitMb().toFixed(0)}MB) - ` +
         `raising it to ${target}MB needs ~${target * 2}MB of RAM, host has ${totalMb.toFixed(0)}MB`,
     );
     return false;
   }
-  console.log(
+  logInfo(
     `heap: restarting with --max-old-space-size=${target} (current limit ${heapLimitMb().toFixed(0)}MB)`,
   );
   const child = spawn(
@@ -123,7 +124,7 @@ function ensureHeapHeadroom(): boolean {
   process.on("SIGTERM", () => {});
   child.on("exit", (code, signal) => process.exit(signal ? 1 : (code ?? 1)));
   child.on("error", (err: Error) => {
-    console.error(`heap: failed to restart with a larger heap: ${err.message}`);
+    logError(`heap: failed to restart with a larger heap: ${err.message}`);
     process.exit(1);
   });
   return true;
@@ -165,7 +166,7 @@ async function cmdResume(name: string, port: number): Promise<void> {
       process.chdir(cwd);
     } catch {
       // Session cwd no longer exists - keep current directory (same as pii)
-      console.error(`Session cwd not found (${cwd}), keeping current directory`);
+      logError(`Session cwd not found (${cwd}), keeping current directory`);
     }
   }
 
@@ -213,14 +214,14 @@ async function cmdResume(name: string, port: number): Promise<void> {
 
   const server = new PiWebServer(runtime, { port });
   await server.start();
-  console.log(`server at http://127.0.0.1:${port}/ (session: ${info.name ?? info.id})`);
-  console.log(`heap limit: ${heapLimitMb().toFixed(0)}MB`);
+  logInfo(`server at http://127.0.0.1:${port}/ (session: ${info.name ?? info.id})`);
+  logInfo(`heap limit: ${heapLimitMb().toFixed(0)}MB`);
 
   let shuttingDown = false;
   const shutdown = async (signal: string) => {
     if (shuttingDown) return; // Repeated Ctrl+C must not re-enter teardown
     shuttingDown = true;
-    console.log(`\n${signal} received, shutting down...`);
+    logInfo(`${signal} received, shutting down...`);
     try {
       await server.stop();
     } catch {
