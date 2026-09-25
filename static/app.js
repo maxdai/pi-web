@@ -783,6 +783,20 @@ class PiWebClient {
   }
 
   renderCustom(entry) {
+    // Custom messages (pi.sendMessage) render only when `display` is truthy -
+    // TUI gates both the live message and the history entry on exactly that
+    // check (interactive-mode.js, case "custom": if (message.display)).
+    // Two shapes reach this function:
+    //   live    - message_start's app message: { role: "custom", customType,
+    //             content, display } (no `type` field)
+    //   history - a session entry: { type: "custom_message", ... }
+    // Magic-context's ceiling-nudge writes display:false reminders that must
+    // stay invisible; mcp-adapter passes a string (truthy), which TUI renders.
+    const isCustomMessage =
+      entry.type === 'custom_message' || (entry.type === undefined && entry.role === 'custom');
+    if (isCustomMessage && !entry.display) {
+      return;
+    }
     // Status traces (appendEntry entries without data.text, e.g.
     // minimode-status {mode, tools}) are file/event-stream only — TUI
     // renders nothing for them, so neither do we.
@@ -985,6 +999,12 @@ class PiWebClient {
       this.appendUserMessage(message);
     } else if (message.role === 'assistant') {
       this.startAssistantMessage(message);
+    } else if (message.role === 'custom') {
+      // pi.sendMessage emits message_start with the app message (customType /
+      // content / display) - render it live instead of waiting for a page
+      // reload. renderCustom applies the display gate for both this shape and
+      // the history entry shape.
+      this.renderCustom(message);
     }
     // toolResult handled via tool_execution events
   }
