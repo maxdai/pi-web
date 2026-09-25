@@ -661,6 +661,7 @@ pi-sdk-web 已实现并通过浏览器验收（本地提交，随本设计一起
   - **薄适配层（必需）**：实时是 appMessage（`role:"custom"`，**无 `type`**），历史是 session entry（`type:"custom_message"`）——判据需同时识别两种形态：`entry.type === 'custom_message' || (entry.type === undefined && entry.role === 'custom')`。（初版只判 `type` 导致实时 `display:false` 漏网，playwright 复验时发现并修正。）
   - **验证**：playwright 对真实客户端方法覆盖 7 条路径——live display=true→渲染、live display=false→静默、history display=false→静默、history display=true→渲染、history display=字符串→渲染、appendEntry 无 data.text→静默（原规则）、appendEntry 有 data.text→渲染（原规则），另校验标签与正文，无 pageerror。
 - **已知限制**：扩展命令的新会话操作（newSession/fork/switchSession 等）在命令上下文中返回 `{cancelled:true}` 占位；trust 流程简化（默认信任）；`session.dispose` 退出清理。
+- **可复用冒烟测试（维护者工具，2026-09）**：`tools/smoke.mjs` 对**已在运行**的实例做只读、零 token 的确定性回归（28 项）——部署一致性（服务端 `app.js`/`style.css` 与仓库源文件哈希比对，专治「改了没生效/忘了重启/全局是旧版」）、页面加载无 pageerror、WS 连接即收到 state/history 与 widget 快照重放、渲染路径（markdown／代码块 pre-wrap 无横滚／widget＋ANSI→HTML／tool block／ext-status／扩展消息 display 判据含实时与历史两种形态）、交互（dialog 倒计时与清理、confirm 回传 payload、滚动门控含「上滚不被拽下」）。注入节点按 `smoke` 标签精确清理，不污染视图；退出码 0/1/2 分别表示通过/有失败/依赖缺失或服务不可达。依赖 `playwright-core`（pi-sdk-web devDependency）+ `~/.cache/ms-playwright` 的 Chromium（`PI_WEB_CHROMIUM` 可覆盖）。负向验证：人为改 `static/app.js` 后该检查 FAIL 并打印两侧哈希；服务不可达时干净退出码 2。
 - **验证记录**：`npm run verify` 全链路通过（createAgentSession → bindExtensions → subscribe → prompt → 事件流）；`pi-web list`/`r` 正常；`/ctx-status` 弹窗实测成功；`check-argv` 模拟 resolvePiInvocation 验证 spawn real Pi CLI（0.3.9 发布）；`check-spawn` 端到端验证子进程产出标准 JSON 协议输出（0.3.9 发布前）。
 
 ### 14.10 会话切换（/resume，2025-08 设计，待实施）

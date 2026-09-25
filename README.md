@@ -117,6 +117,9 @@ pii list                     # 验证（需 Python 3）
 pi-sdk-web 已发布到 npm（`pi-sdk-web`，作者 maxdai）。发布新版本流程：
 
 ```bash
+# 0. （建议）发布前跑一次冒烟测试——需先起着服务，见下节
+node tools/smoke.mjs
+
 # 1. 修改代码后，在仓库根提升版本
 #    （pi-sdk-web 子目录执行 npm version 只改 package.json，不会自动 git commit）
 npm version patch                          # 或 minor / major（改 pi-sdk-web/package.json）
@@ -133,7 +136,25 @@ cd pi-sdk-web && npm publish
 cd .. && git push --follow-tags
 ```
 
-> 认证：本机 `~/.npmrc` 配置 npm 的 **Automation/Granular token**（npmjs.com → Access Tokens 创建）后发布零交互；用户升级命令：`npm update -g pi-sdk-web`。
+> 认证：本机 `~/.npmrc` 配置 npm 的 **Automation/Granular token**（npmjs.org → Access Tokens 创建）后发布零交互；用户升级命令：`npm update -g pi-sdk-web`。
+
+## 冒烟测试（维护者）
+
+`tools/smoke.mjs` 对**已在运行的** pi-web 实例做只读回归检查（28 项）：部署一致性、页面加载、WS 协议快照、渲染路径（markdown／代码块折行／widget／ANSI／扩展消息 display 判据）、交互（dialog 倒计时、confirm 回传、滚动门控）。
+
+```bash
+pi-web r <session>            # 另开一个终端先起服务（默认 4080）
+node tools/smoke.mjs          # 也可：node tools/smoke.mjs http://127.0.0.1:4090
+node tools/smoke.mjs --headed # 需要肉眼观察时
+```
+
+- **只读**：不发送 prompt／命令，不改动被测会话；测试页面是脚本自开的无头实例，与你的浏览器互不影响。
+- **零 token**：全部为确定性 DOM/协议断言，不调用 LLM。
+- **不污染视图**：注入的测试节点按 `smoke` 标签精确清理。
+- **部署漂移检测**：比对服务端提供的 `app.js`/`style.css` 与仓库源文件哈希——「改了没生效／忘了重启／全局装的是旧版」会直接 FAIL 并打印两侧哈希。
+- 退出码：`0` 全部通过，`1` 有失败，`2` 依赖缺失或服务不可达。
+- 依赖：`playwright-core`（pi-sdk-web 的 devDependency，`npm install` 即得）与一个 Chromium（自动用 `~/.cache/ms-playwright` 下的缓存，可用 `PI_WEB_CHROMIUM` 覆盖）。
+
 
 ## 使用
 
