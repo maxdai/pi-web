@@ -151,6 +151,20 @@ function applySgrCode(params, style) {
 // Match ANSI escape sequences: ESC[ followed by params and ending with 'm'
 const ANSI_REGEX = /\x1b\[([\d;]*)m/g;
 
+// ---------------------------------------------------------------------------
+// Modal 键盘导航（对齐 TUI 的 select 语义）
+//
+// 判据是「单选 vs 多选」，不是对话框类型：
+//   单选（resume / model / thinking / 扩展 select / confirm）→ Enter = 选中当前项
+//   多选（scoped-models）→ Enter = 切换勾选（TUI scoped-models-selector: "Toggle on Enter"）
+// 导航键：↑↓ 循环移动，PageUp/PageDown 跳 10 项，Esc 关闭。
+// ---------------------------------------------------------------------------
+/** 需要搜索框的 modal 形态（列表型）；其余形态不显示搜索框 */
+const SEARCHABLE_MODAL_MODES = new Set(['resume', 'model', 'thinking', 'scoped-models', 'extension-select']);
+/** 光标导航适用的形态（列表型 + 单选 confirm 的两个按钮） */
+const CURSOR_MODAL_MODES = new Set([...SEARCHABLE_MODAL_MODES, 'extension-confirm']);
+const CURSOR_PAGE_STEP = 10;
+
 /** Convert ANSI-escaped text to HTML with inline styles. */
 function ansiToHtml(text) {
   const style = createEmptyStyle();
@@ -203,7 +217,9 @@ class PiWebClient {
     this.modalSearch = document.getElementById('modal-search');
     this.modalList = document.getElementById('modal-list');
     this.modalClose = document.getElementById('modal-close');
-    this.modalMode = null; // 'model' | 'thinking'
+    this.modalEl = document.getElementById('modal');
+    this.modalMode = null; // 'model' | 'thinking' | 'resume' | 'scoped-models' | 'extension-*'
+    this.modalCursor = -1; // 键盘光标所在项（-1 = 未设置）
     this.dialogCountdownTimer = null; // extension dialog countdown (TUI parity)
     this.dialogCountdownBase = '';
     this.hasConnectedBefore = false;
@@ -1792,12 +1808,26 @@ class PiWebClient {
       });
     }
     document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape' && this.modalOverlay && this.modalOverlay.style.display !== 'none') {
+      const modalOpen = this.modalOverlay && this.modalOverlay.style.display !== 'none';
+      if (e.key === 'Escape' && modalOpen) {
         this.closeModal();
       }
       const usageOverlay = document.getElementById('usage-overlay');
       if (e.key === 'Escape' && usageOverlay && usageOverlay.style.display !== 'none') {
         this.closeUsagePanel();
+      }
+      // 列表型 modal 的键盘导航（搜索框保持焦点时 ↑↓ 归我们处理，←→ 仍可编辑文字）
+      if (!modalOpen || !CURSOR_MODAL_MODES.has(this.modalMode)) return;
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        this.moveModalCursor(e.key === 'ArrowDown' ? 1 : -1);
+      } else if (e.key === 'PageDown' || e.key === 'PageUp') {
+        e.preventDefault();
+        this.moveModalCursor(e.key === 'PageDown' ? CURSOR_PAGE_STEP : -CURSOR_PAGE_STEP);
+      } else if (e.key === 'Enter' && !e.shiftKey) {
+        // 单选 = 选中当前项（含 confirm 的 Confirm 按钮）；多选 = 切换勾选
+        e.preventDefault();
+        this.activateModalCursor();
       }
     });
     const usageClose = document.getElementById('usage-close');
@@ -1820,8 +1850,48 @@ class PiWebClient {
     this.modalTitle.textContent = title;
     this.modalSearch.value = '';
     this.modalList.innerHTML = '';
+    this.modalCursor = -1;
+    // 搜索框可见性由这里统一决定（此前由各调用方分别设置，导致 model/thinking/
+    // scoped-models 会继承上一个 modal 的可见性）；焦点也跟着走——只在搜索框
+    // 可见时聚焦它，否则按键会落进一个看不见的输入框。
+    const searchable = SEARCHABLE_MODAL_MODES.has(mode);
+    this.modalSearch.style.display = searchable ? 'block' : 'none';
     this.modalOverlay.style.display = 'flex';
-    this.modalSearch.focus();
+    if (searchable) this.modalSearch.focus();
+    else this.modalEl?.focus();
+  }
+
+  /** 光标可导航的元素：confirm 为两个按钮（单选），其余为列表项。 */
+  modalCursorItems() {
+    if (this.modalMode === 'extension-confirm') {
+      return [...this.modalList.querySelectorAll('.modal-actions .modal-btn')];
+    }
+    return [...this.modalList.querySelectorAll('.modal-item')];
+  }
+
+  /** 移动键盘光标（循环，与站内命令菜单一致）。 */
+  moveModalCursor(delta) {
+    const items = this.modalCursorItems();
+    if (items.length === 0) return;
+    const base =
+      this.modalCursor < 0 ? (delta > 0 ? 0 : items.length - 1) : this.modalCursor + delta;
+    this.setModalCursor(((base % items.length) + items.length) % items.length);
+  }
+
+  /** 设置键盘光标并滚动入视野。 */
+  setModalCursor(idx) {
+    const items = this.modalCursorItems();
+    this.modalCursor = idx;
+    items.forEach((el, i) => el.classList.toggle('cursor', i === idx));
+    if (idx >= 0 && items[idx]) items[idx].scrollIntoView({ block: 'nearest' });
+  }
+
+  /** Enter：单选列表 = 选中当前项；多选列表 = 切换勾选（复用各自的点击逻辑）。 */
+  activateModalCursor() {
+    const items = this.modalCursorItems();
+    if (items.length === 0) return;
+    const el = this.modalCursor >= 0 ? items[this.modalCursor] : items[0];
+    el?.click();
   }
 
   /** Countdown for extension dialogs that carry a deadline (an extension's own
@@ -1857,8 +1927,8 @@ class PiWebClient {
     this.modalOverlay.style.display = 'none';
     this.modalList.innerHTML = '';
     this.modalSearch.value = '';
-    this.modalSearch.style.display = 'block';
     this.modalMode = null;
+    this.modalCursor = -1;
     this.currentExtRequest = null;
     this.stopDialogCountdown();
     this.inputEl.focus();
@@ -1897,12 +1967,20 @@ class PiWebClient {
           `</div>`,
       )
       .join('');
-    this.modalList.querySelectorAll('.modal-item').forEach((el, i) => {
+    const rendered = this.modalList.querySelectorAll('.modal-item');
+    rendered.forEach((el, i) => {
       el.addEventListener('click', () => {
         this.modalOnSelect(filtered[i]);
         this.closeModal();
       });
     });
+    // 过滤后应用光标：保持原位置（越界则收敛），无结果时清零
+    if (rendered.length > 0) {
+      const clamped = this.modalCursor < 0 ? 0 : Math.min(this.modalCursor, rendered.length - 1);
+      this.setModalCursor(clamped);
+    } else {
+      this.modalCursor = -1;
+    }
   }
 
   handleExtensionUIRequest(req) {
@@ -1968,7 +2046,6 @@ class PiWebClient {
     this.openModal(req.title || 'Select', 'extension-select');
     this.currentExtRequest = req;
     this.startDialogCountdown(req);
-    this.modalSearch.style.display = 'block';
     const items = (req.options || []).map((opt) => ({ name: opt, desc: '', value: opt }));
     this.renderModalItems(items, (item) => {
       this.send({ type: 'extension_ui_response', id: req.id, value: item.value });
@@ -1979,7 +2056,6 @@ class PiWebClient {
     this.openModal(req.title || 'Confirm', 'extension-confirm');
     this.currentExtRequest = req;
     this.startDialogCountdown(req);
-    this.modalSearch.style.display = 'none';
     this.modalList.innerHTML = `
       <div class="modal-message">${this.escapeHtml(req.message || '')}</div>
       <div class="modal-actions">
@@ -1994,13 +2070,14 @@ class PiWebClient {
       this.send({ type: 'extension_ui_response', id: req.id, cancelled: true });
       this.closeModal();
     });
+    // 单选：光标初始在第一项（Confirm）——TUI 的 ["Yes","No"] 列表默认 index 0
+    this.setModalCursor(0);
   }
 
   openExtensionInput(req) {
     this.openModal(req.title || 'Input', 'extension-input');
     this.currentExtRequest = req;
     this.startDialogCountdown(req);
-    this.modalSearch.style.display = 'none';
     this.modalList.innerHTML = `
       <div class="modal-message">${this.escapeHtml(req.message || '')}</div>
       <input class="modal-input" type="text" placeholder="${this.escapeHtml(req.placeholder || '')}">
@@ -2030,7 +2107,6 @@ class PiWebClient {
     this.openModal(req.title || 'Editor', 'extension-editor');
     this.currentExtRequest = req;
     this.startDialogCountdown(req);
-    this.modalSearch.style.display = 'none';
     this.modalList.innerHTML = `
       <div class="modal-message">${this.escapeHtml(req.title || '')}</div>
       <textarea class="modal-editor" rows="10">${this.escapeHtml(req.prefill || '')}</textarea>
@@ -2073,8 +2149,7 @@ class PiWebClient {
     if (req.title && String(req.title).startsWith('/')) {
       this.openModal(req.title || 'Notification', 'extension-notify');
       this.currentExtRequest = req;
-      this.modalSearch.style.display = 'none';
-      this.modalList.innerHTML = `<div class="modal-message body-text">${this.renderMarkdown(req.message || '')}</div>`;
+        this.modalList.innerHTML = `<div class="modal-message body-text">${this.renderMarkdown(req.message || '')}</div>`;
       return;
     }
     this.appendNotifyLine(req.message || '', req.notifyType);
@@ -2527,6 +2602,12 @@ class PiWebClient {
        </div>` +
       rows;
     this.updateScopedUnsavedHint();
+    const renderedScoped = this.modalList.querySelectorAll('.modal-item');
+    if (renderedScoped.length > 0) {
+      this.setModalCursor(this.modalCursor < 0 ? 0 : Math.min(this.modalCursor, renderedScoped.length - 1));
+    } else {
+      this.modalCursor = -1;
+    }
     this.modalList.querySelectorAll('.scoped-model').forEach((el) => {
       el.addEventListener('click', () => {
         const key = el.dataset.key;

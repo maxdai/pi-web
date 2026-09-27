@@ -882,6 +882,21 @@ body {
   color: var(--accent);
 }
 
+/* 键盘光标：列表型 modal 用 ↑↓ 移动的当前项。
+   与 .selected 相互独立——后者在 scoped-models 里表示「已勾选」，
+   一个条目可以同时是「勾选中」且「光标所在」。 */
+.modal-item.cursor {
+  background: var(--accent-hover);
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+/* 单选对话框（confirm）的两个按钮用同一光标机制（TUI 的 Yes/No 列表同义） */
+.modal-btn.cursor {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
 #modal-close {
   margin-top: 8px;
   color: var(--dim);

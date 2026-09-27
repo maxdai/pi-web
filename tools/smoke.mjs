@@ -293,6 +293,56 @@ const results = await page.evaluate(() => {
   const notYanked = scroller.scrollTop === topBefore;
   out.scrollGate = { atBottomWhenBottom: atBottom, notAtBottomAfterScrollUp: notAtBottom, notYankedWhileScrolledUp: notYanked };
 
+  // ---- 键盘导航（判据是单选/多选，不是对话框类型；对齐 TUI select 语义）----
+  const key = (k) =>
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true }));
+  const cursorIndex = () => client.modalCursorItems().findIndex((el) => el.classList.contains("cursor"));
+  const picked = [];
+  const sentNav = [];
+  const origSendNav = client.send.bind(client);
+
+  // 单选列表（用 model 形态 + 自造列表，避免真的切换模型）：↑↓ 循环、PageDown、Enter 选中
+  client.openModal("Smoke List", "model");
+  const listSearchVisible = client.modalSearch.style.display;
+  client.renderModalItems([{ name: "a" }, { name: "b" }, { name: "c" }], (item) => picked.push(item.name));
+  out.navList = { initial: cursorIndex(), searchVisible: listSearchVisible };
+  key("ArrowDown");
+  out.navList.afterDown = cursorIndex();
+  key("ArrowUp");
+  key("ArrowUp"); // 1 → 0 → 2（首尾循环）
+  out.navList.afterWrapUp = cursorIndex();
+  key("PageDown"); // 2 + 10 → 0（取模）
+  out.navList.afterPageDown = cursorIndex();
+  key("Enter"); // 选中光标项
+  out.navList.picked = picked.slice();
+
+  // confirm 是单选（Confirm/Cancel 两个按钮）：光标起始在第一项，Enter 激活之
+  client.send = (o) => sentNav.push(o);
+  client.openExtensionConfirm({ id: "smoke-nav-confirm", title: "T", message: "M" });
+  out.confirmNav = {
+    focus: document.activeElement?.id || document.activeElement?.tagName,
+    initial: cursorIndex(),
+    searchHidden: client.modalSearch.style.display,
+  };
+  key("ArrowDown");
+  out.confirmNav.afterDown = cursorIndex();
+  key("Enter"); // 激活第二项 = Cancel
+  out.confirmNav.sent = sentNav.map((m) => `${m.type}:${m.cancelled === true ? "cancelled" : ""}`);
+
+  // 多选（scoped-models）：Enter = 切换勾选（TUI scoped-models-selector "Toggle on Enter"）
+  client.openModal("Smoke Scoped", "scoped-models");
+  client.scopedModelsAll = [{ provider: "p", id: "m1" }, { provider: "p", id: "m2" }];
+  client.scopedModelsSelected = new Set(["p/m1"]);
+  client.scopedModelsSaved = true;
+  sentNav.length = 0;
+  client.renderScopedModelsList();
+  out.scopedNav = { initial: cursorIndex(), before: [...client.scopedModelsSelected] };
+  key("Enter"); // 光标在 p/m1（已勾选）→ 取消勾选
+  out.scopedNav.after = [...client.scopedModelsSelected];
+  out.scopedNav.sent = sentNav.map((m) => m.type);
+  client.send = origSendNav;
+  client.closeModal();
+
   // 清理本次注入的节点（按 smoke 标签精确识别，避免误判会话里本就存在的块）
   const cleanup = () => {
     for (const el of [...document.querySelectorAll(".special-block")]) {
@@ -334,6 +384,43 @@ check("ext-status 渲染", results.extStatus);
 check("dialog 倒计时显示 (Ns)", results.countdownTicking, results.dialogTitle);
 check("dialog 关闭后计时器清理", results.countdownCleared);
 check("confirm 取消回传 extension_ui_response", results.confirmCancel);
+check(
+  "键盘导航：列表光标 初始/↓/循环/PageDown",
+  results.navList.initial === 0 &&
+    results.navList.afterDown === 1 &&
+    results.navList.afterWrapUp === 2 &&
+    results.navList.afterPageDown === 0,
+  JSON.stringify(results.navList),
+);
+check(
+  "键盘导航：Enter 选中光标项（单选）",
+  results.navList.picked.length === 1 && results.navList.picked[0] === "a",
+  JSON.stringify(results.navList.picked),
+);
+check(
+  "confirm 作单选：光标起始在 Confirm、↓ 移动、Enter 激活",
+  results.confirmNav.initial === 0 &&
+    results.confirmNav.afterDown === 1 &&
+    results.confirmNav.sent.some((s) => s.startsWith("extension_ui_response")),
+  JSON.stringify(results.confirmNav),
+);
+check(
+  "多选（scoped-models）：Enter = 切换勾选",
+  results.scopedNav.before.join() === "p/m1" &&
+    results.scopedNav.after.length === 0 &&
+    results.scopedNav.sent.includes("set_scoped_models"),
+  JSON.stringify(results.scopedNav),
+);
+check(
+  "搜索框可见性由 modal 形态决定（列表显示 / confirm 隐藏）",
+  results.navList.searchVisible === "block" && results.confirmNav.searchHidden === "none",
+  `list=${results.navList.searchVisible} confirm=${results.confirmNav.searchHidden}`,
+);
+check(
+  "非搜索型 modal 焦点不落在隐藏输入框",
+  results.confirmNav.focus === "modal",
+  `activeElement=${results.confirmNav.focus}`,
+);
 check(
   "滚动门控（底部判定 / 上滚判定 / 上滚不被拽下）",
   results.scrollGate.atBottomWhenBottom &&
