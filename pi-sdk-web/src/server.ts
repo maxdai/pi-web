@@ -478,6 +478,15 @@ export class PiWebServer {
     const state: Record<string, unknown> = {
       model: this.session.model,
       thinkingLevel: this.session.thinkingLevel,
+      // Scoped models（settings 的 enabledModels / /scoped-models 选中的那批），
+      // 以紧凑形态随 state 下发：页脚的 model 链接直接列这一批供点选（`>>` 轮换
+      // 的也是同一集合），而 /model 仍展示全量目录。空数组 = 尚未配置。
+      scopedModels: this.session.scopedModels.map((s) => ({
+        provider: s.model.provider,
+        id: s.model.id,
+        name: s.model.name,
+        thinkingLevel: s.thinkingLevel,
+      })),
       sessionId: this.session.sessionId,
       sessionName: this.session.sessionManager.getSessionName(),
       autoCompactionEnabled: this.session.autoCompactionEnabled,

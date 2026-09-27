@@ -343,6 +343,43 @@ const results = await page.evaluate(() => {
   client.send = origSendNav;
   client.closeModal();
 
+  // 页脚 model 链接 = 只列 scoped models（与 `>>` 同一集合），选中即切换
+  const sentModel = [];
+  const origSendModel = client.send.bind(client);
+  client.send = (o) => sentModel.push(o);
+  client.lastState = {
+    ...(client.lastState || {}),
+    model: { provider: "p", id: "m2" },
+    scopedModels: [
+      { provider: "p", id: "m1", name: "Model One" },
+      { provider: "p", id: "m2", name: "Model Two", thinkingLevel: "high" },
+    ],
+  };
+  client.openScopedModelPicker();
+  const scopedItems = [...client.modalList.querySelectorAll(".modal-item")];
+  out.scopedPicker = {
+    open: client.modalOverlay.style.display !== "none",
+    mode: client.modalMode,
+    count: scopedItems.length,
+    labels: scopedItems.map((el) => el.querySelector(".modal-item-name")?.textContent ?? ""),
+    searchHidden: client.modalSearch.style.display,
+  };
+  scopedItems[0]?.click(); // 选中第一项 → set_model
+  out.scopedPicker.sent = sentModel.filter((m) => m.type === "set_model");
+
+  // 空 scope：提示而不弹空框
+  client.lastState = { ...client.lastState, scopedModels: [] };
+  client.openScopedModelPicker();
+  // 注意：appendNotifyLine 对同类型会原地更新（TUI showStatus 语义），故断言文本而非行数
+  const notifyLines = [...document.querySelectorAll(".notify-line")];
+  out.emptyScoped = {
+    modalOpen: client.modalOverlay.style.display !== "none",
+    notified: notifyLines.some((el) => (el.textContent || "").includes("未配置 scoped models")),
+  };
+  client.send = origSendModel;
+  client.closeModal();
+  client.lastState = { ...client.lastState, scopedModels: [] };
+
   // 清理本次注入的节点（按 smoke 标签精确识别，避免误判会话里本就存在的块）
   const cleanup = () => {
     for (const el of [...document.querySelectorAll(".special-block")]) {
@@ -410,6 +447,28 @@ check(
     results.scopedNav.after.length === 0 &&
     results.scopedNav.sent.includes("set_scoped_models"),
   JSON.stringify(results.scopedNav),
+);
+check(
+  "页脚 model 链接：只列 scoped models（非全量）+ 当前项标注",
+  results.scopedPicker.open &&
+    results.scopedPicker.mode === "model-scoped" &&
+    results.scopedPicker.count === 2 &&
+    // 当前模型是 m2 → 标记应落在第二项，而不是第一项
+    results.scopedPicker.labels[0]?.includes("(current)") === false &&
+    results.scopedPicker.labels[1]?.includes("(current)") === true,
+  JSON.stringify(results.scopedPicker),
+);
+check(
+  "页脚 model 链接：选中即发 set_model（不弹全量目录）",
+  results.scopedPicker.sent.length === 1 &&
+    results.scopedPicker.sent[0].provider === "p" &&
+    results.scopedPicker.sent[0].modelId === "m1",
+  JSON.stringify(results.scopedPicker.sent),
+);
+check(
+  "未配置 scoped models 时：提示而不弹空框",
+  results.emptyScoped.modalOpen === false && results.emptyScoped.notified === true,
+  JSON.stringify(results.emptyScoped),
 );
 check(
   "搜索框可见性由 modal 形态决定（列表显示 / confirm 隐藏）",

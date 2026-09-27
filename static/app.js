@@ -162,7 +162,7 @@ const ANSI_REGEX = /\x1b\[([\d;]*)m/g;
 /** 需要搜索框的 modal 形态（列表型）；其余形态不显示搜索框 */
 const SEARCHABLE_MODAL_MODES = new Set(['resume', 'model', 'thinking', 'scoped-models', 'extension-select']);
 /** 光标导航适用的形态（列表型 + 单选 confirm 的两个按钮） */
-const CURSOR_MODAL_MODES = new Set([...SEARCHABLE_MODAL_MODES, 'extension-confirm']);
+const CURSOR_MODAL_MODES = new Set([...SEARCHABLE_MODAL_MODES, 'extension-confirm', 'model-scoped']);
 const CURSOR_PAGE_STEP = 10;
 
 /** Convert ANSI-escaped text to HTML with inline styles. */
@@ -606,7 +606,7 @@ class PiWebClient {
       const model = state.model.id || state.model.model || '';
       const modelLabel = provider ? `${provider}/${model}` : model;
       const thinking = state.thinkingLevel || 'off';
-      const modelHtml = `<span class="clickable model-label" title="Click to change model">${this.escapeHtml(modelLabel)}</span>`;
+      const modelHtml = `<span class="clickable model-label" title="Click to pick from scoped models">${this.escapeHtml(modelLabel)}</span>`;
       const cycleHtml = `<span class="clickable cycle-model-label" title="Cycle to next model (TUI Ctrl+P)">>></span>`;
       const thinkingHtml = `<span class="clickable thinking-label" title="Click to change thinking">${this.escapeHtml(thinking)}</span>`;
       rightHtml = `${modelHtml} ${cycleHtml} · ${thinkingHtml}`;
@@ -618,7 +618,7 @@ class PiWebClient {
     if (modelEl) {
       modelEl.addEventListener('click', (e) => {
         e.stopPropagation();
-        this.openModelPicker();
+        this.openScopedModelPicker();
       });
     }
     const cycleEl = statsEl.querySelector('.cycle-model-label');
@@ -1937,6 +1937,37 @@ class PiWebClient {
   openModelPicker() {
     this.openModal('Select Model', 'model');
     this.send({ type: 'get_available_models' });
+  }
+
+  /** 页脚当前 model 链接：只列 **scoped models**（与 `>>` 轮换的是同一集合），
+   *  选中即切换——与 /model（全量目录）刻意区分：这里是"我实际会在几个模型间
+   *  切换"的短列表。未配置时给提示而不弹空框。 */
+  openScopedModelPicker() {
+    // state 随 set_scoped_models 重播，所以这份列表始终是最新的
+    const scoped = this.lastState?.scopedModels || [];
+    if (scoped.length === 0) {
+      this.appendNotifyLine(
+        '未配置 scoped models —— 用 /scoped-models 选几个模型，这里就能直接切换',
+        'warning',
+      );
+      return;
+    }
+    this.openModal('Switch Model (scoped)', 'model-scoped');
+    const current = this.lastState?.model || {};
+    const currentKey = `${current.provider || ''}/${current.id || current.model || ''}`;
+    const items = scoped.map((s) => {
+      const key = `${s.provider}/${s.id}`;
+      const thinking =
+        s.thinkingLevel && s.thinkingLevel !== 'off' ? `thinking: ${s.thinkingLevel}` : '';
+      return {
+        name: key === currentKey ? `${key}  (current)` : key,
+        desc: s.name && s.name !== s.id ? s.name : thinking,
+        value: s,
+      };
+    });
+    this.renderModalItems(items, (item) => {
+      this.send({ type: 'set_model', provider: item.value.provider, modelId: item.value.id });
+    });
   }
 
   openThinkingPicker() {
