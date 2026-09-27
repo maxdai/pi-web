@@ -151,6 +151,7 @@ node tools/smoke.mjs --headed # 需要肉眼观察时
 - **只读**：不发送 prompt／命令，不改动被测会话；测试页面是脚本自开的无头实例，与你的浏览器互不影响。
 - **零 token**：全部为确定性 DOM/协议断言，不调用 LLM。
 - **不污染视图**：注入的测试节点按 `smoke` 标签精确清理。
+- **运行时机**：不要在 `npm install -g pi-web`（重装/替换 dist）的**同时**跑——部署一致性检查会读到替换中的文件而误报（实测踩过一次：3 项瞬时失败，随后连跑两次 37/37 通过）。
 - **部署漂移检测**：比对服务端提供的 `app.js`/`style.css` 与仓库源文件哈希——「改了没生效／忘了重启／全局装的是旧版」会直接 FAIL 并打印两侧哈希。
 - 退出码：`0` 全部通过，`1` 有失败，`2` 依赖缺失或服务不可达。
 - 依赖：`playwright-core`（pi-sdk-web 的 devDependency，`npm install` 即得）与一个 Chromium（自动用 `~/.cache/ms-playwright` 下的缓存，可用 `PI_WEB_CHROMIUM` 覆盖）。
