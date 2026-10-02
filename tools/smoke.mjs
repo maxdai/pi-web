@@ -181,6 +181,14 @@ check("WS 已连接", /connected/i.test(status), `conn-status=${status}`);
 const frameTypes = frames.map((f) => f.type);
 check("连接时收到 state", frameTypes.includes("state"));
 check("连接时收到 history", frameTypes.includes("history"));
+// 内置扩展（builtin:*，hidden）不得出现在 Extensions 列表——TUI 过滤 !hidden，我们同义
+const stateFrame = frames.find((f) => f.type === "state");
+const extNames = (stateFrame?.data?.extensions || []).map((e) => String(e.name));
+check(
+  "Extensions 框不含内置扩展（builtin:*）",
+  extNames.length > 0 && extNames.every((n) => !n.startsWith("builtin:")),
+  extNames.join(", ") || "(none)",
+);
 const widgetReplays = frames.filter((f) => f.type === "extension_ui_request" && f.method === "setWidget");
 check(
   "widget 快照重放（无 widget 时跳过）",
