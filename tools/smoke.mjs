@@ -185,8 +185,10 @@ check("连接时收到 history", frameTypes.includes("history"));
 const stateFrame = frames.find((f) => f.type === "state");
 const extNames = (stateFrame?.data?.extensions || []).map((e) => String(e.name));
 check(
-  "Extensions 框不含内置扩展（builtin:*）",
-  extNames.length > 0 && extNames.every((n) => !n.startsWith("builtin:")),
+  "Extensions 框：无前缀泄漏，且内置扩展以 builtin 标注",
+  extNames.length > 0 &&
+    extNames.every((n) => !n.startsWith("builtin:") && !n.startsWith("<inline:")) &&
+    frames.some((f) => (f.data?.extensions || []).some((e) => e.version === "builtin")),
   extNames.join(", ") || "(none)",
 );
 const widgetReplays = frames.filter((f) => f.type === "extension_ui_request" && f.method === "setWidget");

@@ -603,13 +603,21 @@ export class PiWebServer {
       for (const ext of result.extensions) {
         // Built-in extensions are virtual (no package.json, no disk entry):
         // Pi 0.84 shapes them as `<inline:name>`, Pi 1.0 as `builtin:<name>`,
-        // and both mark them hidden. The TUI's extension list filters
-        // !hidden, so we hide them too - the sidebar lists only real,
-        // on-disk extensions.
-        if ((ext as { hidden?: boolean }).hidden === true) {
-          continue;
-        }
-        if (ext.path.startsWith("<") && ext.path.endsWith(">")) {
+        // and both mark them hidden. They ARE loaded and provide tools, so
+        // list them labeled as builtin instead of dropping them silently.
+        const extPath = ext.path;
+        const isInline = extPath.startsWith("<") && extPath.endsWith(">");
+        const isBuiltin = extPath.startsWith("builtin:");
+        const hidden = (ext as { hidden?: boolean }).hidden === true;
+        if (isInline || isBuiltin || hidden) {
+          // "builtin:codemode" / "<inline:llama.cpp>" -> "codemode" / "llama.cpp"
+          const raw = isInline ? extPath.slice(1, -1) : isBuiltin ? extPath.slice("builtin:".length) : extPath;
+          const name = raw.includes(":") ? (raw.split(":").pop() ?? raw) : raw;
+          const key = `builtin:${name}`;
+          if (!seen.has(key)) {
+            seen.add(key);
+            list.push({ name, version: "builtin" });
+          }
           continue;
         }
         const sourceInfo = (ext as { sourceInfo?: { origin?: string; scope?: string; baseDir?: string } })
