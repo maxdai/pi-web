@@ -769,6 +769,12 @@ class PiWebClient {
     if (div) {
       div.className = message.isError ? 'tool-block error' : 'tool-block success';
       this.setToolOutput(div, this.resultText(message));
+      // Recorded execution time (Pi >= 1.1.0 stores durationMs on the
+      // toolResult message); older session records simply have no field.
+      if (typeof message.durationMs === 'number') {
+        const durationEl = div.querySelector('.tool-duration');
+        if (durationEl) durationEl.textContent = `Took ${this.formatDurationMs(message.durationMs)}`;
+      }
       this.toolEls.delete(message.toolCallId);
     }
   }
@@ -1365,6 +1371,19 @@ class PiWebClient {
     this.applyToolPreview(div);
   }
 
+  // TUI-aligned duration formatting (bash.ts formatDuration): one decimal
+  // under a minute, then m/s and h/m/s. SDK-recorded durations feed both the
+  // live-final and history paths; the wall clock is only the fallback.
+  formatDurationMs(ms) {
+    const seconds = ms / 1000;
+    if (seconds < 60) return `${seconds.toFixed(1)}s`;
+    const totalSeconds = Math.floor(seconds);
+    const minutes = Math.floor(totalSeconds / 60);
+    const remainder = totalSeconds % 60;
+    if (minutes < 60) return `${minutes}m ${remainder}s`;
+    return `${Math.floor(minutes / 60)}h ${minutes % 60}m ${remainder}s`;
+  }
+
   onToolStart(ev) {
     const div = this.createToolBlock(ev.toolName, ev.args, ev.toolCallId);
     this.toolEls.set(ev.toolCallId, div);
@@ -1379,9 +1398,9 @@ class PiWebClient {
         clearInterval(timer);
         return;
       }
-      const dur = ((Date.now() - start) / 1000).toFixed(1);
+      const dur = this.formatDurationMs(Date.now() - start);
       const el = div.querySelector('.tool-duration');
-      if (el) el.textContent = `Elapsed ${dur}s`;
+      if (el) el.textContent = `Elapsed ${dur}`;
     }, 1000);
     this.toolTimers.set(ev.toolCallId, timer);
   }
@@ -1403,7 +1422,9 @@ class PiWebClient {
       this.setToolOutput(div, this.resultText(ev.result));
     }
 
-    // Stop elapsed timer and show final duration
+    // Stop elapsed timer and show final duration. Prefer the SDK-recorded
+    // monotonic duration (tool_execution_end.durationMs, Pi >= 1.1.0); the
+    // wall-clock delta is only the fallback (e.g. aborted runs without one).
     const timer = this.toolTimers.get(ev.toolCallId);
     if (timer) {
       clearInterval(timer);
@@ -1411,9 +1432,11 @@ class PiWebClient {
     }
     const start = parseInt(div.dataset.startTime || '0', 10);
     const durationEl = div.querySelector('.tool-duration');
-    if (durationEl && start) {
-      const dur = ((Date.now() - start) / 1000).toFixed(1);
-      durationEl.textContent = `Took ${dur}s`;
+    const durMs = typeof ev.durationMs === 'number'
+      ? ev.durationMs
+      : (start ? Date.now() - start : undefined);
+    if (durationEl && durMs !== undefined) {
+      durationEl.textContent = `Took ${this.formatDurationMs(durMs)}`;
     }
 
     // Truncation / full output warning

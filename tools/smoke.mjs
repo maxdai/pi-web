@@ -8,6 +8,7 @@
  *   页面加载    无 pageerror、WS 已连接、favicon 可用
  *   协议        连接时收到 state / history（以及串上 widgets 快照重放）
  *   渲染        markdown、代码块折行（pre-wrap 无横滚）、tool block、
+ *               tool Took（实时 durationMs 优先 / 历史重放）、
  *               widget（ANSI→HTML）、ext-status
  *               扩展消息：custom（实时/历史、display 真/假/字符串）、
  *               appendEntry（有/无 data.text）
@@ -264,6 +265,33 @@ const results = await page.evaluate(() => {
   out.toolBlock = document.querySelectorAll(".tool-block").length - before === 1 && !!tb;
   tb?.remove();
 
+  // Took（实时路径）：onToolEnd 优先 SDK 记录的 durationMs，格式对齐 TUI（1.5s 一位小数）
+  client.onToolStart({ toolCallId: "smoke-tool-took", toolName: "bash", args: { command: "echo took" } });
+  const tbTook = client.toolEls.get("smoke-tool-took");
+  client.onToolEnd({
+    type: "tool_execution_end",
+    toolCallId: "smoke-tool-took",
+    toolName: "bash",
+    isError: false,
+    result: { content: [{ type: "text", text: "ok" }] },
+    durationMs: 1500,
+  });
+  out.toolTook = tbTook?.querySelector(".tool-duration")?.textContent ?? "";
+  tbTook?.remove();
+
+  // Took（历史路径）：renderHistoryToolResult 读存储 toolResult 的 durationMs（2m5s 进位格式）
+  const tbHist = client.createToolBlock("bash", { command: "echo hist" }, "smoke-tool-hist");
+  client.toolEls.set("smoke-tool-hist", tbHist);
+  client.renderHistoryToolResult({
+    role: "toolResult",
+    toolCallId: "smoke-tool-hist",
+    isError: false,
+    durationMs: 125000,
+    content: [{ type: "text", text: "ok" }],
+  });
+  out.toolTookHistory = tbHist?.querySelector(".tool-duration")?.textContent ?? "";
+  tbHist?.remove();
+
   // ext-status
   client.renderStatusItem({ statusKey: "smoke", statusText: "smoke-ok" });
   const st = document.getElementById("ext-status");
@@ -427,6 +455,8 @@ check("appendEntry 无 data.text 静默", results.appendEntryNoText === 0, `+${r
 check("appendEntry 有 data.text 渲染", results.appendEntryWithText === 1, `+${results.appendEntryWithText}`);
 check("widget 渲染 + ANSI→HTML", results.widget.present && results.widget.ansi, JSON.stringify(results.widget));
 check("tool block 创建", results.toolBlock);
+check("tool Took：SDK durationMs 优先 + TUI 格式", results.toolTook === "Took 1.5s", results.toolTook);
+check("tool Took：历史重放读存储 durationMs", results.toolTookHistory === "Took 2m 5s", results.toolTookHistory);
 check("ext-status 渲染", results.extStatus);
 check("dialog 倒计时显示 (Ns)", results.countdownTicking, results.dialogTitle);
 check("dialog 关闭后计时器清理", results.countdownCleared);
