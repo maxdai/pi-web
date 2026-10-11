@@ -1183,6 +1183,32 @@ class PiWebClient {
   // Rendering helpers
   // ------------------------------------------------------------------
 
+  // Wall-clock stamp for a message: HH:MM for today, MM-DD HH:MM for older
+  // ones (chat convention; the exact time lives in the title tooltip).
+  // `pii`-style local time, no locale surprises.
+  formatMessageTime(ts) {
+    const d = typeof ts === 'number' && isFinite(ts) ? new Date(ts) : null;
+    if (!d || isNaN(d.getTime())) return null;
+    const pad = (n) => String(n).padStart(2, '0');
+    const hhmm = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    const now = new Date();
+    const isToday =
+      d.getFullYear() === now.getFullYear() &&
+      d.getMonth() === now.getMonth() &&
+      d.getDate() === now.getDate();
+    return isToday ? hhmm : `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${hhmm}`;
+  }
+
+  formatFullTime(ts) {
+    const d = typeof ts === 'number' && isFinite(ts) ? new Date(ts) : null;
+    if (!d || isNaN(d.getTime())) return '';
+    const pad = (n) => String(n).padStart(2, '0');
+    return (
+      `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ` +
+      `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+    );
+  }
+
   appendUserMessage(message) {
     const text = this.messageText(message);
     // History population (TUI renderInitialMessages populateHistory):
@@ -1195,6 +1221,16 @@ class PiWebClient {
     const role = document.createElement('div');
     role.className = 'role';
     role.textContent = 'You';
+    // Send time from the message itself (Pi stamps every user message with
+    // `timestamp`, live and in history); silently absent for odd payloads.
+    const stamp = this.formatMessageTime(message && message.timestamp);
+    if (stamp) {
+      const time = document.createElement('span');
+      time.className = 'msg-time';
+      time.textContent = stamp;
+      time.title = this.formatFullTime(message.timestamp);
+      role.appendChild(time);
+    }
     const body = document.createElement('div');
     body.className = 'body';
     body.innerHTML = this.renderMarkdown(text);

@@ -287,6 +287,15 @@ body {
   margin-bottom: 2px;
 }
 
+/* Send time next to the "You" label (HH:MM today, MM-DD HH:MM older);
+   dimmer than the label so it reads as metadata, not content. */
+.message .role .msg-time {
+  margin-left: 6px;
+  opacity: 0.75;
+  user-select: none;
+  cursor: default;
+}
+
 .tool-block {
   background: var(--tool-pending-bg);
   margin: 4px 0;

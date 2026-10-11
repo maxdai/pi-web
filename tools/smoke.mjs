@@ -292,6 +292,24 @@ const results = await page.evaluate(() => {
   out.toolTookHistory = tbHist?.querySelector(".tool-duration")?.textContent ?? "";
   tbHist?.remove();
 
+  // user message 时间戳：今天 HH:MM、更早 MM-DD HH:MM（title 为完整时间）
+  const mkMsg = (ts) => ({ role: "user", content: [{ type: "text", text: "smoke ts" }], timestamp: ts });
+  const nowTs = Date.now();
+  const nowD = new Date(nowTs);
+  const pad2 = (n) => String(n).padStart(2, "0");
+  client.appendUserMessage(mkMsg(nowTs));
+  const todayEl = [...document.querySelectorAll(".message.user")].pop();
+  out.msgTimeToday = todayEl?.querySelector(".msg-time")?.textContent ?? "";
+  out.msgTimeTodayOk = out.msgTimeToday === `${pad2(nowD.getHours())}:${pad2(nowD.getMinutes())}`;
+  out.msgTimeTodayTitle = todayEl?.querySelector(".msg-time")?.title ?? "";
+  todayEl?.remove();
+
+  const oldTs = new Date(2026, 0, 2, 3, 4).getTime();
+  client.appendUserMessage(mkMsg(oldTs));
+  const oldEl = [...document.querySelectorAll(".message.user")].pop();
+  out.msgTimeOld = oldEl?.querySelector(".msg-time")?.textContent ?? "";
+  oldEl?.remove();
+
   // ext-status
   client.renderStatusItem({ statusKey: "smoke", statusText: "smoke-ok" });
   const st = document.getElementById("ext-status");
@@ -434,6 +452,9 @@ const results = await page.evaluate(() => {
       (el.querySelector(".special-label")?.textContent ?? "").includes("smoke"),
     ).length,
     smokeWidgets: document.querySelectorAll('[data-widget-key="smoke-widget"]').length,
+    smokeMessages: [...document.querySelectorAll(".message.user")].filter((el) =>
+      (el.querySelector(".body")?.textContent ?? "") === "smoke ts",
+    ).length,
   };
 
   client.ws?.close?.();
@@ -457,6 +478,8 @@ check("widget 渲染 + ANSI→HTML", results.widget.present && results.widget.an
 check("tool block 创建", results.toolBlock);
 check("tool Took：SDK durationMs 优先 + TUI 格式", results.toolTook === "Took 1.5s", results.toolTook);
 check("tool Took：历史重放读存储 durationMs", results.toolTookHistory === "Took 2m 5s", results.toolTookHistory);
+check("user message 时间戳：今天 HH:MM", results.msgTimeTodayOk, results.msgTimeToday);
+check("user message 时间戳：更早 MM-DD HH:MM", results.msgTimeOld === "01-02 03:04", results.msgTimeOld);
 check("ext-status 渲染", results.extStatus);
 check("dialog 倒计时显示 (Ns)", results.countdownTicking, results.dialogTitle);
 check("dialog 关闭后计时器清理", results.countdownCleared);
@@ -531,7 +554,9 @@ check(
 // 注入节点应已被清理，且全程无新增 pageerror
 check(
   "测试注入的节点已清理（不污染会话视图）",
-  results.leftovers.smokeBlocks === 0 && results.leftovers.smokeWidgets === 0,
+  results.leftovers.smokeBlocks === 0 &&
+    results.leftovers.smokeWidgets === 0 &&
+    results.leftovers.smokeMessages === 0,
   JSON.stringify(results.leftovers),
 );
 check("全程无新增 pageerror", pageErrors.length === 0, pageErrors.join(" | "));
