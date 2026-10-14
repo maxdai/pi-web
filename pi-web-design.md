@@ -787,7 +787,7 @@ pi-sdk-web 已实现并通过浏览器验收（本地提交，随本设计一起
 2. **scoped models 缺口有解**：CLI 在**启动时**由 `parsed.models ?? settingsManager.getEnabledModels()` 解析 scoped 列表（`main.ts:813-817`）。用配置副本实测：`enabledModels` 改为 2 项 → 启动时 `ctx.scopedModels` 精确为那 2 项。→ 「改 scoped models」= 写 `settings.json` + **重启 pi 子进程**（对我们是廉价操作）。
 3. **与真实扩展共存无冲突**：同一次运行加载了用户全部真实扩展（命令表含 `ctx-status`/`ctx-flush`/`aft-status`/`multi-viewers`/…，25 个工具），scoped 列表正确读出用户 11 个模型，桥接与其并存无报错。
 
-**端到端原型（2026-10，`experiments/rpc-bridge/`，见 §15.10）**——机制验证之后又做了一次「**不改前端**」的整体验证：服务端改为「spawn 原生 pi + 桥接扩展」，复用仓库 `static/` 与同一套 WS 协议：
+**端到端原型（2026-10，已提升为 `native/`，见 §15.10）**——机制验证之后又做了一次「**不改前端**」的整体验证：服务端改为「spawn 原生 pi + 桥接扩展」，复用仓库 `static/` 与同一套 WS 协议：
 
 | 验证项 | 结果 |
 |---|---|
@@ -897,7 +897,7 @@ pi-sdk-web 已实现并通过浏览器验收（本地提交，随本设计一起
 | 阶段 | 内容 | 完成判据 | 原型状态（2026-10） |
 |---|---|---|---|
 | A | 服务端抽象「引擎接口」，SDK 实现与 native 实现并列（如 `--engine sdk\|native`） | 两种引擎都能起服务，前端无感 | 未做（原型是独立 server） |
-| B | 实现 RPC 客户端（TS）+ 桥接扩展（把 `ui-context.ts` 语义搬入）+ 侧信道 server（复用现有 WS 协议） | §15.2 的 9 项在真实架构内复现 | **已完成**（`experiments/rpc-bridge/`） |
+| B | 实现 RPC 客户端（TS）+ 桥接扩展（把 `ui-context.ts` 语义搬入）+ 侧信道 server（复用现有 WS 协议） | §15.2 的 9 项在真实架构内复现 | **已完成**（`native/`，原型位于 `experiments/rpc-bridge/` 时完成） |
 | C | 逐项对齐：history 走 `get_entries`；会话列表/删除沿用文件操作；scoped models 走 settings+重启；theme / panels / usage / export 对齐 | 与现状功能清单逐条对齐 | **大部分完成**（§15.2 缺口补齐表；余 `.jsonl` 导出、面板按键交互、scoped models 重启、自定义 session 目录） |
 | D | 端到端冒烟：现有 42 项扩展为覆盖两种引擎，真实会话跑通 | 全绿后把 `native` 设为默认 | 部分：冒烟 **42/42 已在 native 上通过**，尚未扩为覆盖两引擎 |
 | E | **移除 SDK 引擎**：删除 `pi-coding-agent`/`pi-agent-core` 依赖与 SDK 宿主实现（含 `ui-context.ts`，语义已在阶段 B 移植进桥接扩展）；并按 §15.13 决策一并去掉整个 TypeScript 构建链、包改为 `@maxdai/pi-web@1.0.0` | 依赖树中不再有 pi-coding-agent；`native` 为唯一引擎；包内无 TS 产物 | **方案已定稿（§15.13），未实施** |
@@ -915,16 +915,16 @@ pi-sdk-web 已实现并通过浏览器验收（本地提交，随本设计一起
 
 ### 15.10 原型与复现
 
-**端到端原型（已入库，推荐从这里入手）：`experiments/rpc-bridge/`**
+**端到端原型（已入库并提升为正式 bin，见 §17）：`native/`**
 
 | 文件 | 作用 |
 |---|---|
-| `experiments/rpc-bridge/server.mjs` | HTTP 静态服务（复用仓库 `static/`）+ WS 协议 + RPC 客户端 + 侧信道服务端 |
-| `experiments/rpc-bridge/bridge.mjs` | 注入 pi 的桥接扩展：接管工厂 widget / `custom()` / 对话框 / `setTheme`，上报 cwd/scopedModels/commands/tools/extensions |
-| `experiments/rpc-bridge/README.md` | 运行方式、已验证结果、**已知缺口清单** |
+| `native/server.mjs` | HTTP 静态服务（复用仓库 `static/`）+ WS 协议 + RPC 客户端 + 侧信道服务端（bin `pi-web-native`） |
+| `native/bridge.mjs` | 注入 pi 的桥接扩展：接管工厂 widget / `custom()` / 对话框 / `setTheme`，上报 cwd/scopedModels/commands/tools/extensions |
+| `tools/host-contract/` | 宿主契约核对器 + 进程内探针 + 基线（Pi 升级后 / 发版前必跑，见 §16、§15.13 决策 5） |
 
 ```bash
-node experiments/rpc-bridge/server.mjs --session install --port 4096   # 终端 1
+node native/server.mjs --session install --port 4096   # 终端 1
 node tools/smoke.mjs http://127.0.0.1:4096                            # 终端 2（42 项，零 token）
 # 手工复验桥接能力：/pi-web:demo-widget、/pi-web:demo-clear、/pi-web:demo-dialog、/pi-web:reload
 ```
@@ -1170,7 +1170,7 @@ pi-web-native <session-id> <cwd> --port <n>          # 对应 server.py <session
 | 前端 | 复用现有 `static/`（`panelGeometry` 能力位已门控，SDK 引擎不受影响） |
 | `pii` 改动 | `--web` 分支改为 `_native_server_cmd()`：解析顺序 `PI_WEB_NATIVE_BIN` → PATH 上的 `pi-web-native` → 仓库内 `native/server.mjs`（用 `node` 执行） |
 
-原型（`experiments/rpc-bridge/`）作为验证与回归对照保留，正式代码从它提升而来。
+原型（`experiments/rpc-bridge/`，2026-10 已提升为 `native/`）作为验证与回归对照的历史记录保留在设计文档中。
 
 ### 17.4 切换前必须补齐（非功能性；只在日常使用中暴露）
 
@@ -1209,7 +1209,7 @@ pi-web-native <session-id> <cwd> --port <n>          # 对应 server.py <session
 
 | 项 | 结果 |
 |---|---|
-| `native/` 提升 | `git mv experiments/rpc-bridge/{server,bridge}.mjs → native/`；原型目录保留宿主契约核对器与探针 |
+| `native/` 提升 | `git mv experiments/rpc-bridge/{server,bridge}.mjs → native/`；核对器与探针随后迁至 `tools/host-contract/`（`experiments/` 已清空） |
 | 打包 | `npm run build` 后 `dist/native/{server.mjs,bridge.mjs}` 就位（server 带执行位）；bin `pi-web-native` 可独立运行 |
 | **发布布局实测** | `node pi-sdk-web/dist/native/server.mjs <id> /root --port 4099`：**冒烟 42/42**（静态前端取自 `dist/static`、`ws` 从包内 node_modules 解析、桥接取自 `dist/native/bridge.mjs`） |
 | **`pii --web` 端到端** | `PI_WEB_DIR=/root/pi-web python3 pii/pii r install --web 4098` → 原生引擎启动、页面 200、**冒烟 42/42** |
@@ -1369,18 +1369,18 @@ pi-web-native <session-id> <cwd> --port <n>          # 对应 server.py <session
 
 ```bash
 # 与基线对比：关键项是否满足 + 结构有无漂移
-node experiments/rpc-bridge/check-host-contract.mjs
+node tools/host-contract/check-host-contract.mjs
 
 # 记录/更新基线（确认新版本可接受后）
-node experiments/rpc-bridge/check-host-contract.mjs --update
+node tools/host-contract/check-host-contract.mjs --update
 
 # 只看当前快照
-node experiments/rpc-bridge/check-host-contract.mjs --json
+node tools/host-contract/check-host-contract.mjs --json
 ```
 
-- **核对器**：`experiments/rpc-bridge/check-host-contract.mjs`（内含 14 项关键判定 + 结构 diff）
+- **核对器**：`tools/host-contract/check-host-contract.mjs`（内含 14 项关键判定 + 结构 diff）
 - **进程内探针**：`host-contract-probe.mjs`（A：探测并改写 `setTitle`）+ `host-contract-probe-b.mjs`（B：触发调用，验证改写跨扩展可见）
-- **基线**：`experiments/rpc-bridge/host-contract.baseline.json`（当前记录：**Pi 1.2.0 / node v24.18.0**）
+- **基线**：`tools/host-contract/host-contract.baseline.json`（当前记录：**Pi 1.2.0 / node v24.18.0**）
 - **判定**：`FAIL` = 立足点被破坏（须处理）；`DRIFT` = 与基线有差异（须人工判断，例如 UI 方法增删）
 - 补充验证：`node tools/smoke.mjs http://127.0.0.1:4096`（42 项）+ 桥接自带诊断命令 `/pi-web:demo-widget`、`/pi-web:demo-clear`、`/pi-web:demo-dialog`、`/pi-web:demo-panel`
 - 核对器自身可靠性已验证（2026-10）：篡改基线（移除一个 UI 方法、把 `theme` 改为不可配置 getter）后，核对器正确报出 4 处差异。

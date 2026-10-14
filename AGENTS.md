@@ -106,6 +106,7 @@ pii r <name> --web <port>   # Web 服务，使用指定端口
   - **tag 必须用附注 tag**（`git tag -a vX.Y.Z -m "Release pi-sdk-web X.Y.Z"`）：`--follow-tags` **只推附注 tag**，
     轻量 tag 会被静默跳过（2026-10 实测：`v0.7.0`~`v0.7.5` 六个 tag 因此都没上远端，后以 `git push origin --tags` 补推）。
     推送后用 `git ls-remote --tags origin` 核对远端确实有该 tag。
+- **发版前必跑宿主契约核对器**（§15.13 决策 5）：`node tools/host-contract/check-host-contract.mjs`——Pi 升级后与发版前各跑一次；FAIL 表示方案立足点被破坏（按 §16.7 降级），DRIFT 需人工判断。
 - **动作链执行前必须获得用户明确确认**（用户说出"发版 / 可以发版"等指令后才可执行）；用户仅说"修改完成"不算执行指令——需再确认是否执行发版动作链。
 
 ## 5. 目录结构（提议，以实际为准）
@@ -206,7 +207,7 @@ footer：
    ```
 3. **或启动时记录 PID**，清理时按 PID：
    ```bash
-   node experiments/rpc-bridge/server.mjs --port 4096 > /tmp/x.log 2>&1 &
+   node native/server.mjs --port 4096 > /tmp/x.log 2>&1 &
    echo $! > /tmp/x.pid          # 记下来
    kill "$(cat /tmp/x.pid)"      # 清理
    ```

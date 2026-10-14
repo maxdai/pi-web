@@ -117,7 +117,10 @@ pii list                     # 验证（需 Python 3）
 pi-sdk-web 已发布到 npm（`pi-sdk-web`，作者 maxdai）。发布新版本流程：
 
 ```bash
-# 0. （建议）发布前跑一次冒烟测试——需先起着服务，见下节
+# 0. 发布前两项检查
+# 0a. 宿主契约核对（Pi 升级后尤其必须；见 tools/host-contract/README.md）
+node tools/host-contract/check-host-contract.mjs
+# 0b. 冒烟测试——需先起着服务，见下节
 node tools/smoke.mjs
 
 # 1. 修改代码后，在仓库根提升版本
