@@ -727,7 +727,18 @@ async function handleClientMessage(ws, msg) {
         const rows = Number(msg.rows);
         if (Number.isFinite(cols) && Number.isFinite(rows) && cols >= 20 && rows >= 5) {
           panelGeometry = { cols: Math.floor(cols), rows: Math.floor(rows) };
-          log(`[pi-web] panel geometry ← ${panelGeometry.cols}×${panelGeometry.rows}`);
+          const extra =
+            Number.isFinite(Number(data.charW)) && Number.isFinite(Number(data.contentW))
+              ? `（可容纳 ${panelGeometry.cols} 列 = 内容区 ${data.contentW}px ÷ 单字符 ${data.charW}px）`
+              : "";
+          log(`[pi-web] panel geometry ← ${panelGeometry.cols}×${panelGeometry.rows}${extra}`);
+          if (Number(data.longest) > panelGeometry.cols) {
+            log(
+              `[pi-web] 面板内容过宽：最长行 ${data.longest} 列 > 容量 ${panelGeometry.cols} 列` +
+                `（已缩至 ${data.shrunkTo}px${data.overflow ? "，仍放不下 → 该面板横向滚动" : ""}）` +
+                `；下次将按 ${panelGeometry.cols} 列渲染`,
+            );
+          }
         }
         break;
       }

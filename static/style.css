@@ -799,6 +799,12 @@ body {
   z-index: 100;
 }
 
+/* 扩展 custom() 面板：等宽 TUI 框图需要横向空间。默认模态 720px 太窄（12px 等宽仅容 93 列），
+   面板单独放宽到 min(1100px, 95vw)，让组件按终端宽度渲染的内容能完整放下。 */
+#modal.modal-wide {
+  width: min(1100px, 95vw);
+}
+
 #modal {
   background: var(--code-bg);
   border: 1px solid var(--border);
@@ -959,6 +965,14 @@ body {
 
 /* custom() 面板：扩展自己渲染的 TUI 组件文本行。按项目既有约定（同 .widget-body）
    用 pre-wrap 折行而非横向滚动；长 token 也允许断行。 */
+/* 极端情况（内容远超容器、已缩到最小字号仍放不下）：**退回横向滚动**，宁可横向滚动
+   也不折行折断 TUI 框图。这是最后一道兜底，正常情况下由 modal-wide + 缩小字号解决。 */
+.modal-panel-body.modal-panel-scrollx {
+  white-space: pre;
+  overflow-x: auto;
+  overflow-wrap: normal;
+}
+
 .modal-panel-body {
   margin: 0;
   padding: 8px 10px;

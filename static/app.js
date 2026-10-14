@@ -1991,6 +1991,7 @@ class PiWebClient {
       this.send({ type: 'extension_ui_response', id: this.currentExtRequest.id, cancelled: true });
     }
     this.modalOverlay.style.display = 'none';
+    this.modalEl?.classList.remove('modal-wide'); // 其他模态保持默认 720px
     this.modalList.innerHTML = '';
     this.modalSearch.value = '';
     this.modalMode = null;
@@ -2263,8 +2264,24 @@ class PiWebClient {
   sendPanelGeometry() {
     if (!this.panelGeometrySupported) return; // 服务端未声明支持就不要发（SDK 引擎会报错）
     const overlay = document.querySelector('#modal-overlay');
+    // 面板用的是 modal-wide（更宽），测量也必须按那个布局量，否则会低估列数
+    const modalEl = document.querySelector('#modal');
+    const hadWide = modalEl?.classList.contains('modal-wide');
+    modalEl?.classList.add('modal-wide');
+    try {
+      return this.measureAndSendPanelGeometry(overlay);
+    } finally {
+      if (!hadWide) modalEl?.classList.remove('modal-wide');
+    }
+  }
+
+  measureAndSendPanelGeometry(overlay) {
     let cols = 100;
     let rows = 40;
+    // 注意：这两个值在 try 里被赋值，但要在 catch 之后上报时仍可见 → 必须声明在函数作用域
+    // （曾误在 try 内用 const 声明，导致上报那一行 ReferenceError、几何再也发不出去）
+    let contentW = 0;
+    let charW = 0;
     try {
       const prevDisplay = overlay ? overlay.style.display : '';
       const prevVisibility = overlay ? overlay.style.visibility : '';
@@ -2283,13 +2300,13 @@ class PiWebClient {
       host.appendChild(probe);
       const cs = getComputedStyle(probe);
       const padX = (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0);
-      const contentW = probe.clientWidth - padX;
+      contentW = probe.clientWidth - padX;
       const span = document.createElement('span');
       span.style.cssText =
         `position:absolute;visibility:hidden;white-space:pre;font-family:${cs.fontFamily};font-size:${cs.fontSize};`;
       span.textContent = '0'.repeat(100);
       document.body.appendChild(span);
-      const charW = span.getBoundingClientRect().width / 100;
+      charW = span.getBoundingClientRect().width / 100;
       span.remove();
       probe.remove();
       if (overlay) {
@@ -2303,7 +2320,47 @@ class PiWebClient {
     } catch {
       /* 量不到就用默认值 */
     }
-    this.send({ type: 'panel_geometry', cols, rows });
+    this.panelRows = rows;
+    this.send({
+      type: 'panel_geometry',
+      cols,
+      rows,
+      // 中间量一并上报：日志里能直接看出列数是怎么来的（contentW ÷ charW）
+      contentW: Math.round(contentW) || undefined,
+      charW: charW ? Number(charW.toFixed(3)) : undefined,
+    });
+  }
+
+  /** 面板内容比容器宽时逐档缩小字号，直到最长行放得下（保证不折行、不横滚；下限 8px）。
+   *  返回以**基准字号**能容纳的列数，供回报给服务端决定下次渲染宽度。 */
+  fitPanelToWidth(pre, lines) {
+    if (!pre) return null;
+    const stripped = lines.map((l) => String(l).replace(/\u001b\[[0-9;]*m/g, ''));
+    const longest = Math.max(0, ...stripped.map((l) => [...l].length));
+    if (!longest) return null;
+    const cs = getComputedStyle(pre);
+    const padX = (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0);
+    const contentW = pre.clientWidth - padX;
+    if (contentW <= 0) return null;
+    const charWidthAt = (px) => {
+      const span = document.createElement('span');
+      span.style.cssText = `position:absolute;visibility:hidden;white-space:pre;font-family:${cs.fontFamily};font-size:${px}px;`;
+      span.textContent = '0'.repeat(50);
+      document.body.appendChild(span);
+      const w = span.getBoundingClientRect().width / 50;
+      span.remove();
+      return w;
+    };
+    const base = parseFloat(cs.fontSize) || 12;
+    const baseCharW = charWidthAt(base);
+    const fitsBase = Math.floor(contentW / baseCharW) - 1;
+    if (longest <= fitsBase) return { longest, fitsBase, shrunkTo: base, overflow: false };
+    // 放不下：先缩小字号（按实际渲染宽度迭代 0.5px 一档，下限 8px）
+    let size = base;
+    while (size > 8 && longest * charWidthAt(size) > contentW) size -= 0.5;
+    pre.style.fontSize = `${size}px`;
+    // 缩到下限仍放不下 → 交给调用方退横向滚动（保住框图完整，不折行）
+    return { longest, fitsBase, shrunkTo: size, overflow: longest * charWidthAt(size) > contentW };
   }
 
   /** custom() 面板（桥接扩展经 method:'panel' 送来）：只读展示扩展组件渲染出的文本行。
@@ -2311,19 +2368,40 @@ class PiWebClient {
    *  不另外加按钮：早先加过一个，与自带按钮重复（两个 Close），而且它在滚动区内、内容长时会被滚走。
    *  组件若已 done(value)：桥接随面板一并送来 value，服务端会用该值答复，无需前端特判。 */
   openExtensionPanel(req) {
+    const lines = Array.isArray(req.lines) ? req.lines : [];
     // 组件 requestRender 触发的增量刷新：就地替换内容，不重开模态（否则会重置倒计时/丢焦点）
     if (req.update && this.currentExtRequest && this.currentExtRequest.id === req.id) {
       const body = this.modalList.querySelector('.modal-panel-body');
       if (body) {
-        body.innerHTML = ansiToHtml((Array.isArray(req.lines) ? req.lines : []).join('\n'));
+        body.innerHTML = ansiToHtml(lines.join('\n'));
+        const f = this.fitPanelToWidth(body, lines);
+        if (f?.overflow) body.classList.add('modal-panel-scrollx');
+        else body.classList.remove('modal-panel-scrollx');
         return;
       }
     }
+    this.modalEl?.classList.add('modal-wide'); // 面板用更宽的模态（见 style.css）
     this.openModal(req.title || 'Extension panel', 'extension-panel');
     this.currentExtRequest = req;
     this.startDialogCountdown(req);
-    const lines = Array.isArray(req.lines) ? req.lines : [];
     this.modalList.innerHTML = `<pre class="modal-panel-body">${ansiToHtml(lines.join('\n'))}</pre>`;
+    // 兜底：即使服务端按更大宽度渲染，这里也保证不折行（必要时缩字号），
+    // 并把"基准字号下真实能容纳多少列"回报给服务端，让下次渲染直接合适。
+    const pre = this.modalList.querySelector('.modal-panel-body');
+    const fit = this.fitPanelToWidth(pre, lines);
+    if (fit && fit.longest > fit.fitsBase) {
+      // 回报"基准字号下真实容量"，让服务端下次直接按它渲染（这才是根治）
+      this.send({
+        type: 'panel_geometry',
+        cols: Math.max(20, fit.fitsBase),
+        rows: this.panelRows || 22,
+        longest: fit.longest,
+        shrunkTo: fit.shrunkTo,
+        overflow: fit.overflow,
+      });
+      // 连缩字号都放不下：该面板退横向滚动，绝不让框图被折成几段
+      if (fit.overflow) pre?.classList.add('modal-panel-scrollx');
+    }
   }
 
   appendNotifyLine(message, type) {
