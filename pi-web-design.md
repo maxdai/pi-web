@@ -809,7 +809,7 @@ pi-sdk-web 已实现并通过浏览器验收（本地提交，随本设计一起
 | 能力 | 实现要点 | 验证 |
 |---|---|---|
 | **扩展 ANSI 换肤** | 桥接从**运行中的 pi 包目录**（`realpath(process.argv[1])/../..`）动态 import Pi 的 `Theme` 类，用 `dark.json`/`light.json` 构造主题（truecolor，与 SDK 宿主一致），并改写 `ui.theme`（实测该属性可配置且**对其他扩展生效**）；服务端暴露 `GET /side/theme`，桥接每 2s 轮询、变化时强制重渲染全部 widget | 切 Light 后 widget ANSI 立即换色 |
-| **`custom()` 面板** | 桥接把组件 `render(width)` 的文本行经侧信道交给服务端 → 前端以**只读模态** `extension-panel` 呈现，关闭时回传结论（组件已 `done(value)` 则采用之） | 面板打开/关闭、结论回传均通过 |
+| **`custom()` 面板** | 桥接用**带 `terminal: {rows, cols}` 的 stub TUI** 调 factory，把 `render(width)` 的文本行经侧信道交给服务端 → 前端以**只读模态** `extension-panel` 呈现，关闭时回传结论（组件已 `done(value)` 则采用之）。RPC 下扩展看到 `hasUI=true`、会走 TUI 对话框分支，所以这里**必须真渲染**（SDK 宿主走的是它自建 `hasUI:false` 上下文的文本路径，见 §15.11） | `/ctx-status` 面板 40 行真实内容；demo panel 3 行；开关/回传均通过 |
 | **`/usage`** | 服务端原生拦截（`command` 名为 `usage` 时优先于扩展命令，与 SDK 宿主 `executeCommand` 一致），复用既有 `usage-render`——**0 处 SDK 依赖**，证明该功能与引擎无关 | `usage_data` 帧 + 面板打开 |
 | **`export`** | RPC `export_html`（接受 `outputPath`）→ notify 路径 | 通知含导出路径 |
 | **`delete_session`** | 校验「已知会话 + 非当前会话」后 `unlink` | 三个分支全通过 |
@@ -843,7 +843,7 @@ pi-sdk-web 已实现并通过浏览器验收（本地提交，随本设计一起
 | 对话框 select/confirm/input/editor | ✅ | ✅（**启动期死锁**） | ✅（桥接接管，含启动期） |
 | ext-status / notify / 字符串 widget | ✅ | ✅ | ✅ |
 | **工厂 widget（`/todos` 等）** | ✅ | ❌ 静默丢弃 | ✅ **改写 setWidget** |
-| **`custom()` 面板** | ❌（现状返回 undefined） | ❌ 返回 undefined | ✅ **改写 custom()** + 前端只读模态（比现状更强；面板内按键交互仍不支持） |
+| **`custom()` 面板** | ❌（返回 undefined，扩展转走文本路径） | ❌ 返回 undefined（扩展转走文本路径） | ✅ **改写 custom()：stub TUI（含 `terminal`）+ 渲染文本行 + 前端只读模态**。差异：扩展在 RPC 下 `hasUI=true` 走对话框分支，故原生走「渲染组件」而非 SDK 的「文本兜底」（详见 §15.11） |
 | **theme 切换** | ✅（自有 UI context） | ❌ `{success:false}` | ✅ **改写 `ui.theme`**（自有 Pi Theme，暗/亮热切换，已实测对其他扩展生效） |
 | `/usage`（pi-web 原生） | ✅（读 session 文件） | ❌ 无命令 | ✅ 服务端原生拦截 + 复用同模块（0 处 SDK 依赖） |
 | `export` / `delete_session` | ✅ | ⚠️ 仅 `export_html` | ✅（`.jsonl` 导出降级） |
@@ -1025,6 +1025,23 @@ node deadlock-harness.mjs --bridge             # 桥接接管：resolve = true
    - **附带好消息**：原生目录是 Pi 自己的目录，**包含** `deepinfra/zai-org/GLM-5.3-Flash` —— 正是 §14 时期 SDK 宿主看不到、需要 `modelRuntime.refresh()` 兜的那个模型。原生路由在**目录保真度上反而更强**（无 catalog swap 时序问题）。
 2. **生效机制（架构性差异，仍在）**：TUI/SDK 都在**进程内**，切换时直接 `session.setScopedModels(...)`（`interactive-mode.ts:5418`）→ 立即生效；只有显式保存才 `settingsManager.setEnabledModels()`（`:5456`）。原生路由**在进程外**：RPC 命令表没有 scoped-models 命令，ExtensionAPI 也没有对应方法，且**实测 `ctx.reload()` 不会重算 scopedModels**（改 `enabledModels` 后 reload，值不变）→ 唯一路径是**写 settings + 重启 pi 子进程**。
    - 因此原生侧当前语义：**勾选不生效也不落盘**（给提示），**保存才写 settings、重启后生效**。要做到 TUI 那样的即时生效，需要实现"保存后自动重启子进程"（未实现，见 §15.11 差异表）。
+
+**为什么 `/ctx-status` 两边不一样（`custom()` 与 `hasUI` 机制；2026-10 定位并解决）**
+
+现象：SDK 版显示 `/ctx-status` 的**状态文本模态**；原生原型一度**什么都不显示**（更早是空面板）。
+
+| 环节 | SDK 宿主 | 原生引擎（桥接） |
+|---|---|---|
+| 命令怎么执行 | 自己取 `extensionRunner.getCommand(name)`，**构造 `hasUI:false` 的上下文**再调 handler（进程内宿主才能做到） | 经 Pi 的 `prompt "/ctx-status"` → Pi 调 `_extensionRunner.createCommandContext()` |
+| 扩展看到的 `ctx.hasUI` | **false** → 走文本路径：`pi.appendEntry`（custom entry）+ `ctx.ui.notify(text)` | **true**（RPC 模式绑定了 UI 上下文）→ 走 TUI 对话框分支 `if (ctx.hasUI) { await showStatusDialog(...); return; }` |
+| 网页呈现 | 文本模态（标题 `/ctx-status`） | 桥接把该 TUI 组件**渲染成文本行** → 只读面板 |
+
+**为什么不能照 SDK 那样做**：`createCommandContext()` 的 `hasUI` 是**每个上下文自己的 getter**（`runner.ts:997` 用 `Object.defineProperties` 保留惰性求值），扩展层既没有 `bindUI` 也没有任何 setter；SDK 能做到是因为它**持有 runner 对象**。要与 SDK 完全一致，需要上游提供「以 headless 上下文执行命令」的能力（与 scoped models 同类的 API 缺口）。
+
+**桥接的做法与前提**（已实测）：
+- 组件依赖终端尺寸：`StatusDialogComponent.render()` 读 `tui.terminal.rows`，缺了会抛 `Cannot read properties of undefined (reading 'rows')`（**这就是空面板的直接原因**）。桥接提供带 `terminal` 的 stub TUI，尺寸可用 `PI_WEB_BRIDGE_PANEL_ROWS` / `PI_WEB_BRIDGE_PANEL_COLS` 调整（默认 40×100）。
+- 渲染是**只读快照**：组件内的按键交互（滚动/翻页）不支持；组件自行 `done(value)` 则采用其结论，否则关闭面板视为取消。
+- 实测：`/ctx-status` 面板 40 行、含 `⚡ Magic Context Status` 边框内容——与 TUI 看到的对话框同源同内容。
 
 **为什么扩展改不了 scoped models（API 缺口；2026-10 查证，含运行时实证）**
 
