@@ -1040,9 +1040,18 @@ node deadlock-harness.mjs --bridge             # 桥接接管：resolve = true
 | 18 | 启动时序 | stdin 在 **`session_start` 之后**才挂载 → 启动期对话框必死锁，故对话框必须由桥接接管 | 若上游修复该时序：可简化，但**不能依赖**它 |
 | 19 | 模式语义 | RPC 下 `ctx.mode === "rpc"`、`ctx.hasUI === true` | 扩展的 UI 分支行为改变 |
 | 20 | ExtensionAPI | `pi.on` / `registerCommand` / `getCommands` / `getActiveTools`；命令形状 `{name,description,source,sourceInfo{path,origin,scope,baseDir}}`；`sourceInfo.path` 的 `builtin:` 与 `<inline:>` 约定；`ctx.reload()`（ExtensionCommandContext） | 扩展列表/资源面板失真；`/pi-web:reload` 失效 |
+| 21 | **侧栏 Tools 名单** | `pi.getActiveTools(): string[]`（= `session.activeToolNames = agent.state.tools`，会被 `prepareLoadout` 影响）＋ `pi.getAllTools(): ToolInfo[]`（字段含 `name/description/parameters/promptGuidelines/exposure/sourceInfo`）；**Tools 面板需要 `{name, description}` 对象**（前端按 `t.name` 渲染，传字符串数组会渲染成空行——已实测踩过） | 侧栏 Tools 空白或条目无名 |
+| 22 | **侧栏 Extensions 名单** | 只能由 `source === "extension"` 的命令路径 ∪ 工具的 `sourceInfo.path` 反推（**没有**「已加载扩展列表」API）；`source` 取值 `extension \| prompt \| skill`，prompt/skill 是 `.md`（**不能**当扩展，否则侧栏混入一堆 `.md`——已实测踩过） | 侧栏扩展列表失真 |
+| 23 | **内置扩展名单** | `<pkg>/dist/extensions/index.js` 导出 `builtInExtensions`（当前 4 个：`llama.cpp`/`codemode`/`tool-search`/`mcp`）；用它过滤 `builtin:*` 路径，才能把**内置扩展**与**核心内置工具**（`builtin:bash`/`find`/`ls`/`powershell`…）区分开 | 侧栏把核心工具误列为扩展，或漏掉 codemode/tool-search |
+| 24 | **本地扩展命名** | 与 SDK 宿主 `describeLocalExtension` 同规则：`.../extensions/<dir>/index.ts → <dir>`（直接用 basename 会得到 `index`） | 侧栏显示 `index` 而非扩展目录名 |
+
+**已知的引擎差异（同一会话 A/B 实测，2026-10）**：
+
+- **Tools 面板**：SDK 宿主 21 项、原生 20 项，**仅差 `codemode`**。根因：SDK 宿主自行注入内置扩展（`pi-web/pi-sdk-web/src/session.ts` 的 `loadBuiltinExtensions()`），副作用使 `codemode` 成为 active；原生走 Pi CLI 路径，`codemode` 的 `exposure === "model-only"`、**不在 active 列表** → **原生侧符合 Pi CLI/TUI 的默认**。迁移时应让 SDK 侧不再自行注入（原生引擎天然如此）。
+- **Extensions 面板**：9 / 9 完全一致。
+- **`/` 菜单**：原生仅多 `/pi-web:reload`（桥接提供 reload 能力的必要命令；SDK 版的 `/reload` 由前端内置列表提供，两边都可用）。
 
 ### 16.5 依赖分级与「不用改」的部分
-
 - **公开契约（低风险）**：`--mode rpc` 本身是 Pi 对外协议；ExtensionAPI 是给扩展作者的公开面。
 - **非公开约定（高风险）**：第 1–6 项（对象改写）、第 7–9 项（包布局）、第 10–12 项（数据文件）。
 - 明确**不依赖**：Pi 的 TUI 渲染内部、`InteractiveMode`、Pi 的私有模块路径（除第 8 项那个 import 入口）。

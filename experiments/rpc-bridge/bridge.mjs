@@ -12,7 +12,7 @@
  * （runner.ts `get ui() { return runner.uiContext }`），改写它的成员会影响所有扩展。
  */
 import { existsSync, readFileSync, realpathSync } from "node:fs";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 const WIDTH = 78;
@@ -57,13 +57,39 @@ export default function (pi) {
   let themeName = "dark";
   let themes = null; // { dark, light }
   let themePoll = null;
+  let pkgDirCache = null;
+  let builtinNamesCache = null;
   const widgets = new Map(); // key -> { active, component, render }
+
+  /** 运行中的 pi 包目录：node_modules/.bin/pi -> <pkg>/dist/bundle/cli.js */
+  function resolvePkgDir() {
+    if (pkgDirCache) return pkgDirCache;
+    pkgDirCache = resolve(dirname(realpathSync(process.argv[1])), "../..");
+    return pkgDirCache;
+  }
+
+  /** Pi 内置扩展的权威名单（<pkg>/dist/extensions/index.js 的 builtInExtensions）。
+   *  用途：从工具的 sourceInfo 反推扩展时，把 `builtin:bash`/`find`/`ls` 这类**核心内置工具**
+   *  与 `builtin:codemode`/`tool-search` 这类**内置扩展**区分开。 */
+  async function loadBuiltinNames() {
+    if (builtinNamesCache) return builtinNamesCache;
+    try {
+      const mod = await import(
+        pathToFileURL(join(resolvePkgDir(), "dist", "extensions", "index.js")).href
+      );
+      builtinNamesCache = new Set((mod.builtInExtensions ?? []).map((e) => e.name));
+    } catch (err) {
+      console.error(`[pi-web-bridge] builtin list unavailable: ${err.message}`);
+      builtinNamesCache = new Set();
+    }
+    return builtinNamesCache;
+  }
 
   async function loadThemes() {
     if (themes) return themes;
     try {
       // 运行中的 pi 入口：node_modules/.bin/pi -> <pkg>/dist/bundle/cli.js
-      const pkgDir = resolve(dirname(realpathSync(process.argv[1])), "../..");
+      const pkgDir = resolvePkgDir();
       const mod = await import(pathToFileURL(join(pkgDir, "dist", "index.js")).href);
       const themeDir = join(pkgDir, "dist", "modes", "interactive", "theme");
       const build = (name) => {
@@ -105,29 +131,55 @@ export default function (pi) {
   // ---------------------------------------------------------------- 扩展列表
   // 与 pi-sdk-web/src/server.ts 的 getLoadedExtensions 同义：从命令的 sourceInfo
   // 反推「哪些扩展被加载」，内置扩展标注 builtin。
-  function classifyExtensions() {
-    let commands = [];
+  /** 本地扩展的展示名——与 SDK 宿主的 describeLocalExtension 同义：
+   *  `~/.pi/agent/extensions/refresh-deepinfra/index.ts` → `refresh-deepinfra`
+   *  （早先直接用 basename 会得到 `index`） */
+  function describeLocalExtension(entryPath, baseDir) {
+    const rel = baseDir
+      ? relative(baseDir, entryPath).replace(/\\/g, "/")
+      : entryPath.replace(/\\/g, "/");
+    let name = rel.replace(/^extensions\//, "");
+    name = name.replace(/\/index\.[jt]s$/, "").replace(/\.[jt]s$/, "");
+    return name || rel;
+  }
+
+  async function classifyExtensions() {
+    // 候选来源：
+    //   · `source === "extension"` 的命令（prompt/skill 的 .md 不算扩展——曾经把它们当扩展，
+    //     侧栏就多出一堆 .md 条目）
+    //   · 所有工具的 sourceInfo（有些内置扩展只注册工具、不注册命令，如 codemode / tool-search）
+    const selfExtension = process.env.PI_WEB_BRIDGE_EXTENSION ?? "";
+    const candidates = new Map(); // path -> sourceInfo
+    const consider = (p, info) => {
+      if (!p || candidates.has(p)) return;
+      if (selfExtension && resolve(p) === resolve(selfExtension)) return; // 桥接自身不算扩展
+      candidates.set(p, info);
+    };
     try {
-      commands = pi.getCommands();
+      for (const cmd of pi.getCommands()) {
+        if (cmd.source !== "extension") continue;
+        consider(cmd.sourceInfo?.path, cmd.sourceInfo);
+      }
     } catch {
-      return [];
+      /* ignore */
     }
-    const byPath = new Map();
-    for (const cmd of commands) {
-      const info = cmd.sourceInfo;
-      const p = info?.path;
-      if (!p || byPath.has(p)) continue;
-      byPath.set(p, info);
+    try {
+      for (const tool of pi.getAllTools()) {
+        consider(tool.sourceInfo?.path, tool.sourceInfo);
+      }
+    } catch {
+      /* ignore */
     }
 
+    const builtinNames = await loadBuiltinNames();
     const list = [];
     const seen = new Set();
-    for (const [p, info] of byPath) {
-      const isInline = p.startsWith("<") && p.endsWith(">");
-      const isBuiltin = p.startsWith("builtin:");
-      if (isInline || isBuiltin) {
-        const raw = isInline ? p.slice(1, -1) : p.slice("builtin:".length);
-        const name = raw.includes(":") ? raw.split(":").pop() : raw;
+    for (const [p, info] of candidates) {
+      if (p.startsWith("<") && p.endsWith(">")) continue; // inline 虚拟路径：跳过
+      if (p.startsWith("builtin:")) {
+        const name = p.slice("builtin:".length);
+        // 只保留真正的内置**扩展**；核心内置工具（bash/find/ls/read…）不在内置扩展名单里
+        if (!builtinNames.has(name)) continue;
         const key = `builtin:${name}`;
         if (!seen.has(key)) {
           seen.add(key);
@@ -135,8 +187,8 @@ export default function (pi) {
         }
         continue;
       }
-      if (info.origin === "top-level") {
-        const name = basename(p).replace(/\.(ts|js|mjs|cjs)$/, "");
+      if (info?.origin === "top-level") {
+        const name = describeLocalExtension(p, info?.baseDir);
         const key = `local:${p}`;
         if (!seen.has(key)) {
           seen.add(key);
@@ -146,8 +198,7 @@ export default function (pi) {
       }
       let dir = dirname(p);
       while (dir !== dirname(dir)) {
-        const pkgFile = join(dir, "package.json");
-        if (existsSync(pkgFile)) break;
+        if (existsSync(join(dir, "package.json"))) break;
         dir = dirname(dir);
       }
       try {
@@ -157,7 +208,7 @@ export default function (pi) {
           seen.add(key);
           list.push({
             name: pkg.name ?? key,
-            version: info.scope ? `${pkg.version ?? "?"} · ${info.scope}` : (pkg.version ?? "?"),
+            version: info?.scope ? `${pkg.version ?? "?"} · ${info.scope}` : (pkg.version ?? "?"),
           });
         }
       } catch {
@@ -295,9 +346,15 @@ export default function (pi) {
     };
 
     // 5) 上报 pi 内部信息（RPC 的 get_state 不包含这些）
+    //    tools 形状与 SDK 宿主一致：只列**当前启用**的工具，且是 {name, description} 对象
+    //    （前端按 t.name 渲染；早先直接传 getActiveTools() 的字符串数组 → 侧栏 Tools 空白）
     let tools = [];
     try {
-      tools = pi.getActiveTools();
+      const active = new Set(pi.getActiveTools());
+      tools = pi
+        .getAllTools()
+        .filter((t) => active.has(t.name))
+        .map((t) => ({ name: t.name, description: t.description }));
     } catch {
       /* ignore */
     }
@@ -313,7 +370,7 @@ export default function (pi) {
       })),
       commands: pi.getCommands(),
       tools,
-      extensions: classifyExtensions(),
+      extensions: await classifyExtensions(),
       sessionFile: ctx.sessionManager?.getSessionFile?.(),
       themesLoaded: Boolean(loaded),
     });
@@ -333,7 +390,11 @@ export default function (pi) {
     },
   });
 
-  // 7) 诊断命令：用于端到端验证桥接的 UI 通道（工厂 widget / 对话框 / 面板）
+  // 7) 诊断命令：用于端到端验证桥接的 UI 通道（工厂 widget / 对话框 / 面板）。
+  //    默认**不注册**——它们会出现在用户的 `/` 菜单里，与 SDK 版产生可见差异。
+  //    需要时用 PI_WEB_BRIDGE_DEMO=1（原型服务端 `--demo`）开启。
+  if (process.env.PI_WEB_BRIDGE_DEMO !== "1") return;
+
   pi.registerCommand("pi-web:demo-widget", {
     description: "Show a demo factory widget rendered through the bridge",
     handler: async (_args, ctx) => {

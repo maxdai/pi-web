@@ -129,6 +129,10 @@ const child = spawn(
       ...process.env,
       PI_WEB_BRIDGE_URL: `http://127.0.0.1:${PORT}`,
       PI_WEB_BRIDGE_TOKEN: TOKEN,
+      // 桥接自身路径：让它把自己从「已加载扩展」列表里排除（那是基础设施，不是用户扩展）
+      PI_WEB_BRIDGE_EXTENSION: BRIDGE_EXT,
+      // 诊断命令（/pi-web:demo-*）默认关闭：它们会污染用户的 `/` 菜单
+      ...(argv.includes("--demo") ? { PI_WEB_BRIDGE_DEMO: "1" } : {}),
     },
     stdio: ["pipe", "pipe", "pipe"],
   },
@@ -185,6 +189,22 @@ const STATS_REFRESH_EVENTS = new Set([
   "thinking_level_changed",
 ]);
 
+/** pi-web 自带命令（不来自任何扩展）——与 SDK 宿主 getCommands() 的注入保持一致，
+ *  否则 `/` 菜单里会缺 `usage`（原生实现，见 sendUsage）。 */
+const NATIVE_COMMANDS = [
+  {
+    name: "usage",
+    description: "Show usage statistics (tokens/cost, all sessions)",
+    source: "maxdai",
+    sourceInfo: { path: "pi-sdk-web", source: "maxdai", scope: "global", origin: "cli" },
+  },
+];
+
+function withNativeCommands(commands) {
+  const names = new Set(commands.map((c) => c?.name));
+  return [...commands, ...NATIVE_COMMANDS.filter((c) => !names.has(c.name))];
+}
+
 // ------------------------------------------------------------------ 状态构建
 let bridgeInfo = {};
 
@@ -229,7 +249,7 @@ async function buildState() {
     piWebVersion: PI_WEB_VERSION,
     cwd: displayCwd(cwd),
     gitBranch: gitBranch(cwd),
-    commands: bridgeInfo.commands ?? [],
+    commands: withNativeCommands(bridgeInfo.commands ?? []),
     tools: bridgeInfo.tools ?? [],
     extensions: bridgeInfo.extensions ?? [],
     scopedModels: bridgeInfo.scopedModels ?? [],

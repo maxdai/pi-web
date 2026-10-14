@@ -26,7 +26,36 @@ node experiments/rpc-bridge/server.mjs --session install --port 4096
 node tools/smoke.mjs http://127.0.0.1:4096
 ```
 
-可选参数：`--session <名字>` 或 `--session-file <路径>`、`--port <端口>`。
+可选参数：`--session <名字>` 或 `--session-file <路径>`、`--port <端口>`、`--demo`
+（`--demo` 额外注册 `/pi-web:demo-widget|demo-clear|demo-dialog|demo-panel` 四条诊断命令；**默认不注册**，
+否则它们会出现在 `/` 菜单里，与 SDK 版产生可见差异）。
+
+## 与 SDK 版的 A/B 对比（同一会话，2026-10）
+
+用同一个会话分别起 SDK 版（`pi-web r install --port 4095`）与原生版（4096），在浏览器里对比三个列表与 `/` 菜单：
+
+| 面板 | 结果 |
+|---|---|
+| **Extensions** | **9 / 9 完全一致**（5 真实 + 4 内置） |
+| **Tools** | SDK 21 / 原生 20 —— 仅差 `codemode`（原因见下，原生侧符合 Pi CLI/TUI 默认） |
+| **Loaded Resources / `/` 菜单** | 仅多 `/pi-web:reload`（桥接提供 reload 能力的必要命令；SDK 版的 `/reload` 由前端内置列表提供，两边都能用） |
+
+**`codemode` 差异的根因**：SDK 宿主自己注入内置扩展（`pi-web/pi-sdk-web/src/session.ts` 的
+`loadBuiltinExtensions()`），副作用是 codemode 被算作 active；原生走 Pi 自己的 CLI 路径，codemode 的
+`exposure` 是 `model-only`、**不在 active 列表**（实测 `pi.getActiveTools()` 不含它）。也就是说
+**原生侧给出的才是 Pi 自己的答案**；迁移时 SDK 侧应改为不自行注入内置扩展（原生引擎已天然如此）。
+
+### 名单口径（与 SDK 宿主对齐）
+
+- **Tools**：`pi.getAllTools()` ∩ `pi.getActiveTools()`，映射为 `{name, description}`（前端按 `t.name` 渲染；
+  直接传 `getActiveTools()` 的字符串数组会导致侧栏 Tools 空白）。
+- **Extensions**：只取 `source === "extension"` 的命令路径（prompt/skill 是 `.md`，不算扩展——曾把
+  `.md` 当扩展，侧栏就多出一堆）**并**合并工具的 `sourceInfo`（补上只注册工具的扩展，如 codemode/tool-search）；
+  用 `<pkg>/dist/extensions/index.js` 的 `builtInExtensions` 过滤掉 `builtin:bash`/`find`/`ls` 这类**核心内置工具**；
+  排除桥接自身（服务端经 `PI_WEB_BRIDGE_EXTENSION` 传路径）；本地扩展名按
+  `.../extensions/<dir>/index.ts → <dir>` 规则（同 SDK 宿主 `describeLocalExtension`）。
+- **命令列表**：补上 pi-web 自带命令（当前 `usage`，`source: "maxdai"`），与 SDK 宿主 `getCommands()` 的注入一致
+  ——否则 `/` 菜单里会缺 `usage`。
 
 ## 已验证（2026-10，Pi 1.2.0 / Node 24）
 
