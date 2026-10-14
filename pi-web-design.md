@@ -1333,6 +1333,16 @@ pi-web-native <session-id> <cwd> --port <n>          # 对应 server.py <session
 复查时又发现同类残留：`~/.pi/agent/agents/` 下 **4 个子代理定义**（`reviewer`/`worker`/`planner`/`scout`）
 同样是悬空软链（指向旧包 `examples/extensions/subagent/agents/*.md`），一并改为实体拷贝；
 最终 `find ~/.pi/agent -xtype l` 计数为 **0**。
+
+**随后更正（同日，实证）**：这 7 个文件经查是 **2026-08-31 安装 Pi 官方 `subagent` 示例扩展时的遗留物**
+（会话日志里留有当时的 `ln -sf ... examples/extensions/subagent/...` 命令），而该扩展本体
+（`~/.pi/agent/extensions/subagent/`）**后来已被移除**：
+① 这些 prompt 命令在全部会话记录中**从未被调用**（用户消息文本 0 次）；
+② 4 个 agent 定义**没有任何消费者**（唯一会读它们的扩展已不在）。
+即：**保留它们只是保留遗留物，不是恢复在用的功能**。用户确认后已**全部删除**
+（`~/.pi/agent/prompts/` 只留用户自己的 `newpull.md`；`agents/` 目录移除；悬空软链 0）。
+同时改进核对器：`probe.commandCount` 属**环境相关量**（取决于用户装了哪些 prompt/扩展），
+已从结构漂移判定中摘出、仅作信息展示——避免这类"用户配置变化"被误判为宿主契约漂移。
 → **教训与待办**：凡是"包内路径被用户配置引用"（软链/配置项）的地方，移动或重命名包都会静默破坏用户环境；
 发版说明里应提示检查 `~/.pi/agent/prompts/` 一类目录下的悬空软链（步骤 8 的用户侧升级提示已含此意）。
 

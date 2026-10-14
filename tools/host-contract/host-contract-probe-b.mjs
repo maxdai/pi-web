@@ -1,5 +1,5 @@
 /**
- * 宿主契约探针 B（experiments/rpc-bridge）
+ * 宿主契约探针 B（tools/host-contract）
  *
  * 与 probe A 配对：稍后调用 `ctx.ui.setTitle(...)`。若 A 的改写能看到这次调用，说明
  * `ctx.ui` 确实是 runner 的**单一共享可变对象**——这是 pi-web 桥接方案最关键的假设。

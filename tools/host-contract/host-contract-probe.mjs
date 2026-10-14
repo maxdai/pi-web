@@ -1,11 +1,11 @@
 /**
- * 宿主契约探针 A（experiments/rpc-bridge）
+ * 宿主契约探针 A（tools/host-contract）
  *
  * 在**真实 pi 进程内**探测 pi-web 所依赖的宿主内部约定，把结果以单行 JSON 打到 stderr：
  *   HOST-CONTRACT-REPORT {...}
  *
  * 这些约定是 pi-web「RPC + 注入扩展」方案的立足点（见 pi-web-design.md §16）。
- * 每次 Pi 版本更迭后，跑 `node experiments/rpc-bridge/check-host-contract.mjs` 与本仓库的
+ * 每次 Pi 版本更迭后，跑 `node tools/host-contract/check-host-contract.mjs` 与本仓库的
  * `host-contract.baseline.json` 对比，即可发现偏移。
  *
  * 与 probe B 配对：A 改写 ui.setTitle，B 稍后调用它 —— 用于验证「ctx.ui 是共享可变对象」

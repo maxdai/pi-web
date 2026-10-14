@@ -4,9 +4,9 @@
  *
  * 用途：**Pi 版本更迭后**跑一次，看 pi-web 依赖的宿主约定有没有变。
  *
- *   node experiments/rpc-bridge/check-host-contract.mjs            # 与基线对比
- *   node experiments/rpc-bridge/check-host-contract.mjs --update   # 记录/更新基线
- *   node experiments/rpc-bridge/check-host-contract.mjs --json      # 只输出当前快照
+ *   node tools/host-contract/check-host-contract.mjs            # 与基线对比
+ *   node tools/host-contract/check-host-contract.mjs --update   # 记录/更新基线
+ *   node tools/host-contract/check-host-contract.mjs --json      # 只输出当前快照
  *
  * 依赖清单与每项失效后果见 pi-web-design.md §16。判定：
  *   PASS  与基线一致
@@ -262,8 +262,26 @@ if (baseline) {
   console.log(`\nUI 方法：${uiMethodsAfter.length} 个${added.length ? `（新增 ${added.join(", ")}）` : ""}${removed.length ? `（**移除 ${removed.join(", ")}**）` : ""}`);
   if (baseline.piVersion !== snapshot.piVersion) console.log(`Pi 版本变化：${baseline.piVersion} → ${snapshot.piVersion}`);
 
+  // 环境相关量：取决于**用户装了哪些 prompt / 扩展**，不属于宿主契约 → 只展示、不参与漂移判定。
+  // 教训（2026-10-14）：用户删/增 `~/.pi/agent/prompts/*.md` 会让 commandCount 26↔23，曾被误判为 DRIFT。
+  const ENV_DEPENDENT = ["probe.commandCount"];
+  for (const path of ENV_DEPENDENT) {
+    const get = (o) => path.split(".").reduce((v, k) => (v == null ? v : v[k]), o);
+    const before = get(baseline);
+    const after = get(snapshot);
+    if (JSON.stringify(before) !== JSON.stringify(after)) {
+      console.log(
+        `ℹ️ ${path}：${JSON.stringify(before)} → ${JSON.stringify(after)}` +
+          `（环境相关：用户 prompt/扩展数量，不参与漂移判定）`,
+      );
+    }
+  }
   const meaningful = diffs.filter(
-    (d) => !d.path.endsWith("checkedAt") && !d.path.endsWith("piVersion") && !d.path.endsWith("node"),
+    (d) =>
+      !d.path.endsWith("checkedAt") &&
+      !d.path.endsWith("piVersion") &&
+      !d.path.endsWith("node") &&
+      !ENV_DEPENDENT.includes(d.path),
   );
   if (meaningful.length === 0) {
     console.log("\n✅ 与基线无结构性差异（宿主契约未变）");

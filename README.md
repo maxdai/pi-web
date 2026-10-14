@@ -96,13 +96,14 @@ npm uninstall -g pi-sdk-web          # 先卸载旧包，避免同名 bin 冲突
 npm install -g @maxdai/pi-web        # 三个 bin（pi-web / pii / pi-web-native）随之更新
 ```
 
-> ⚠️ 旧包的内容可能被你的配置以**软链**形式引用（`~/.pi/agent/` 下常见：`prompts/*.md` 与
-> `agents/*.md` 指向旧包的 `node_modules/.../examples/...`）。卸载旧包会让这些软链**悬空**，
-> Pi 会静默少注册对应的 prompt 命令 / 子代理定义。升级后请检查并改为实体文件：
+> ⚠️ 旧包内的文件可能曾被你的配置以**软链**引用（例如 `~/.pi/agent/prompts/*.md`、
+> `~/.pi/agent/agents/*.md` 指向旧包 `node_modules/.../examples/...`）。卸载旧包会让这些软链**悬空**，
+> 表现为 Pi 静默少注册对应命令/定义。升级后建议扫一遍并按需清理：
 > ```bash
 > find ~/.pi/agent -xtype l 2>/dev/null          # 列出悬空软链
 > ```
-> （2026-10 本机共遇到 **7 个**：3 个 prompt + 4 个子代理定义，均已改为实体拷贝。）
+> （2026-10 本机遇到 7 个：均为 2026-08-31 安装 Pi 官方 `subagent` 示例扩展时的遗留物，
+> 扩展本体早已移除、这些命令从未被调用过 → 已确认无用并删除。）
 
 > `pii` 的 Node 包装器会调用本机 `python3` 运行随包分发的 Python 启动器（会话名解析 / TUI 入口），
 > 需要机器装有 Python 3。
