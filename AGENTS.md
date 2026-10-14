@@ -89,6 +89,17 @@ pii r <name> --web <port>   # Web 服务，使用指定端口
 ### npm 发版流程（pi-sdk-web）
 
 - 发版流程定义于 `README.md`「发布新版本（维护者）」节（npm version → commit+tag → npm publish → git push --follow-tags）。
+- **默认流程（2026-10-14 用户指定）：先更新本机开发环境，用户测满意后再发版。**
+  ```bash
+  # ① 更新本机开发环境（不发布）：build + 全局指向仓库源码
+  cd /root/pi-web/pi-sdk-web && npm run build && npm install -g /root/pi-web/pi-sdk-web
+  # ② 用户在 4080 自测（pii r <会话名> --web）
+  # ③ 用户确认满意后，才走下面的发版动作链
+  ```
+  - `npm install -g <仓库内包目录>` 会在全局 node_modules 建立**软链**指向仓库，因此之后改 `native/`、`static/`
+    只需 `npm run build`（`src/` 的 TS 改动必须先 build）即可被 `pi-web` / `pii` / `pi-web-native` 用上，**无需发版**。
+  - 更新开发环境（build + 安装）同样会重写 `dist/`，**需在用户 4080 实例停止时做**（见第 10 节规则 8）。
+  - 未经用户明确说「发版 / 可以发版」，**只更新开发环境、不 npm publish**。
 - **重要**：发版（`npm publish`）前必须先向用户确认「是否修改完成」——用户可能还在调整中，未经确认不得发版；本地 `git commit` 不受此限制。
 - 版本号由用户确认后提升；用户设备升级命令 `npm install -g pi-sdk-web@latest`。
 - **发版是一系列动作，一次全部完成，不得遗漏**：① `git push --follow-tags`（推送 GitHub）→ ② `npm publish`（发布 npm）→ ③ `npm install -g pi-sdk-web@<版本>`（更新本机全局安装）。三步按序执行并各自验证。
