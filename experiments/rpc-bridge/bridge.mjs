@@ -382,11 +382,20 @@ export default function (pi) {
   });
 
   // 6) 扩展 RPC 没有的能力：reload（ExtensionCommandContext 才有）
+  //
+  //    注意：扩展命令在 pi 里是「立即执行、即使正在流式输出」（agent-session.ts:2060 注释），
+  //    因此**必须自己加防护**——SDK 宿主的 /reload 会检查 session.isIdle / isCompacting 并拒绝。
+  //    ctx.isIdle() 的语义已覆盖 agent run / compaction / branch summary / retry / 排队消息。
   pi.registerCommand("pi-web:reload", {
     description: "Reload extensions and resources (pi-web bridge)",
     handler: async (_args, ctx) => {
+      const idle = typeof ctx.isIdle === "function" ? ctx.isIdle() : true;
+      if (!idle) {
+        await post("/side/event", { type: "reload-refused", reason: "busy" });
+        return;
+      }
       await ctx.reload();
-      await post("/side/event", { type: "reloaded" });
+      await post("/side/event", { type: "reloaded", idleBeforeReload: idle });
     },
   });
 

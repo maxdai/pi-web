@@ -814,6 +814,7 @@ pi-sdk-web 已实现并通过浏览器验收（本地提交，随本设计一起
 | **`export`** | RPC `export_html`（接受 `outputPath`）→ notify 路径 | 通知含导出路径 |
 | **`delete_session`** | 校验「已知会话 + 非当前会话」后 `unlink` | 三个分支全通过 |
 | **`(unnamed)` 解析** | 无 `session_info` 名字的会话按 `(unnamed)` 匹配（与 `pii` 一致） | 合成未命名会话可被解析 |
+| **`reload`** | RPC 命令表无 reload；桥接注册 `pi-web:reload`，处理器调用 `ExtensionCommandContext.reload()`，并**自加忙时防护**（`ctx.isIdle()`，语义覆盖 agent run/compaction/retry/排队；拒绝时按 SDK 宿主口径报 `Wait for the current response to finish before reloading.`）——因为**扩展命令会被立即执行、即使正在流式输出**（`agent-session.ts:2060`） | 两条入口（`/reload` 前端内置 → `{type:'reload'}`，与直接输入 `/pi-web:reload`）实测走同一条 `prompt` 链路、行为一致；空闲时 `idleBeforeReload: true`、reload 后桥接重新安装补丁且 `get_state` 正常 |
 
 **仍存的缺口（明确记录，迁移时降级或补齐）**：`.jsonl` 导出（RPC 仅 `export_html`）、scoped models 需写 settings + 重启子进程、面板**按键交互**不支持（只读）、TUI-only 项（`setWorkingIndicator`/`setFooter`/`setHeader` 等，宿主与 RPC 下本就 no-op）、自定义 session 目录（`PI_SESSION_DIR` 等）未覆盖。
 

@@ -666,6 +666,10 @@ const server = createServer(async (req, res) => {
       }
       if (route === "event") {
         console.log(`[proto] bridge event: ${JSON.stringify(data)}`);
+        // 忙时拒绝 reload：与 SDK 宿主的报错口径一致（前端 case 'error' → appendError）
+        if (data.type === "reload-refused") {
+          broadcast({ type: "error", error: "Wait for the current response to finish before reloading." });
+        }
         return reply({ ok: true });
       }
       return reply({ ok: false, error: `unknown side route: ${route}` });
