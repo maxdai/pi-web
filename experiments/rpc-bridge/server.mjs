@@ -162,6 +162,8 @@ async function rpcData(type, extra) {
 // ------------------------------------------------------------------ WS 广播
 const clients = new Set();
 const bridgeDialogs = new Map(); // id -> resolve（桥接发起的对话框）
+/** 对话框/面板超时。可用环境变量缩短，便于自动化测试（默认 10 分钟）。 */
+const DIALOG_TIMEOUT_MS = Number(process.env.PI_WEB_BRIDGE_DIALOG_TIMEOUT_MS ?? 10 * 60 * 1000);
 const widgetSnapshot = new Map(); // key -> {widgetKey, widgetLines, widgetPlacement}
 let extStatusSnapshot = {};
 let themeName = "dark"; // 浏览器主题：桥接经 GET /side/theme 取用（扩展 ANSI 换肤）
@@ -289,6 +291,62 @@ async function sendStats() {
   }
 }
 
+/** TUI `/session` 等价物：只读信息模态（与 SDK 宿主 broadcastSessionInfo 同形同内容）。 */
+async function sendSessionInfo() {
+  try {
+    const st = (await rpcData("get_state")) ?? {};
+    const stats = (await rpcData("get_session_stats")) ?? {};
+    let entryCount = 0;
+    try {
+      entryCount = ((await rpcData("get_entries"))?.entries ?? []).length;
+    } catch {
+      /* ignore */
+    }
+    const n = (v) => (typeof v === "number" ? v : 0);
+    const lines = ["## Session Info", ""];
+    if (st.sessionName) lines.push(`**Name:** ${st.sessionName}`);
+    lines.push(`**ID:** ${st.sessionId ?? ""}`);
+    if (stats.sessionFile) lines.push(`**File:** ${stats.sessionFile}`);
+    if (st.model) lines.push(`**Model:** ${st.model.provider}/${st.model.id}`);
+    lines.push(`**Thinking:** ${st.thinkingLevel ?? "off"}`, "");
+    lines.push("### Messages");
+    lines.push(`- User: ${n(stats.userMessages)}`);
+    lines.push(`- Assistant: ${n(stats.assistantMessages)}`);
+    lines.push(`- Tool calls: ${n(stats.toolCalls)}`);
+    lines.push(`- Tool results: ${n(stats.toolResults)}`);
+    lines.push(`- Total: ${n(stats.totalMessages)}`);
+    lines.push(`- Entries: ${entryCount}`, "");
+    const t = stats.tokens;
+    if (t) {
+      lines.push("### Tokens");
+      lines.push(`- Input: ${n(t.input)}`);
+      lines.push(`- Output: ${n(t.output)}`);
+      lines.push(`- Cache read: ${n(t.cacheRead)}`);
+      lines.push(`- Cache write: ${n(t.cacheWrite)}`);
+      lines.push(`- Total: ${n(t.total)}`, "");
+    }
+    if (typeof stats.cost === "number") {
+      lines.push("### Cost");
+      lines.push(`$${stats.cost.toFixed(4)}`);
+    }
+    const cu = stats.contextUsage;
+    if (cu?.contextWindow) {
+      lines.push("", "### Context");
+      lines.push(`- ${cu.percent ?? "?"}% / ${cu.contextWindow} tokens`);
+    }
+    broadcast({
+      type: "extension_ui_request",
+      id: randomUUID(),
+      method: "notify",
+      title: "/session",
+      message: lines.join("\n"),
+      notifyType: "info",
+    });
+  } catch (err) {
+    notify("/session", `session info unavailable: ${err.message}`, "warning");
+  }
+}
+
 /** `/usage`：复用 pi-web 既有的 usage-render（读 session 文件，不依赖 SDK）。
  *  原型阶段 import pi-sdk-web 的构建产物；正式迁移时该模块并入原生服务端源码。 */
 async function sendUsage(scope, target) {
@@ -382,6 +440,8 @@ async function handleClientMessage(ws, msg) {
         await rpc("prompt", { message: msg.message });
         break;
       case "abort":
+        // 中止时撤销挂起的对话框（桥接的 handler 会拿到 cancelled）——否则网页模态残留
+        dismissDialogs("aborted");
         await rpc("abort");
         break;
       case "abort_bash":
@@ -401,8 +461,15 @@ async function handleClientMessage(ws, msg) {
         break;
       }
       case "get_state":
-      case "session":
         await sendState(ws);
+        break;
+      case "get_stats":
+        // SDK 宿主也有这个命令（前端当前不发，保留同形接口）
+        await sendStats();
+        break;
+      case "session":
+        // TUI /session 等价物：只读信息模态（与 SDK 宿主 broadcastSessionInfo 同形同内容）
+        await sendSessionInfo();
         break;
       case "compact":
         await rpc("compact");
@@ -460,6 +527,8 @@ async function handleClientMessage(ws, msg) {
         break;
       }
       case "resume":
+        // 会话切换：旧会话上挂起的对话框必须撤销（与 SDK 宿主的 session-switch 一致）
+        dismissDialogs("session-switch");
         await rpc("switch_session", { sessionPath: msg.path });
         await sendState();
         await sendHistory();
@@ -515,7 +584,17 @@ async function handleClientMessage(ws, msg) {
             return [];
           }
         })();
-        ws.send(JSON.stringify({ type: "scoped_models", data: { available, configured } }));
+        ws.send(
+          JSON.stringify({
+            type: "scoped_models",
+            data: {
+              // 前端用 scoped 预勾选多选项（SDK 宿主也有这个字段）
+              scoped: bridgeInfo.scopedModels ?? [],
+              available: bridgeInfo.scopedModels ?? [],
+              configured,
+            },
+          }),
+        );
         break;
       }
       case "export": {
@@ -549,6 +628,20 @@ async function handleClientMessage(ws, msg) {
   } catch (err) {
     console.error(`[proto] ${type} failed: ${err.message}`);
     ws.send(JSON.stringify({ type: "error", error: `${type}: ${err.message}` }));
+  }
+}
+
+/** 会话切换/中止时撤销挂起的对话框：resolve 为 cancelled 并让浏览器关掉模态。
+ *  与 SDK 宿主的 dismissDialog(id, "session-switch" | "aborted") 对齐。 */
+function dismissDialogs(reason) {
+  for (const [id, resolveAnswer] of bridgeDialogs) {
+    bridgeDialogs.delete(id);
+    try {
+      resolveAnswer({ cancelled: true });
+    } catch {
+      /* ignore */
+    }
+    broadcast({ type: "dialog_dismissed", id, reason });
   }
 }
 
@@ -630,7 +723,9 @@ const server = createServer(async (req, res) => {
           const timer = setTimeout(() => {
             bridgeDialogs.delete(id);
             resolveAnswer({ cancelled: true });
-          }, 10 * 60 * 1000);
+            // 服务端已放手：必须告诉浏览器关掉模态，否则它会一直留在屏幕上
+            broadcast({ type: "dialog_dismissed", id, reason: "timeout" });
+          }, DIALOG_TIMEOUT_MS);
           bridgeDialogs.set(id, (response) => {
             clearTimeout(timer);
             resolveAnswer(response);
@@ -643,7 +738,7 @@ const server = createServer(async (req, res) => {
             lines: data.lines ?? [],
             value: data.value,
             // 与面板超时一致，前端据此显示倒计时（同对话框）
-            deadline: Date.now() + 10 * 60 * 1000,
+            deadline: Date.now() + DIALOG_TIMEOUT_MS,
           });
         });
         const value = answer && "value" in answer && answer.value !== undefined ? answer.value : data.value;
@@ -655,7 +750,8 @@ const server = createServer(async (req, res) => {
           const timer = setTimeout(() => {
             bridgeDialogs.delete(id);
             resolveAnswer({ cancelled: true });
-          }, 10 * 60 * 1000);
+            broadcast({ type: "dialog_dismissed", id, reason: "timeout" });
+          }, DIALOG_TIMEOUT_MS);
           bridgeDialogs.set(id, (response) => {
             clearTimeout(timer);
             resolveAnswer(response);

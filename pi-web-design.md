@@ -996,6 +996,27 @@ node deadlock-harness.mjs                      # 对照组：启动期对话框�
 node deadlock-harness.mjs --bridge             # 桥接接管：resolve = true
 ```
 
+### 15.11 与 SDK 宿主的功能对照（2026-10，逐项核对）
+
+**命令面：完全一致**（31 个客户端命令逐一 diff，无缺项）。本轮补齐了 3 处实现差异：
+
+| 项 | SDK 宿主 | 原生原型（本轮前） | 现状 |
+|---|---|---|---|
+| `/session` | 只读信息模态（name/ID/file/model/thinking + 消息数/Token/费用/上下文） | 只刷新 state，**无模态** | ✅ 已按同形同内容实现 |
+| `get_scoped_models` | 返回 `{scoped, available, configured}` | 缺 `scoped`（前端用它预勾选） | ✅ 已补齐 |
+| `dialog_dismissed` | 超时/中止/切会话时通知前端关模态（`ui-context.ts:209`） | **不发** → 模态残留在屏幕上 | ✅ 已实现三条路径（timeout/aborted/session-switch，实测通过） |
+| `get_stats` | 有（前端当前不发） | 无 | ✅ 已补（同形接口） |
+
+**状态字段面**：SDK 15 个键 / 原生 14 个；唯一差集是 `gitBranch`——因原生实例的会话 cwd 为 `/root`（非 git 仓库）而被 JSON 丢弃，改用仓库目录的会话实测得到 `gitBranch="main"`，**非缺项**。
+
+**仍存差异（3 项，均已定位）**：
+
+| 差异 | 说明 | 影响 |
+|---|---|---|
+| **scoped models 即时生效** | SDK 走 `session.setScopedModels()` 立即生效；原生只能写 `settings.json`。**实测 `ctx.reload()` 不会重算 scoped models**（改 `enabledModels` 后 reload，`ctx.scopedModels` 仍是旧值）→ 必须**重启 pi 子进程** | `/scoped-models` 改动与页脚模型列表要重启后才反映（未实现自动重启） |
+| **`.jsonl` 导出** | SDK 有 `session.exportToJsonl`；RPC 只有 `export_html` | 原生下 `.jsonl` 导出以降级提示代替 |
+| **非功能性** | SDK 宿主有 WS 背压与堆水位保护、`PI_SESSION_DIR`/自定义配置目录解析；原型无（原型服务端很薄，pi 子进程自带内存策略） | 极端流量/自定义目录场景下的健壮性与解析差异 |
+
 ## 16. 宿主（Pi）依赖与兼容性核对清单
 
 > 本节是 §15 方案的**配套维护契约**。RPC + 注入扩展的做法**替换/改写了宿主 pi 的对象**，并直接依赖若干

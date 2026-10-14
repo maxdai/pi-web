@@ -126,6 +126,17 @@ node experiments/rpc-bridge/check-host-contract.mjs --json     # 只看当前快
 - `FAIL` = 立足点被破坏；`DRIFT` = 与基线有差异（需人工判断）
 - 核对器自身已验证：篡改基线（移除一个 UI 方法 + 把 `theme` 改成不可配置 getter）后能正确报出 4 处差异
 
+## 与 SDK 宿主的功能对照
+
+完整对照表见 `pi-web-design.md` §15.11。要点：
+
+- **命令面完全一致**（31 个客户端命令逐一 diff）。
+- 本轮补齐：`/session` 只读模态、`get_scoped_models` 的 `scoped` 字段、`dialog_dismissed`（timeout /
+  aborted / session-switch 三条路径，实测通过）、`get_stats`。
+- **仍存差异**：① scoped models 改动需**重启 pi 子进程**（实测 `ctx.reload()` 不会重算）；
+  ② `.jsonl` 导出降级（RPC 仅 `export_html`）；③ 非功能性（SDK 宿主的 WS 背压/堆水位保护、
+  自定义 session 目录解析）。
+
 ## 下一步
 
 见 pi-web-design.md §15.8：阶段 A 抽象引擎接口（`--engine sdk|native`）→ B 落地本原型 →
