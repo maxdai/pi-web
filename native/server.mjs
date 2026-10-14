@@ -1,13 +1,15 @@
 #!/usr/bin/env node
 /**
- * pi-web RPC + bridge 原型服务端（experiments/rpc-bridge）
+ * pi-web 原生引擎服务端（bin: `pi-web-native`；设计见 pi-web-design.md §15/§17）
  *
  * 目标：**不改动前端**地复现 pi-web 的能力——复用仓库 `static/`，沿用同一套 WS 协议，
  * 但引擎换成「spawn 已安装的原生 pi --mode rpc」+ 注入桥接扩展（见 bridge.mjs）。
+ * 由 `pii r <会话名> --web [端口]` 调用（契约：`<session-id> [cwd] --port <n>`）。
  *
  * 用法：
- *   node experiments/rpc-bridge/server.mjs --session install [--port 4096]
- *   node experiments/rpc-bridge/server.mjs --session-file /path/to/session.jsonl
+ *   pi-web-native <session-id> [cwd] [--port 4080]      # pii 的调用方式
+ *   pi-web-native --session <name> --port 4096          # 按会话名
+ *   pi-web-native --session-file /path/to/session.jsonl --port 4096
  *
  * 然后（另一个终端）：
  *   node tools/smoke.mjs http://127.0.0.1:4096
@@ -52,7 +54,26 @@ const TOKEN = randomUUID();
  *  否则 pi 子进程派生的助手进程（aft bridge、LSP、bash…）会继承会话标记而被误判成
  *  "另一个 web 实例"（2026-10-14 实测误报：同一实例被报成 3 个 PID）。 */
 const RUN_ID = randomUUID();
-const PI_WEB_VERSION = "0.0.0-rpc-proto";
+/** pi-web 版本 = 本包 package.json 的 version（与 SDK 宿主同口径，header 直接显示）。
+ *  两种布局都要能找到：发布后 HERE=<pkg>/dist/native → <pkg>/package.json；
+ *  仓库内 HERE=<repo>/native → <repo>/pi-sdk-web/package.json。 */
+const PI_WEB_VERSION = (() => {
+  const candidates = [
+    join(HERE, "..", "..", "package.json"),
+    join(HERE, "..", "pi-sdk-web", "package.json"),
+    join(HERE, "..", "package.json"),
+  ];
+  for (const file of candidates) {
+    try {
+      if (!existsSync(file)) continue;
+      const version = JSON.parse(readFileSync(file, "utf8")).version;
+      if (typeof version === "string" && version) return version;
+    } catch {
+      /* 试下一个 */
+    }
+  }
+  return "dev";
+})();
 
 // ------------------------------------------------------------------ 参数解析
 const argv = process.argv.slice(2);
@@ -179,8 +200,8 @@ async function resolveSession() {
 }
 
 const session = await resolveSession();
-log(`[proto] session: ${session.name ?? "(unnamed)"} → ${session.path}`);
-log(`[proto] cwd: ${session.cwd}`);
+log(`[pi-web] session: ${session.name ?? "(unnamed)"} → ${session.path}`);
+log(`[pi-web] cwd: ${session.cwd}`);
 
 // ------------------------------------------------------------------ Pi 版本
 const PI_VERSION = (() => {
@@ -342,7 +363,7 @@ async function buildState() {
   try {
     st = (await rpcData("get_state")) ?? {};
   } catch (err) {
-    logErr(`[proto] get_state failed: ${err.message}`);
+    logErr(`[pi-web] get_state failed: ${err.message}`);
   }
   const cwd = bridgeInfo.cwd ?? session.cwd;
   if (st.sessionId) lastSessionId = String(st.sessionId);
@@ -387,7 +408,7 @@ async function sendHistory(target) {
     if (target) target.send(JSON.stringify(frame));
     else broadcast(frame);
   } catch (err) {
-    logErr(`[proto] get_entries failed: ${err.message}`);
+    logErr(`[pi-web] get_entries failed: ${err.message}`);
   }
 }
 
@@ -542,18 +563,18 @@ let childExited = false;
 
 // 启动期 spawn 失败（例如 PATH 上没有 pi）：明确报错并退出，不要静默
 child.on("error", (err) => {
-  logErr(`[proto] 无法启动 pi 子进程：${err.message}`);
-  logErr("[proto] 请确认 `pi` 在 PATH 上可执行（pi --version）");
+  logErr(`[pi-web] 无法启动 pi 子进程：${err.message}`);
+  logErr("[pi-web] 请确认 `pi` 在 PATH 上可执行（pi --version）");
   process.exit(1);
 });
 
 child.on("exit", (code, signal) => {
   childExited = true;
   if (shuttingDown) {
-    log(`[proto] pi 子进程已随服务端退出 (code=${code} signal=${signal})`);
+    log(`[pi-web] pi 子进程已随服务端退出 (code=${code} signal=${signal})`);
     return;
   }
-  logErr(`[proto] pi 子进程意外退出 (code=${code} signal=${signal})`);
+  logErr(`[pi-web] pi 子进程意外退出 (code=${code} signal=${signal})`);
   // 让页面看到原因（不直接断开 WS，否则前端会自动重连并刷新页面，反而看不到提示）
   broadcast({
     type: "error",
@@ -566,7 +587,7 @@ child.on("exit", (code, signal) => {
 async function shutdown(reason) {
   if (shuttingDown) return;
   shuttingDown = true;
-  log(`[proto] 关停（${reason}）…`);
+  log(`[pi-web] 关停（${reason}）…`);
   if (!childExited) {
     try {
       child.kill("SIGTERM");
@@ -575,7 +596,7 @@ async function shutdown(reason) {
     }
     await new Promise((r) => setTimeout(r, 1500));
     if (!childExited) {
-      logErr("[proto] pi 子进程未在 1.5s 内退出，发送 SIGKILL");
+      logErr("[pi-web] pi 子进程未在 1.5s 内退出，发送 SIGKILL");
       try {
         child.kill("SIGKILL");
       } catch {
@@ -660,7 +681,7 @@ async function checkSessionSharers() {
   if (sharersWarned) return; // 同一批只提示一次，避免刷屏
   sharersWarned = true;
   const pids = found.map((f) => f.pid).join(", ");
-  logErr(`[proto] 警告：同一会话已被另一个原生 web 实例打开（PID ${pids}）——并发写入可能互相干扰`);
+  logErr(`[pi-web] 警告：同一会话已被另一个原生 web 实例打开（PID ${pids}）——并发写入可能互相干扰`);
   notify(
     "会话并发写入风险",
     `同一会话正被另一个原生 web 实例打开（PID ${pids}）。两个宿主同时写入可能互相干扰，建议只保留一个。`,
@@ -706,7 +727,7 @@ async function handleClientMessage(ws, msg) {
         const rows = Number(msg.rows);
         if (Number.isFinite(cols) && Number.isFinite(rows) && cols >= 20 && rows >= 5) {
           panelGeometry = { cols: Math.floor(cols), rows: Math.floor(rows) };
-          log(`[proto] panel geometry ← ${panelGeometry.cols}×${panelGeometry.rows}`);
+          log(`[pi-web] panel geometry ← ${panelGeometry.cols}×${panelGeometry.rows}`);
         }
         break;
       }
@@ -838,7 +859,7 @@ async function handleClientMessage(ws, msg) {
         if (patterns.length > 0) settings.enabledModels = patterns;
         else delete settings.enabledModels;
         writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2));
-        log(`[proto] enabledModels → ${JSON.stringify(patterns)}（重启本原型后生效）`);
+        log(`[pi-web] enabledModels → ${JSON.stringify(patterns)}（重启本原型后生效）`);
         notify(
           "scoped-models",
           `已保存 ${patterns.length} 个 scoped models；原生引擎需重启 pi 子进程后生效`,
@@ -906,14 +927,14 @@ async function handleClientMessage(ws, msg) {
         if (!known) throw new Error("Not a known session file");
         if (target === session.path) throw new Error("Cannot delete the currently active session");
         unlinkSync(target);
-        log(`[proto] deleted session file ${target}`);
+        log(`[pi-web] deleted session file ${target}`);
         break;
       }
       default:
-        log(`[proto] unknown client message: ${type}`);
+        log(`[pi-web] unknown client message: ${type}`);
     }
   } catch (err) {
-    logErr(`[proto] ${type} failed: ${err.message}`);
+    logErr(`[pi-web] ${type} failed: ${err.message}`);
     ws.send(JSON.stringify({ type: "error", error: `${type}: ${err.message}` }));
   }
 }
@@ -934,7 +955,7 @@ function clearDialogTimer(entry) {
 function armDialogFallback(id, entry) {
   entry.fallback = true;
   entry.timer = setTimeout(() => {
-    log(`[proto] dialog ${id}: 无浏览器应答，${DIALOG_FALLBACK_TIMEOUT_MS}ms 后按默认值结算`);
+    log(`[pi-web] dialog ${id}: 无浏览器应答，${DIALOG_FALLBACK_TIMEOUT_MS}ms 后按默认值结算`);
     settleDialog(id, { cancelled: true }, "timeout");
   }, DIALOG_FALLBACK_TIMEOUT_MS);
 }
@@ -1038,13 +1059,13 @@ const server = createServer(async (req, res) => {
         return reply(panelGeometry);
       }
       if (route === "theme-ack") {
-        log(`[proto] bridge set theme → ${data.name}`);
+        log(`[pi-web] bridge set theme → ${data.name}`);
         return reply({ ok: true });
       }
       if (route === "ready") {
         bridgeInfo = { ...bridgeInfo, ...data };
         log(
-          `[proto] bridge ready: mode=${data.mode} hasUI=${data.hasUI} cwd=${data.cwd} ` +
+          `[pi-web] bridge ready: mode=${data.mode} hasUI=${data.hasUI} cwd=${data.cwd} ` +
             `commands=${(data.commands ?? []).length} tools=${(data.tools ?? []).length} ` +
             `extensions=${(data.extensions ?? []).length} scoped=${(data.scopedModels ?? []).length}`,
         );
@@ -1124,7 +1145,7 @@ const server = createServer(async (req, res) => {
         return reply({ ok });
       }
       if (route === "event") {
-        log(`[proto] bridge event: ${JSON.stringify(data)}`);
+        log(`[pi-web] bridge event: ${JSON.stringify(data)}`);
         // 忙时拒绝 reload：与 SDK 宿主的报错口径一致（前端 case 'error' → appendError）
         if (data.type === "reload-refused") {
           broadcast({ type: "error", error: "Wait for the current response to finish before reloading." });
@@ -1195,7 +1216,7 @@ wss.on("connection", async (ws) => {
 });
 
 server.listen(PORT, "127.0.0.1", () => {
-  log(`[proto] http://127.0.0.1:${PORT}/  (pi v${PI_VERSION} · native engine)`);
+  log(`[pi-web] http://127.0.0.1:${PORT}/  (pi v${PI_VERSION} · native engine)`);
   // 并发写检查：启动后一次 + 每 5 分钟复查（尽力而为，不阻断）
   setTimeout(() => void checkSessionSharers(), 1500);
   setInterval(() => void checkSessionSharers(), 5 * 60 * 1000).unref?.();

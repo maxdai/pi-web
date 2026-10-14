@@ -1,5 +1,5 @@
 /**
- * pi-web bridge extension —— 原型（experiments/rpc-bridge）
+ * pi-web 桥接扩展（bin 随 pi-web-native 一起发布；由服务端以 `--extension` 注入）
  *
  * 由 pi-web 以 `--extension` 注入到**原生 pi** 进程内，负责 RPC 模式拿不到的那层：
  *   · 工厂式 widget（RPC 只支持字符串数组，工厂会被静默丢弃）+ 组件生命周期
