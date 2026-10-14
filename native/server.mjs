@@ -480,9 +480,23 @@ async function sendSessionInfo() {
 
 /** `/usage`：复用 pi-web 既有的 usage-render（读 session 文件，不依赖 SDK）。
  *  原型阶段 import pi-sdk-web 的构建产物；正式迁移时该模块并入原生服务端源码。 */
+/** usage-render 模块的位置：仓库内是 <repo>/pi-sdk-web/dist/，发布后是 <pkg>/dist/。
+ *  （曾用已不存在的 REPO 常量拼接 → `/usage` 报 "REPO is not defined"，0.7.0~0.7.5 受影响。） */
+function usageRenderPath() {
+  const candidates = [
+    join(HERE, "..", "pi-sdk-web", "dist", "usage-render.js"), // 仓库布局：<repo>/native
+    join(HERE, "..", "usage-render.js"), // 发布布局：<pkg>/dist/native → <pkg>/dist
+    join(HERE, "..", "..", "dist", "usage-render.js"), // 兜底
+  ];
+  for (const file of candidates) {
+    if (existsSync(file)) return file;
+  }
+  throw new Error(`usage-render.js not found（试过：${candidates.join(" · ")}）`);
+}
+
 async function sendUsage(scope, target) {
   try {
-    const mod = await import(pathToFileURL(join(REPO, "pi-sdk-web", "dist", "usage-render.js")).href);
+    const mod = await import(pathToFileURL(usageRenderPath()).href);
     const data = mod.buildUsageData(scope === "all" ? undefined : lastSessionId || undefined);
     if (data) {
       const frame = { type: "usage_data", data };
@@ -496,7 +510,7 @@ async function sendUsage(scope, target) {
       );
     }
   } catch (err) {
-    notify("/usage", `usage unavailable: ${err.message}（先构建 pi-sdk-web：npm run build）`, "warning");
+    notify("/usage", `usage unavailable: ${err.message}`, "warning");
   }
 }
 
