@@ -5,11 +5,13 @@
   pii list -l       Also show session file paths
   pii r <name>      Resume the session with the given name via `pi --session <id>`
   pii r <name> --web [port]   Start web mode (default port 4080)
+                              (runs the native engine: `pi --mode rpc` + injected bridge)
   pii delete <name> Delete all sessions with the given name (asks for confirmation)
   pii delete "(unnamed)"  Delete all sessions without a display name
 """
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -32,6 +34,29 @@ def _resolve_project_root() -> Path:
     return script_dir.parent.parent
 
 PROJECT_ROOT = _resolve_project_root()
+
+
+def _native_server_cmd(session_id, cwd, port):
+    """原生引擎服务端命令（RPC + 注入桥接扩展）。
+
+    解析顺序：PI_WEB_NATIVE_BIN 显式覆盖 → PATH 上的 pi-web-native（发布后随包安装）
+    → 仓库内的 native/server.mjs（开发时）。三者都找不到则明确报错。
+    """
+    override = os.environ.get("PI_WEB_NATIVE_BIN")
+    if override:
+        return [override, session_id, cwd, "--port", str(port)]
+    exe = shutil.which("pi-web-native")
+    if exe:
+        return [exe, session_id, cwd, "--port", str(port)]
+    script = PROJECT_ROOT / "native" / "server.mjs"
+    if script.is_file():
+        return ["node", str(script), session_id, cwd, "--port", str(port)]
+    print(
+        "Native server not found: expected `pi-web-native` on PATH or "
+        f"{script}",
+        file=sys.stderr,
+    )
+    sys.exit(1)
 
 
 def sessions():
@@ -102,11 +127,9 @@ def cmd_resume(name, web=False, port=None):
         print(f"Session cwd not found ({cwd}), keeping current directory", file=sys.stderr)
 
     if web:
-        server_script = PROJECT_ROOT / "server" / "server.py"
-        if not server_script.is_file():
-            print(f"Web server not found: {server_script}", file=sys.stderr)
-            sys.exit(1)
-        cmd = [sys.executable, str(server_script), target["id"], target["cwd"], "--port", str(port or 4080)]
+        # 2026-10 起 --web 使用**原生引擎**（RPC + 桥接扩展），不再是打包的 Python RPC 服务端。
+        # 契约与 Python 版同形：<session-id> <cwd> --port <n>（端口默认 4080，不自动换端口）。
+        cmd = _native_server_cmd(target["id"], target["cwd"], port or 4080)
         try:
             sys.exit(subprocess.call(cmd))
         except KeyboardInterrupt:

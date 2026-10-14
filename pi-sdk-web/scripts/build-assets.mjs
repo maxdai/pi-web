@@ -33,6 +33,10 @@ if (existsSync(at("dist", "pii-cli.js"))) {
 chmodSync(at("dist", "pi-bin", "pii-cli.js"), 0o755);
 cpSync(at("../pii/pii"), at("dist", "pi-bin", "pii"));
 
+// 2.5) 原生引擎（RPC + 桥接扩展）：node 源码原样拷贝，bin 需要执行位
+cpSync(at("../native"), at("dist", "native"), { recursive: true });
+chmodSync(at("dist", "native", "server.mjs"), 0o755);
+
 // 3) Python 桥（拷贝时即排除 pycache，双保险）
 cpSync(at("../server"), at("dist", "pi-bin", "server"), {
   recursive: true,

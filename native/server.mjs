@@ -18,18 +18,29 @@ import { createServer } from "node:http";
 import { createRequire } from "node:module";
 import { spawn, execFileSync } from "node:child_process";
 import { readdir, readFile, stat } from "node:fs/promises";
-import { readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { randomUUID } from "node:crypto";
 
-// ws 来自 pi-sdk-web 的依赖树（原型不自带依赖）
-const require = createRequire("/root/pi-web/pi-sdk-web/package.json");
-const { WebSocketServer } = require("ws");
-
 const HERE = dirname(fileURLToPath(import.meta.url));
-const REPO = resolve(HERE, "../..");
-const STATIC_DIR = join(REPO, "static");
+// 静态前端：仓库里是 <repo>/native → <repo>/static；发布后是 <pkg>/dist/native → <pkg>/dist/static
+const STATIC_DIR = resolve(HERE, "..", "static");
+
+/** 解析 ws：本包依赖，发布后从 dist/native 往上层 node_modules 即可找到；
+ *  仓库内开发时 native/ 下没有 node_modules，回退到同级的 pi-sdk-web 依赖树。
+ *  （不要写死绝对路径 —— 那是原型阶段的权宜做法，发布后必然失效。） */
+const { WebSocketServer } = (() => {
+  const candidates = [import.meta.url, pathToFileURL(join(HERE, "..", "pi-sdk-web", "package.json")).href];
+  for (const base of candidates) {
+    try {
+      return createRequire(base)("ws");
+    } catch {
+      /* 试下一个 */
+    }
+  }
+  throw new Error("cannot resolve dependency 'ws' (expected next to this package or under node_modules)");
+})();
 const BRIDGE_EXT = join(HERE, "bridge.mjs");
 // 与 Pi 自身一致：尊重 PI_CODING_AGENT_DIR（默认 ~/.pi/agent）。
 // 曾硬编码 $HOME/.pi/agent —— 自定义配置目录下会读错 settings / 扫错 sessions。
@@ -45,12 +56,47 @@ const arg = (name, fallback) => {
   const i = argv.indexOf(`--${name}`);
   return i >= 0 && argv[i + 1] ? argv[i + 1] : fallback;
 };
-const PORT = Number(arg("port", "4096"));
-const SESSION_NAME = arg("session", undefined);
+
+/** 服务端自身的诊断日志：统一带本地时间戳（便于事后对照；命令/扩展输出保持原样不加）。
+ *  取自 pi-web 既有约定：自身的日志行（背压、生命周期、几何上报…）都要有时间。 */
+function log(message) {
+  const d = new Date();
+  const p = (n, w = 2) => String(n).padStart(w, "0");
+  const stamp =
+    `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ` +
+    `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+  console.log(`[${stamp}] ${message}`);
+}
+function logErr(message) {
+  const d = new Date();
+  const p = (n, w = 2) => String(n).padStart(w, "0");
+  const stamp =
+    `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ` +
+    `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+  console.error(`[${stamp}] ${message}`);
+}
+
+// 位置参数（与 pii 调用 Python 服务端的契约同形）：pi-web-native <session-id> <cwd> --port <n>
+const POSITIONAL = argv.filter((a, i) => !a.startsWith("--") && !(i > 0 && argv[i - 1].startsWith("--")));
+const POS_SESSION_ID = arg("session", undefined) ?? POSITIONAL[0] ?? undefined;
+const POS_CWD = arg("cwd", undefined) ?? POSITIONAL[1] ?? undefined;
 const SESSION_FILE = arg("session-file", undefined);
-if (!SESSION_NAME && !SESSION_FILE) {
-  console.error("usage: node server.mjs --session <name> [--port 4096] | --session-file <path>");
+const PORT = Number(arg("port", "4080"));
+
+// 端口与 cwd 校验：与 Python 服务端一致的报错行为（不自动换端口）
+if (!Number.isInteger(PORT) || PORT < 1 || PORT > 65535) {
+  logErr(`Invalid port: ${arg("port", "")}`);
+  process.exit(1);
+}
+if (!POS_SESSION_ID && !SESSION_FILE) {
+  logErr("usage: pi-web-native <session-id> [cwd] [--port 4080]");
+  logErr("       pi-web-native --session <name> --port 4080");
+  logErr("       pi-web-native --session-file <path> --port 4080");
   process.exit(2);
+}
+if (POS_CWD && !existsSync(POS_CWD)) {
+  logErr(`Working directory not found: ${POS_CWD}`);
+  process.exit(1);
 }
 
 // ------------------------------------------------------------------ 会话解析
@@ -79,11 +125,23 @@ async function listSessionFiles() {
   return out;
 }
 
+/** 会话解析：三种入口
+ *  ① --session-file <path>                    直接指定
+ *  ② <session-id> [cwd]（pii 的调用契约）      按 header `id` 匹配
+ *  ③ --session <name>                        按 session_info 名字匹配（"(unnamed)" 表示无名会话）
+ *  cwd 优先取位置参数（pii 已 chdir，与 Python 服务端行为一致）。 */
 async function resolveSession() {
+  const withCwd = (row) => ({ ...row, cwd: POS_CWD ?? row.cwd });
   if (SESSION_FILE) {
     const text = await readFile(SESSION_FILE, "utf8");
     const header = JSON.parse(text.split("\n")[0]);
-    return { path: resolve(SESSION_FILE), cwd: header.cwd ?? process.cwd(), name: header.name };
+    return withCwd({ path: resolve(SESSION_FILE), cwd: header.cwd ?? process.cwd(), name: header.name });
+  }
+  // 位置参数如果本身就是路径，直接当会话文件用
+  if (POS_SESSION_ID && POS_SESSION_ID.endsWith(".jsonl") && existsSync(POS_SESSION_ID)) {
+    const text = await readFile(POS_SESSION_ID, "utf8");
+    const header = JSON.parse(text.split("\n")[0]);
+    return withCwd({ path: resolve(POS_SESSION_ID), cwd: header.cwd ?? process.cwd(), name: header.name });
   }
   const hits = [];
   for (const p of await listSessionFiles()) {
@@ -96,22 +154,29 @@ async function resolveSession() {
     const nameMatch = text.match(/"type":"session_info"[^}]*"name":"([^"]+)"/);
     // "(unnamed)" 是 pi-web 对未命名会话的展示名（与 pii 一致），匹配没有 name 的会话
     const sessionName = nameMatch?.[1] ?? "(unnamed)";
-    if (sessionName !== SESSION_NAME) continue;
     const header = JSON.parse(text.split("\n")[0]);
+    const matched = POS_SESSION_ID
+      ? header.id === POS_SESSION_ID
+      : sessionName === POS_SESSION_ID;
+    if (!matched) continue;
     const st = await stat(p);
     hits.push({ path: p, cwd: header.cwd ?? process.cwd(), name: sessionName, mtime: st.mtimeMs });
   }
   if (hits.length === 0) {
-    console.error(`No session named '${SESSION_NAME}' under ${SESSIONS_ROOT}`);
+    logErr(
+      POS_SESSION_ID && POS_SESSION_ID !== "(unnamed)"
+        ? `No session with id or name '${POS_SESSION_ID}' under ${SESSIONS_ROOT}`
+        : `No session named '(unnamed)' under ${SESSIONS_ROOT}`,
+    );
     process.exit(1);
   }
   hits.sort((a, b) => b.mtime - a.mtime);
-  return hits[0];
+  return withCwd(hits[0]);
 }
 
 const session = await resolveSession();
-console.log(`[proto] session: ${session.name ?? "(unnamed)"} → ${session.path}`);
-console.log(`[proto] cwd: ${session.cwd}`);
+log(`[proto] session: ${session.name ?? "(unnamed)"} → ${session.path}`);
+log(`[proto] cwd: ${session.cwd}`);
 
 // ------------------------------------------------------------------ Pi 版本
 const PI_VERSION = (() => {
@@ -134,6 +199,9 @@ const child = spawn(
       PI_WEB_BRIDGE_TOKEN: TOKEN,
       // 桥接自身路径：让它把自己从「已加载扩展」列表里排除（那是基础设施，不是用户扩展）
       PI_WEB_BRIDGE_EXTENSION: BRIDGE_EXT,
+      // 会话文件路径：让**其它**原生实例能检测出"同一会话被多个 web 实例打开"
+      // （pi 会覆写 process.title，argv 被 NUL 填充盖住，所以不能靠 cmdline 匹配）
+      PI_WEB_BRIDGE_SESSION: session.path,
       // 诊断命令（/pi-web:demo-*）默认关闭：它们会污染用户的 `/` 菜单
       ...(argv.includes("--demo") ? { PI_WEB_BRIDGE_DEMO: "1" } : {}),
     },
@@ -180,10 +248,32 @@ let extStatusSnapshot = {};
 let themeName = "dark"; // 浏览器主题：桥接经 GET /side/theme 取用（扩展 ANSI 换肤）
 let lastSessionId = ""; // 供 /usage 取本会话统计
 
+/** 背压阈值（与 SDK 宿主同量级）：客户端积压超过高水位就跳过**流式增量**，
+ *  回落到低水位后恢复 —— 否则长会话/大输出会把内存顶上去。 */
+const BACKPRESSURE_HIGH = Number(process.env.PI_WEB_BACKPRESSURE_HIGH ?? 8 * 1024 * 1024);
+const BACKPRESSURE_LOW = Number(process.env.PI_WEB_BACKPRESSURE_LOW ?? 2 * 1024 * 1024);
+const laggingClients = new WeakSet();
+/** 只有流式增量可丢：它们的后续帧会补齐最终状态；其余帧（state/history/stats/
+ *  bash_result/entry_appended/extension_ui_request…）一律不能丢。 */
+function isDroppableDelta(obj) {
+  return obj && (obj.type === "message_update" || obj.type === "bash_execution_update");
+}
+
 function broadcast(obj) {
   const text = JSON.stringify(obj);
+  const droppable = isDroppableDelta(obj);
   for (const ws of clients) {
-    if (ws.readyState === 1) ws.send(text);
+    if (ws.readyState !== 1) continue;
+    const queued = ws.bufferedAmount ?? 0;
+    if (queued > BACKPRESSURE_HIGH && !laggingClients.has(ws)) {
+      laggingClients.add(ws);
+      log(`client is behind (${(queued / 1048576).toFixed(1)}MB queued) - skipping stream deltas until it catches up`);
+    } else if (laggingClients.has(ws) && queued < BACKPRESSURE_LOW) {
+      laggingClients.delete(ws);
+      log("client caught up - stream deltas resumed");
+    }
+    if (droppable && laggingClients.has(ws)) continue; // 只丢流式增量
+    ws.send(text);
   }
 }
 
@@ -247,7 +337,7 @@ async function buildState() {
   try {
     st = (await rpcData("get_state")) ?? {};
   } catch (err) {
-    console.error("[proto] get_state failed:", err.message);
+    logErr(`[proto] get_state failed: ${err.message}`);
   }
   const cwd = bridgeInfo.cwd ?? session.cwd;
   if (st.sessionId) lastSessionId = String(st.sessionId);
@@ -292,7 +382,7 @@ async function sendHistory(target) {
     if (target) target.send(JSON.stringify(frame));
     else broadcast(frame);
   } catch (err) {
-    console.error("[proto] get_entries failed:", err.message);
+    logErr(`[proto] get_entries failed: ${err.message}`);
   }
 }
 
@@ -440,8 +530,54 @@ child.stdout.on("data", (chunk) => {
 });
 
 child.stderr.on("data", (c) => process.stderr.write(`[pi] ${c}`));
+
+/** 是否处于主动关停（区分「用户 Ctrl+C 退出」与「子进程意外死亡」）。 */
+let shuttingDown = false;
+let childExited = false;
+
+// 启动期 spawn 失败（例如 PATH 上没有 pi）：明确报错并退出，不要静默
+child.on("error", (err) => {
+  logErr(`[proto] 无法启动 pi 子进程：${err.message}`);
+  logErr("[proto] 请确认 `pi` 在 PATH 上可执行（pi --version）");
+  process.exit(1);
+});
+
 child.on("exit", (code, signal) => {
-  console.error(`[proto] pi exited (code=${code} signal=${signal})`);
+  childExited = true;
+  if (shuttingDown) {
+    log(`[proto] pi 子进程已随服务端退出 (code=${code} signal=${signal})`);
+    return;
+  }
+  logErr(`[proto] pi 子进程意外退出 (code=${code} signal=${signal})`);
+  // 让页面看到原因（不直接断开 WS，否则前端会自动重连并刷新页面，反而看不到提示）
+  broadcast({
+    type: "error",
+    error: `pi 子进程已退出（code=${code ?? "-"} signal=${signal ?? "-"}）。本页已不可用，请重启服务端。`,
+  });
+  notify("pi 子进程退出", `code=${code ?? "-"} signal=${signal ?? "-"}；请重启服务端（会话历史已保存在磁盘）`, "error");
+});
+
+/** 关停：先请子进程退出，超时再强杀；然后关闭 WS/HTTP，不遗留孤儿进程。 */
+async function shutdown(reason) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  log(`[proto] 关停（${reason}）…`);
+  if (!childExited) {
+    try {
+      child.kill("SIGTERM");
+    } catch {
+      /* ignore */
+    }
+    await new Promise((r) => setTimeout(r, 1500));
+    if (!childExited) {
+      logErr("[proto] pi 子进程未在 1.5s 内退出，发送 SIGKILL");
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        /* ignore */
+      }
+    }
+  }
   for (const ws of clients) {
     try {
       ws.close();
@@ -449,7 +585,76 @@ child.on("exit", (code, signal) => {
       /* ignore */
     }
   }
+  try {
+    wss.close();
+  } catch {
+    /* ignore */
+  }
+  process.exit(0);
+}
+
+process.on("SIGINT", () => void shutdown("SIGINT"));
+process.on("SIGTERM", () => void shutdown("SIGTERM"));
+// 兜底：进程无论如何退出都不留孤儿 pi
+process.on("exit", () => {
+  if (!childExited) {
+    try {
+      child.kill("SIGKILL");
+    } catch {
+      /* ignore */
+    }
+  }
 });
+
+/**
+ * 并发写保护（尽力而为，不阻断）：找出**另一个原生 web 实例**是否在用同一个会话。
+ *
+ * 检测手段与其边界（2026-10 实测）：
+ *  · 每个原生实例都把 `PI_WEB_BRIDGE_SESSION=<会话文件>` 注入 pi 子进程的环境 → 扫
+ *    `/proc/<pid>/environ` 即可**可靠**发现"同一会话的另一个原生 web 实例"。
+ *  · **TUI 无法可靠检测**：pi 用 `process.title` 覆写 argv（`/proc/<pid>/cmdline` 只剩标题 +
+ *    NUL 填充），会话文件写完即关（`/proc/<pid>/fd` 抓不到），Pi 自身也没有任何锁机制。
+ *    为了不误报，这里不对 TUI 做猜测；仅在设计文档中记录该边界。
+ */
+async function detectSessionSharers() {
+  const found = [];
+  const marker = `PI_WEB_BRIDGE_SESSION=${session.path}`;
+  try {
+    for (const entry of await readdir("/proc")) {
+      if (!/^\d+$/.test(entry)) continue;
+      if (Number(entry) === child.pid) continue; // 我们自己的 pi 子进程
+      let env = "";
+      try {
+        env = (await readFile(`/proc/${entry}/environ`)).toString();
+      } catch {
+        continue;
+      }
+      if (env.split("\0").includes(marker)) found.push({ pid: entry });
+    }
+  } catch {
+    /* 非 Linux 或 /proc 不可读：跳过这项尽力而为的检查 */
+  }
+  return found;
+}
+
+let sharersWarned = false;
+async function checkSessionSharers() {
+  if (shuttingDown || childExited) return;
+  const found = await detectSessionSharers();
+  if (found.length === 0) {
+    sharersWarned = false;
+    return;
+  }
+  if (sharersWarned) return; // 同一批只提示一次，避免刷屏
+  sharersWarned = true;
+  const pids = found.map((f) => f.pid).join(", ");
+  logErr(`[proto] 警告：同一会话已被另一个原生 web 实例打开（PID ${pids}）——并发写入可能互相干扰`);
+  notify(
+    "会话并发写入风险",
+    `同一会话正被另一个原生 web 实例打开（PID ${pids}）。两个宿主同时写入可能互相干扰，建议只保留一个。`,
+    "warning",
+  );
+}
 
 // ------------------------------------------------------------------ 浏览器命令
 async function handleClientMessage(ws, msg) {
@@ -489,7 +694,7 @@ async function handleClientMessage(ws, msg) {
         const rows = Number(msg.rows);
         if (Number.isFinite(cols) && Number.isFinite(rows) && cols >= 20 && rows >= 5) {
           panelGeometry = { cols: Math.floor(cols), rows: Math.floor(rows) };
-          console.log(`[proto] panel geometry ← ${panelGeometry.cols}×${panelGeometry.rows}`);
+          log(`[proto] panel geometry ← ${panelGeometry.cols}×${panelGeometry.rows}`);
         }
         break;
       }
@@ -621,7 +826,7 @@ async function handleClientMessage(ws, msg) {
         if (patterns.length > 0) settings.enabledModels = patterns;
         else delete settings.enabledModels;
         writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2));
-        console.log(`[proto] enabledModels → ${JSON.stringify(patterns)}（重启本原型后生效）`);
+        log(`[proto] enabledModels → ${JSON.stringify(patterns)}（重启本原型后生效）`);
         notify(
           "scoped-models",
           `已保存 ${patterns.length} 个 scoped models；原生引擎需重启 pi 子进程后生效`,
@@ -689,14 +894,14 @@ async function handleClientMessage(ws, msg) {
         if (!known) throw new Error("Not a known session file");
         if (target === session.path) throw new Error("Cannot delete the currently active session");
         unlinkSync(target);
-        console.log(`[proto] deleted session file ${target}`);
+        log(`[proto] deleted session file ${target}`);
         break;
       }
       default:
-        console.log(`[proto] unknown client message: ${type}`);
+        log(`[proto] unknown client message: ${type}`);
     }
   } catch (err) {
-    console.error(`[proto] ${type} failed: ${err.message}`);
+    logErr(`[proto] ${type} failed: ${err.message}`);
     ws.send(JSON.stringify({ type: "error", error: `${type}: ${err.message}` }));
   }
 }
@@ -717,7 +922,7 @@ function clearDialogTimer(entry) {
 function armDialogFallback(id, entry) {
   entry.fallback = true;
   entry.timer = setTimeout(() => {
-    console.log(`[proto] dialog ${id}: 无浏览器应答，${DIALOG_FALLBACK_TIMEOUT_MS}ms 后按默认值结算`);
+    log(`[proto] dialog ${id}: 无浏览器应答，${DIALOG_FALLBACK_TIMEOUT_MS}ms 后按默认值结算`);
     settleDialog(id, { cancelled: true }, "timeout");
   }, DIALOG_FALLBACK_TIMEOUT_MS);
 }
@@ -821,12 +1026,12 @@ const server = createServer(async (req, res) => {
         return reply(panelGeometry);
       }
       if (route === "theme-ack") {
-        console.log(`[proto] bridge set theme → ${data.name}`);
+        log(`[proto] bridge set theme → ${data.name}`);
         return reply({ ok: true });
       }
       if (route === "ready") {
         bridgeInfo = { ...bridgeInfo, ...data };
-        console.log(
+        log(
           `[proto] bridge ready: mode=${data.mode} hasUI=${data.hasUI} cwd=${data.cwd} ` +
             `commands=${(data.commands ?? []).length} tools=${(data.tools ?? []).length} ` +
             `extensions=${(data.extensions ?? []).length} scoped=${(data.scopedModels ?? []).length}`,
@@ -907,7 +1112,7 @@ const server = createServer(async (req, res) => {
         return reply({ ok });
       }
       if (route === "event") {
-        console.log(`[proto] bridge event: ${JSON.stringify(data)}`);
+        log(`[proto] bridge event: ${JSON.stringify(data)}`);
         // 忙时拒绝 reload：与 SDK 宿主的报错口径一致（前端 case 'error' → appendError）
         if (data.type === "reload-refused") {
           broadcast({ type: "error", error: "Wait for the current response to finish before reloading." });
@@ -978,5 +1183,8 @@ wss.on("connection", async (ws) => {
 });
 
 server.listen(PORT, "127.0.0.1", () => {
-  console.log(`[proto] http://127.0.0.1:${PORT}/  (pi v${PI_VERSION} · bridge prototype)`);
+  log(`[proto] http://127.0.0.1:${PORT}/  (pi v${PI_VERSION} · native engine)`);
+  // 并发写检查：启动后一次 + 每 5 分钟复查（尽力而为，不阻断）
+  setTimeout(() => void checkSessionSharers(), 1500);
+  setInterval(() => void checkSessionSharers(), 5 * 60 * 1000).unref?.();
 });

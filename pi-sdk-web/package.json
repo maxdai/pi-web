@@ -5,7 +5,8 @@
   "type": "module",
   "bin": {
     "pi-web": "./dist/cli.js",
-    "pii": "./dist/pi-bin/pii-cli.js"
+    "pii": "./dist/pi-bin/pii-cli.js",
+    "pi-web-native": "./dist/native/server.mjs"
   },
   "files": [
     "dist"
