@@ -1036,9 +1036,31 @@ node deadlock-harness.mjs --bridge             # 桥接接管：resolve = true
 | 运行时枚举扩展能摸到的对象，均无 setter | `ctx.setScopedModels === undefined`、`pi.setScopedModels === undefined`；`ctx` 全部键：`abort compact cwd fork getContextUsage getSystemPrompt getSystemPromptOptions hasPendingMessages hasUI isIdle isProjectTrusted mode model modelRegistry navigateTree newSession reload scopedModels sessionManager shutdown signal switchSession thinkingLevel ui waitForIdle`（注意 `setActiveTools`/`setModel`/`setThinkingLevel` 都有 setter，唯独 scoped models 没有） |
 | `sessionManager` 没有回到 AgentSession 的引用（键全是数据） | 运行时 `Object.keys(ctx.sessionManager)` = `byId cwd fileEntries flushed labelTimestampsById labelsById leafId persist sessionDir sessionFile sessionId` |
 | `modelRegistry` 是模型目录/Provider 注册表（有 `refresh()`），与 scoped models 无关 | 运行时 prototype 方法枚举（`getAvailable`/`refresh`/`registerVirtualModel`…，无 scoped） |
-| 全 Pi 只有 TUI 调 `.setScopedModels(` | `interactive-mode.ts:5418/5425`——**TUI 自己就是那个持有 AgentSession 的宿主**，所以它能做 |
+| 全 Pi 只有 TUI 调 `.setScopedModels(` | 见下方「对象图」——**TUI 是宿主（持有 `AgentSession` 字段）**，扩展是访客（只拿到动作对象），所以只有 TUI 能做 |
+| 写操作是**显式白名单**：`ExtensionActions` 列了 15 项（`sendMessage`/`sendUserMessage`/`appendEntry`/`setSessionName`/`getSessionName`/`setLabel`/`getActiveTools`/`getAllTools`/`getSettings`/`setActiveTools`/`refreshTools`/`getCommands`/`setModel`/`getThinkingLevel`/`setThinkingLevel`），**没有 `setScopedModels`** | `types.ts:2189-2205`；而读接口 `getScopedModels: () => readonly ScopedModel[]` 在 `ExtensionRuntimeState`（`types.ts:2213`）。注意同类写操作 `setModel`/`setThinkingLevel`/`setActiveTools` 都在白名单里 → **这更像遗漏而非有意限制** |
 | 会话替换也不行：运行时工厂复用**启动时捕获**的 `sessionOptions.scopedModels` | `main.ts:847` → `createAgentSessionFromServices({ scopedModels: sessionOptions.scopedModels })`；这正是 reload 不重算的原因 |
 | 没有后门：无全局句柄、事件载荷不含 session | `globalThis.pi\|session\|agent` 未设置；`session_start` 载荷仅 `{reason, previousSessionFile?}` |
+
+**对象图：TUI（宿主）vs 扩展（访客）**
+
+```text
+TUI（宿主，与 Pi 同进程、同代码库）
+  InteractiveMode
+    └─ runtimeHost: AgentSessionRuntime        // 字段（interactive-mode.ts:452）
+         └─ get session() { return this._session }   // agent-session-runtime.ts:101
+              └─ AgentSession.setScopedModels(...)   // agent-session.ts:1522 ← TUI 直接调用
+                 // TUI 侧链路：interactive-mode.ts:595 `get session()` → :5418 调用
+
+扩展（访客）
+  pi（ExtensionAPI 对象，loader.ts:244 createExtensionAPI(…, runtime: ExtensionRuntime, …)）
+    └─ runtime: ExtensionRuntime = ExtensionRuntimeState & ExtensionActions
+         ├─ getScopedModels: () => this._scopedModels   // 只读闭包，交出"值"
+         ├─ setModel / setThinkingLevel / setActiveTools // 白名单里的写操作
+         └─ （没有 setScopedModels）
+```
+
+关键：`AgentSession` **对象本身从不越过边界**——Pi 交给扩展的是一个逐项挑选的动作对象（成员都是闭包，交出的是值）。
+所以「TUI 能、扩展不能」不是机制差异，而是**谁持有那个对象**：TUI 是 Pi 自己的宿主模块，扩展是被限权的访客。
 
 **可选路线**：
 
