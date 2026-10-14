@@ -1043,7 +1043,13 @@ node deadlock-harness.mjs --bridge             # 桥接接管：resolve = true
 - **按面板实际尺寸渲染（自适应，2026-10 追加）**：前端按 `.modal-panel-body` 的真实版面量出「可用列×行」（`static/app.js` 的 `sendPanelGeometry`）→ 经 `{type:'panel_geometry'}` 上报 → 服务端缓存 → 桥接渲染前用 `GET /side/geometry` 取用。这样既**不会折行折断框图**（曾固定按 100 列渲染，而面板只容得下 93 列），也**不需要横向滚动**（符合项目「不横滚」的既有约定）；窗口变窄时组件会按更窄宽度重排（实测：1200px→92 列、700px→81 列，均无折行、无横向溢出）。`PI_WEB_BRIDGE_PANEL_COLS/ROWS` 退化为「浏览器尚未上报时」的兜底。
   - 两个测量陷阱（已修，记录备查）：① 探针不能用 `position:absolute` —— `#modal` 未定位时包含块是**视口**，会量出整屏宽度（曾得到 162 列）；② 模态元素的 id 是 `#modal` / `#modal-list`，用类选择器会落空并回退到 `body`。
 - **能力位门控**：原生服务端在 `state.panelGeometry = true`；前端**仅在此标记存在时**才发该消息 —— `static/app.js` 与 SDK 引擎共享，而 SDK 宿主不认这个消息、会回一个 error 帧（已实测门控有效：SDK 侧既不发送也无 error 帧）。
-- 渲染是**只读快照**：组件内的按键交互（滚动/翻页）不支持；组件自行 `done(value)` 则采用其结论，否则关闭面板视为取消。关闭**只用模态自带的 `Close (Esc)`**（在模态边框上、常驻可见）——早先额外加过一个面板内按钮，与它重复（两个 Close），且位于滚动区内、内容长时会被滚走。
+- **必须支持组件的 `requestRender`（异步组件）**：很多扩展组件在构造时**异步取数**，拿到数据后再调
+  `tui.requestRender()` 自绘 —— 例：aft-pi 的 `AftStatusDialogComponent` 构造函数里 `fetchOnce()`
+  （await AFT bridge 响应）→ 成功后 `this.props.tui.requestRender()`。桥接因此实现**真正的重绘循环**：
+  `requestRender`/`requestLayout`/`invalidate` → 120ms 合并后重绘 → **内容变化时** POST `/side/panel-update`
+  → 前端按 `update` 标记**就地替换**面板内容（不重开模态、不重置倒计时）。**早期把 requestRender 当空操作
+  且只快照一次 → 用户永远停在 `Connecting…`**（实测修复后：0.1s 为 5 行占位，0.3s 收到 update 帧变成 32 行真实状态）。
+- 渲染是**只读快照**（内容会随组件自绘刷新，但按键交互仍不支持）：组件内的按键交互（滚动/翻页）不支持；组件自行 `done(value)` 则采用其结论，否则关闭面板视为取消。关闭**只用模态自带的 `Close (Esc)`**（在模态边框上、常驻可见）——早先额外加过一个面板内按钮，与它重复（两个 Close），且位于滚动区内、内容长时会被滚走。
 - 实测：`/ctx-status` 面板 33 行、含 `⚡ Magic Context Status` 边框内容——与 TUI 看到的对话框同源同内容。
 
 **SDK 宿主对「命令执行 / 对话框」的特化清单（2026-10 审计 + 对齐；除 ctx-status 外的同类改动）**

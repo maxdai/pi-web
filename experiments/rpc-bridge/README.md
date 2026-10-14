@@ -79,7 +79,7 @@ RPC 命令表里没有的能力）。
 | 能力 | 实现方式 | 验证结果 |
 |---|---|---|
 | **扩展 ANSI 换肤** | 桥接从**运行中的 pi 包目录**（`realpath(argv[1])/../..`）动态 import Pi 的 `Theme` 类，用 `dark.json`/`light.json` 构造主题（truecolor，与 SDK 宿主一致），并改写 `ui.theme`；服务端暴露 `GET /side/theme`，桥接每 2s 轮询，变化时强制重渲染所有 widget | 切换 Light 后 widget 的 ANSI 颜色立即改变（`themeSwapped: true`，帧 `theme_set` ×2） |
-| **`custom()` 面板** | 桥接用**带 `terminal` 的 stub TUI** 调 factory 并 `render(cols)`，把文本行经侧信道送到服务端 → 前端只读模态 `extension-panel`（Esc/×/Close 关闭）回传结论；组件已 `done(value)` 则采用该值。**必须给 `terminal`**（真实组件读 `tui.terminal.rows`，缺了会抛错 → 空面板）；**列/行数按网页面板实际尺寸自适应**（前端上报 `panel_geometry`，服务端缓存，桥接经 `GET /side/geometry` 取用），否则框图会折行 | `/ctx-status` 面板 33 行真实内容、无折行（1200px→92 列 / 700px→81 列）；demo panel 3 行；关闭/回传均通过 |
+| **`custom()` 面板（含异步自绘）** | 桥接用**带 `terminal` 的 stub TUI** 调 factory 并 `render(cols)`，把文本行经侧信道送到服务端 → 前端只读模态 `extension-panel`（Esc/×/Close 关闭）回传结论；组件已 `done(value)` 则采用该值。**必须给 `terminal`**（真实组件读 `tui.terminal.rows`，缺了会抛错 → 空面板）；**列/行数按网页面板实际尺寸自适应**（前端上报 `panel_geometry`，服务端缓存，桥接经 `GET /side/geometry` 取用），否则框图会折行；**组件的 `requestRender` 会触发重绘并经 `/side/panel-update` 就地刷新**（异步取数的组件如 aft-pi 先画 `Connecting…`、数据到了再自绘） | `/ctx-status` 面板 33 行真实内容、无折行（1200px→92 列 / 700px→81 列）；demo panel 3 行；关闭/回传均通过 |
 | **`/usage`** | 服务端原生拦截（`command` 名为 `usage` 时优先于扩展命令，与 SDK 宿主一致），复用 pi-web 既有的 `usage-render`（读 session 文件，**0 处 SDK 依赖**——证明该功能本就与引擎无关） | `usage_data` 帧 + 前端 usage 面板打开 |
 | **`export`** | RPC `export_html`（接受 `outputPath`）→ notify 导出路径 | 收到 `/export: Session exported to: …` |
 | **`delete_session`** | 校验「已知会话 + 非当前会话」后删除文件 | 三个分支全通过：伪造路径被拒、当前会话被拒、临时会话被删 |

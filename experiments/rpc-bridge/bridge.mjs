@@ -332,14 +332,45 @@ export default function (pi) {
       // 按**网页面板实际可用列/行数**渲染（组件在 TUI 下也是按终端宽度排版）；
       // 量不到则回退 PANEL_COLS/PANEL_ROWS，避免装不下而折行折断框图。
       const { cols: panelCols, rows: panelRows } = await fetchPanelGeometry();
+      const token = `panel-${randomUUID()}`;
+      let closed = false;
+      let updateTimer = null;
+      let lastLines = null;
+      let component;
+
+      const renderLines = () => {
+        try {
+          return component?.render(panelCols) ?? [];
+        } catch (err) {
+          console.error(`[pi-web-bridge] custom() render failed: ${err.message}`);
+          return [`[pi-web] 组件渲染失败：${err.message}`];
+        }
+      };
+
+      /** 组件的 requestRender：**必须真的重绘并推给网页**。
+       *  很多扩展组件是异步取数后自绘的（例：aft-pi 的 AftStatusDialogComponent 构造时
+       *  `fetchOnce()`，拿到 AFT bridge 的响应后再调 requestRender）——早先把 requestRender
+       *  当空操作且只快照一次，用户就永远停在 "Connecting…"。这里做 120ms 合并、内容未变不发。 */
+      const scheduleUpdate = () => {
+        if (closed || updateTimer) return;
+        updateTimer = setTimeout(async () => {
+          updateTimer = null;
+          if (closed) return;
+          const lines = renderLines();
+          if (JSON.stringify(lines) === JSON.stringify(lastLines)) return;
+          lastLines = lines;
+          await post("/side/panel-update", { token, lines });
+        }, 120);
+        updateTimer.unref?.();
+      };
+
       const stubTui = {
-        requestRender() {},
-        requestLayout() {},
-        invalidate() {},
+        requestRender: scheduleUpdate,
+        requestLayout: scheduleUpdate,
+        invalidate: scheduleUpdate,
         requestFocus() {},
         terminal: { rows: panelRows, cols: panelCols, width: panelCols, height: panelRows },
       };
-      let component;
       try {
         component = await factory(stubTui, ui.theme, {}, (value) => {
           hasDone = true;
@@ -349,18 +380,17 @@ export default function (pi) {
         console.error(`[pi-web-bridge] custom() factory failed: ${err.message}`);
         return hasDone ? doneValue : undefined;
       }
-      let lines = [];
-      try {
-        if (component) lines = component.render(panelCols) ?? [];
-      } catch (err) {
-        console.error(`[pi-web-bridge] custom() render failed: ${err.message}`);
-        lines = [`[pi-web] 组件渲染失败：${err.message}`];
-      }
+      const lines = renderLines();
+      lastLines = lines;
       const answer = await post("/side/panel", {
+        token,
         title: options?.title,
         lines,
         value: hasDone ? doneValue : undefined,
       });
+      // 用户已关闭面板：停掉刷新循环（组件自身的定时器随后只会打到空操作上）
+      closed = true;
+      if (updateTimer) clearTimeout(updateTimer);
       return answer && "value" in answer ? answer.value : hasDone ? doneValue : undefined;
     };
 

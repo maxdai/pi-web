@@ -2311,6 +2311,14 @@ class PiWebClient {
    *  不另外加按钮：早先加过一个，与自带按钮重复（两个 Close），而且它在滚动区内、内容长时会被滚走。
    *  组件若已 done(value)：桥接随面板一并送来 value，服务端会用该值答复，无需前端特判。 */
   openExtensionPanel(req) {
+    // 组件 requestRender 触发的增量刷新：就地替换内容，不重开模态（否则会重置倒计时/丢焦点）
+    if (req.update && this.currentExtRequest && this.currentExtRequest.id === req.id) {
+      const body = this.modalList.querySelector('.modal-panel-body');
+      if (body) {
+        body.innerHTML = ansiToHtml((Array.isArray(req.lines) ? req.lines : []).join('\n'));
+        return;
+      }
+    }
     this.openModal(req.title || 'Extension panel', 'extension-panel');
     this.currentExtRequest = req;
     this.startDialogCountdown(req);

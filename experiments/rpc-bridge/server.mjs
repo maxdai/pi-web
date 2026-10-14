@@ -855,7 +855,8 @@ const server = createServer(async (req, res) => {
       if (route === "panel") {
         // custom()：桥接把扩展 TUI 组件渲染出的文本行送来，浏览器以**只读**模态呈现；
         // 用户关闭后回传结论（组件自己 done(value) 过则采用该值）。
-        const id = `panel-${randomUUID()}`;
+        const id =
+          typeof data.token === "string" && data.token ? data.token : `panel-${randomUUID()}`;
         // 面板没有「扩展 timeout」概念 → 有浏览器就无限等待，无浏览器才兜底
         const answer = await openDialog(id, {
           type: "extension_ui_request",
@@ -886,6 +887,19 @@ const server = createServer(async (req, res) => {
           extensionTimeout,
         );
         return reply(answer);
+      }
+      if (route === "panel-update") {
+        // 组件的 requestRender → 就地刷新已打开的面板（前端按 update 标记替换内容，不重开模态）
+        const id = String(data.token ?? "");
+        if (!pendingDialogs.has(id)) return reply({ ok: false });
+        broadcast({
+          type: "extension_ui_request",
+          id,
+          method: "panel",
+          update: true,
+          lines: data.lines ?? [],
+        });
+        return reply({ ok: true });
       }
       if (route === "cancel-dialog") {
         // 扩展的 AbortSignal 中止：按默认值结算并让前端关掉模态
