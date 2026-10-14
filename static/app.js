@@ -2307,30 +2307,15 @@ class PiWebClient {
   }
 
   /** custom() 面板（桥接扩展经 method:'panel' 送来）：只读展示扩展组件渲染出的文本行。
-   *  关闭时统一由 closeModal() 回 cancelled —— 服务端会采用组件自己 done(value) 的结论。 */
+   *  关闭**只用模态自带的 "Close (Esc)"**（在模态边框上、常驻可见；closeModal() 会回 cancelled）。
+   *  不另外加按钮：早先加过一个，与自带按钮重复（两个 Close），而且它在滚动区内、内容长时会被滚走。
+   *  组件若已 done(value)：桥接随面板一并送来 value，服务端会用该值答复，无需前端特判。 */
   openExtensionPanel(req) {
     this.openModal(req.title || 'Extension panel', 'extension-panel');
     this.currentExtRequest = req;
     this.startDialogCountdown(req);
     const lines = Array.isArray(req.lines) ? req.lines : [];
-    const body = ansiToHtml(lines.join('\n'));
-    this.modalList.innerHTML = `
-      <pre class="modal-panel-body">${body}</pre>
-      <div class="modal-actions">
-        <button class="modal-btn confirm-btn">Close</button>
-      </div>`;
-    this.modalList.querySelector('.confirm-btn').addEventListener('click', () => {
-      // 自行回应一次就够；清掉 currentExtRequest，避免 closeModal() 再发一个 cancelled
-      // （第二个响应会因找不到等待者而落到 RPC stdin，属噪音）
-      const value = req.value;
-      this.currentExtRequest = null;
-      this.send(
-        value !== undefined
-          ? { type: 'extension_ui_response', id: req.id, value }
-          : { type: 'extension_ui_response', id: req.id, cancelled: true },
-      );
-      this.closeModal();
-    });
+    this.modalList.innerHTML = `<pre class="modal-panel-body">${ansiToHtml(lines.join('\n'))}</pre>`;
   }
 
   appendNotifyLine(message, type) {
