@@ -124,19 +124,24 @@ node tools/smoke.mjs
 #    （pi-sdk-web 子目录执行 npm version 只改 package.json，不会自动 git commit）
 npm version patch                          # 或 minor / major（改 pi-sdk-web/package.json）
 
-# 2. 提交 + 打 tag
+# 2. 提交 + 打 tag（必须是**附注 tag**，见下方说明）
 git add pi-sdk-web/package.json pi-sdk-web/package-lock.json
 git commit -m "Release pi-sdk-web x.y.z"
-git tag vX.Y.Z
+git tag -a vX.Y.Z -m "Release pi-sdk-web x.y.z"
 
 # 3. 发布（prepublishOnly 自动构建；自动化 token 无需交互式认证）
 cd pi-sdk-web && npm publish
 
 # 4. 推送 git（含 tag）
 cd .. && git push --follow-tags
+
+# 5. 更新本机全局安装（用户侧升级：npm install -g pi-sdk-web@latest）
+npm install -g pi-sdk-web@x.y.z
 ```
 
 > 认证：本机 `~/.npmrc` 配置 npm 的 **Automation/Granular token**（npmjs.org → Access Tokens 创建）后发布零交互；用户升级命令：`npm update -g pi-sdk-web`。
+
+> **tag 必须用 `-a`（附注 tag）**：`git push --follow-tags` **只推附注 tag**，轻量 tag（`git tag vX.Y.Z`）不会被推送——2026-10 实测发现 `v0.7.0`~`v0.7.5` 六个 tag 因此都没上远端（后已用 `git push origin --tags` 补推）。若还是漏了，用 `git ls-remote --tags origin` 核对。
 
 ## 冒烟测试（维护者）
 
