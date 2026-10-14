@@ -18,9 +18,9 @@ import { createServer } from "node:http";
 import { createRequire } from "node:module";
 import { spawn, execFileSync } from "node:child_process";
 import { readdir, readFile, stat } from "node:fs/promises";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, extname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { randomUUID } from "node:crypto";
 
 // ws 来自 pi-sdk-web 的依赖树（原型不自带依赖）
@@ -91,10 +91,12 @@ async function resolveSession() {
       continue;
     }
     const nameMatch = text.match(/"type":"session_info"[^}]*"name":"([^"]+)"/);
-    if (nameMatch?.[1] !== SESSION_NAME) continue;
+    // "(unnamed)" 是 pi-web 对未命名会话的展示名（与 pii 一致），匹配没有 name 的会话
+    const sessionName = nameMatch?.[1] ?? "(unnamed)";
+    if (sessionName !== SESSION_NAME) continue;
     const header = JSON.parse(text.split("\n")[0]);
     const st = await stat(p);
-    hits.push({ path: p, cwd: header.cwd ?? process.cwd(), name: SESSION_NAME, mtime: st.mtimeMs });
+    hits.push({ path: p, cwd: header.cwd ?? process.cwd(), name: sessionName, mtime: st.mtimeMs });
   }
   if (hits.length === 0) {
     console.error(`No session named '${SESSION_NAME}' under ${SESSIONS_ROOT}`);
@@ -158,12 +160,19 @@ const clients = new Set();
 const bridgeDialogs = new Map(); // id -> resolve（桥接发起的对话框）
 const widgetSnapshot = new Map(); // key -> {widgetKey, widgetLines, widgetPlacement}
 let extStatusSnapshot = {};
+let themeName = "dark"; // 浏览器主题：桥接经 GET /side/theme 取用（扩展 ANSI 换肤）
+let lastSessionId = ""; // 供 /usage 取本会话统计
 
 function broadcast(obj) {
   const text = JSON.stringify(obj);
   for (const ws of clients) {
     if (ws.readyState === 1) ws.send(text);
   }
+}
+
+/** 前端「notify」提示（与现有服务端同形：extension_ui_request + method=notify） */
+function notify(title, message, notifyType = "info") {
+  broadcast({ type: "extension_ui_request", id: randomUUID(), method: "notify", title, message, notifyType });
 }
 
 const STATS_REFRESH_EVENTS = new Set([
@@ -208,6 +217,7 @@ async function buildState() {
     console.error("[proto] get_state failed:", err.message);
   }
   const cwd = bridgeInfo.cwd ?? session.cwd;
+  if (st.sessionId) lastSessionId = String(st.sessionId);
   const state = {
     sessionId: st.sessionId,
     sessionName: st.sessionName ?? session.name,
@@ -256,6 +266,28 @@ async function sendStats() {
     broadcast({ type: "stats", data: stats });
   } catch {
     /* ignore */
+  }
+}
+
+/** `/usage`：复用 pi-web 既有的 usage-render（读 session 文件，不依赖 SDK）。
+ *  原型阶段 import pi-sdk-web 的构建产物；正式迁移时该模块并入原生服务端源码。 */
+async function sendUsage(scope, target) {
+  try {
+    const mod = await import(pathToFileURL(join(REPO, "pi-sdk-web", "dist", "usage-render.js")).href);
+    const data = mod.buildUsageData(scope === "all" ? undefined : lastSessionId || undefined);
+    if (data) {
+      const frame = { type: "usage_data", data };
+      if (target) target.send(JSON.stringify(frame));
+      else broadcast(frame);
+    } else {
+      notify(
+        "/usage",
+        scope === "all" ? "No usage data found yet." : "No usage data for this session yet.",
+        "info",
+      );
+    }
+  } catch (err) {
+    notify("/usage", `usage unavailable: ${err.message}（先构建 pi-sdk-web：npm run build）`, "warning");
   }
 }
 
@@ -413,7 +445,13 @@ async function handleClientMessage(ws, msg) {
         await sendHistory();
         break;
       case "command":
-        // 扩展命令经 prompt 触发（session.prompt 会先尝试扩展命令）
+        // /usage 是 pi-web 原生功能（读 session 文件），优先级高于扩展命令——
+        // 与 SDK 宿主的 executeCommand 一致
+        if (msg.name === "usage") {
+          await sendUsage(msg.scope === "all" ? "all" : "session", ws);
+          break;
+        }
+        // 其余扩展命令经 prompt 触发（session.prompt 会先尝试扩展命令）
         await rpc("prompt", { message: `/${msg.name}${msg.args ? " " + msg.args : ""}` });
         break;
       case "reload":
@@ -443,8 +481,10 @@ async function handleClientMessage(ws, msg) {
         break;
       }
       case "set_theme":
-        // 前端 CSS 立即切换；扩展 ANSI 换肤属后续工作（见 README 已知缺口）
-        ws.send(JSON.stringify({ type: "theme_set", data: { name: msg.name } }));
+        // 浏览器主题：CSS 由前端立即切换；扩展 ANSI 的取色主题由桥接经 GET /side/theme
+        // 轮询后热切换（见 bridge.mjs 的 pollTheme）
+        themeName = msg.name === "light" ? "light" : "dark";
+        ws.send(JSON.stringify({ type: "theme_set", data: { name: themeName } }));
         break;
       case "get_scoped_models": {
         const available = bridgeInfo.scopedModels ?? [];
@@ -458,11 +498,31 @@ async function handleClientMessage(ws, msg) {
         ws.send(JSON.stringify({ type: "scoped_models", data: { available, configured } }));
         break;
       }
-      case "export":
-      case "usage":
-      case "delete_session":
-        console.log(`[proto] command '${type}' not implemented in prototype yet`);
+      case "export": {
+        const outputPath = typeof msg.path === "string" && msg.path ? msg.path : undefined;
+        if (outputPath?.endsWith(".jsonl")) {
+          // RPC 只有 export_html（SDK 宿主的 exportToJsonl 在原生引擎里没有对应命令）
+          notify("/export", "jsonl 导出在原生引擎下暂不支持（RPC 仅提供 export_html）", "warning");
+          break;
+        }
+        const data = await rpcData("export_html", { outputPath });
+        notify("/export", `Session exported to: ${data?.path ?? "(unknown)"}`, "info");
         break;
+      }
+      case "usage": {
+        await sendUsage(msg.scope === "all" ? "all" : "session", ws);
+        break;
+      }
+      case "delete_session": {
+        const target = typeof msg.path === "string" ? msg.path : "";
+        if (!target) throw new Error("Missing 'path'");
+        const known = (await listSessionFiles()).includes(target);
+        if (!known) throw new Error("Not a known session file");
+        if (target === session.path) throw new Error("Cannot delete the currently active session");
+        unlinkSync(target);
+        console.log(`[proto] deleted session file ${target}`);
+        break;
+      }
       default:
         console.log(`[proto] unknown client message: ${type}`);
     }
@@ -506,6 +566,14 @@ const server = createServer(async (req, res) => {
         res.end(JSON.stringify(obj ?? {}));
       };
 
+      if (route === "theme") {
+        // 桥接轮询用（GET）：返回浏览器当前主题，供扩展 ANSI 取色
+        return reply({ name: themeName });
+      }
+      if (route === "theme-ack") {
+        console.log(`[proto] bridge set theme → ${data.name}`);
+        return reply({ ok: true });
+      }
       if (route === "ready") {
         bridgeInfo = { ...bridgeInfo, ...data };
         console.log(
@@ -535,9 +603,31 @@ const server = createServer(async (req, res) => {
         return reply({ ok: true });
       }
       if (route === "panel") {
-        // 前端尚无面板模态：记录后返回 undefined（与现状 SDK 宿主行为一致）
-        console.log(`[proto] panel requested: ${data.title ?? "(no title)"} lines=${(data.lines ?? []).length}`);
-        return reply({ value: undefined });
+        // custom() 面板：把渲染出的文本行送到浏览器模态呈现，等用户关闭后回传结论。
+        // 组件的 done(value) 若已给出结论（data.value），用户关闭时直接采用。
+        const id = `panel-${randomUUID()}`;
+        const answer = await new Promise((resolveAnswer) => {
+          const timer = setTimeout(() => {
+            bridgeDialogs.delete(id);
+            resolveAnswer({ cancelled: true });
+          }, 10 * 60 * 1000);
+          bridgeDialogs.set(id, (response) => {
+            clearTimeout(timer);
+            resolveAnswer(response);
+          });
+          broadcast({
+            type: "extension_ui_request",
+            id,
+            method: "panel",
+            title: data.title,
+            lines: data.lines ?? [],
+            value: data.value,
+            // 与面板超时一致，前端据此显示倒计时（同对话框）
+            deadline: Date.now() + 10 * 60 * 1000,
+          });
+        });
+        const value = answer && "value" in answer && answer.value !== undefined ? answer.value : data.value;
+        return reply(value === undefined ? {} : { value });
       }
       if (route === "dialog") {
         const id = `bridge-${randomUUID()}`;
@@ -553,10 +643,6 @@ const server = createServer(async (req, res) => {
           broadcast({ type: "extension_ui_request", id, ...data });
         });
         return reply(answer);
-      }
-      if (route === "theme") {
-        console.log(`[proto] bridge theme → ${data.name}`);
-        return reply({ success: true });
       }
       if (route === "event") {
         console.log(`[proto] bridge event: ${JSON.stringify(data)}`);

@@ -957,6 +957,25 @@ body {
   white-space: normal;
 }
 
+/* custom() 面板：扩展自己渲染的 TUI 组件文本行。按项目既有约定（同 .widget-body）
+   用 pre-wrap 折行而非横向滚动；长 token 也允许断行。 */
+.modal-panel-body {
+  color: var(--text);
+  font-family: monospace;
+  font-size: 12px;
+  line-height: 1.4;
+  margin: 0 0 10px;
+  padding: 10px 12px;
+  background: var(--bg, #1e1e24);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  max-height: 50vh;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  text-align: left;
+}
+
 .modal-message.body-text h1,
 .modal-message.body-text h2,
 .modal-message.body-text h3,

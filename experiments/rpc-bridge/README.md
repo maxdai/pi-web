@@ -44,7 +44,18 @@ node tools/smoke.mjs http://127.0.0.1:4096
 `/pi-web:demo-dialog`（另有 `/pi-web:reload`，用到 `ExtensionCommandContext.reload()`——
 RPC 命令表里没有的能力）。
 
-## 实测中发现的两个机制要点
+## 已补齐的缺口（2026-10，逐项实测）
+
+| 能力 | 实现方式 | 验证结果 |
+|---|---|---|
+| **扩展 ANSI 换肤** | 桥接从**运行中的 pi 包目录**（`realpath(argv[1])/../..`）动态 import Pi 的 `Theme` 类，用 `dark.json`/`light.json` 构造主题（truecolor，与 SDK 宿主一致），并改写 `ui.theme`；服务端暴露 `GET /side/theme`，桥接每 2s 轮询，变化时强制重渲染所有 widget | 切换 Light 后 widget 的 ANSI 颜色立即改变（`themeSwapped: true`，帧 `theme_set` ×2） |
+| **`custom()` 面板** | 桥接把组件 `render(width)` 的文本行经侧信道送到服务端 → 前端以只读模态 `extension-panel` 呈现（Esc/×/Close 关闭），关闭时回传结论；组件若已 `done(value)` 则采用该值 | 面板标题带倒计时、两行内容正确、Close 后遮罩关闭、桥接收 `{"type":"demo-panel","value":null}` |
+| **`/usage`** | 服务端原生拦截（`command` 名为 `usage` 时优先于扩展命令，与 SDK 宿主一致），复用 pi-web 既有的 `usage-render`（读 session 文件，**0 处 SDK 依赖**——证明该功能本就与引擎无关） | `usage_data` 帧 + 前端 usage 面板打开 |
+| **`export`** | RPC `export_html`（接受 `outputPath`）→ notify 导出路径 | 收到 `/export: Session exported to: …` |
+| **`delete_session`** | 校验「已知会话 + 非当前会话」后删除文件 | 三个分支全通过：伪造路径被拒、当前会话被拒、临时会话被删 |
+| **`(unnamed)` 会话解析** | 无 `session_info` 名字的会话按 `(unnamed)` 匹配（与 `pii` 展示名一致） | 合成未命名会话可被 `--session "(unnamed)"` 解析到 |
+
+## 实测中发现的机制要点
 
 1. **widget 生命周期必须由桥接接管**：TUI 下组件由 TUI 管理（移除时 `invalidate()`）。我们接管
    `setWidget` 后若不自己做，扩展的定时器/状态会让面板「复活」——实测：`setWidget(key, undefined)`
@@ -53,16 +64,20 @@ RPC 命令表里没有的能力）。
 2. **RPC 的 `bash` 用命令信封 id 作为执行 id**（会出现在 `bash_execution_update` 事件里），而前端
    用自己生成的 `bash-<ts>` 关联流式块。服务端必须把两者对齐，否则前端匹配不到流式块；同时
    `bash_result` 需要服务端自行合成（RPC 不发这个事件）。
+3. **`ui.theme` 可被改写且对其他扩展生效**（实测两扩展对照）：它是 runner 上的可配置属性；
+   换肤因此不需要改 Pi。注意 RPC 自带主题是 256 色，而桥接构造的是 truecolor——与 SDK 宿主
+   现行表现一致。
+4. **`/usage` 这类 pi-web 原生功能与引擎无关**：它读 session 文件，不 import SDK，迁移时源码级复用即可。
 
-## 已知缺口（原型未实现，迁移时需补齐或明确降级）
+## 仍存在的缺口
 
 | 缺口 | 说明 |
 |---|---|
-| 扩展 ANSI 换肤 | 前端 CSS 立即切换；扩展 `setStatus`/widget 的 ANSI 颜色跟随 Pi theme，需在桥接里实现 theme 交换 |
-| `custom()` 面板 | 桥接已能承载（渲染成行文本并回传结论），但**前端还没有面板模态**；当前返回 `undefined`（与现状 SDK 宿主一致，`/usage` 已改为原生实现） |
-| `/usage`、`export`、`delete_session` | 原型未实现（`/usage` 是 pi-web 原生功能，直接读 session 文件即可迁） |
+| `.jsonl` 导出 | RPC 只有 `export_html`（SDK 宿主用 `session.exportToJsonl`）；原生引擎下 `.jsonl` 导出暂以提示降级 |
 | scoped models 设置 | 写 `settings.json` 的 `enabledModels` 后需**重启 pi 子进程**才生效（TUI 同样是启动时读取） |
-| 会话名/未命名会话 | 只按 `session_info` 里的名字解析；`(unnamed)` 与非默认目录未覆盖 |
+| 面板的按键交互 | 只读模态：面板内组件的按键/焦点交互不支持（内容可见，不能在里面操作） |
+| TUI-only 项 | `setWorkingIndicator`/`setFooter`/`setHeader`/`setEditorComponent` 等：宿主与 RPC 下都是 no-op，未实现（与现状一致） |
+| 会话目录约定 | 解析按 `session_info` 名 + `(unnamed)`；自定义 session 目录（`PI_SESSION_DIR` 等）未覆盖 |
 
 ## 下一步
 

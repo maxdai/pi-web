@@ -804,6 +804,19 @@ pi-sdk-web 已实现并通过浏览器验收（本地提交，随本设计一起
 - **widget 生命周期要由桥接接管**：TUI 下组件由 TUI 管理（移除时 `invalidate()`）。我们改写 `setWidget` 后若不自己管，扩展的更新定时器会让面板「复活」——实测：`setWidget(key, undefined)` 之后组件仍在 `requestRender()`，面板重新出现。修法：按 key 记录 active 状态，移除时置 inactive 并调用 `invalidate?.()`，丢弃迟到的更新。
 - **`bash` 的 id 对齐**：RPC 用**命令信封 id** 作为 `executeBash` 的 id（出现在 `bash_execution_update` 事件里），而前端用自己生成的 `bash-<ts>` 关联流式块；服务端须把两者对齐。且 RPC **不发** `bash_result` 事件，需服务端合成。
 
+**缺口补齐（2026-10，逐项实测，目标：native 功能面不低于 SDK 宿主）**：
+
+| 能力 | 实现要点 | 验证 |
+|---|---|---|
+| **扩展 ANSI 换肤** | 桥接从**运行中的 pi 包目录**（`realpath(process.argv[1])/../..`）动态 import Pi 的 `Theme` 类，用 `dark.json`/`light.json` 构造主题（truecolor，与 SDK 宿主一致），并改写 `ui.theme`（实测该属性可配置且**对其他扩展生效**）；服务端暴露 `GET /side/theme`，桥接每 2s 轮询、变化时强制重渲染全部 widget | 切 Light 后 widget ANSI 立即换色 |
+| **`custom()` 面板** | 桥接把组件 `render(width)` 的文本行经侧信道交给服务端 → 前端以**只读模态** `extension-panel` 呈现，关闭时回传结论（组件已 `done(value)` 则采用之） | 面板打开/关闭、结论回传均通过 |
+| **`/usage`** | 服务端原生拦截（`command` 名为 `usage` 时优先于扩展命令，与 SDK 宿主 `executeCommand` 一致），复用既有 `usage-render`——**0 处 SDK 依赖**，证明该功能与引擎无关 | `usage_data` 帧 + 面板打开 |
+| **`export`** | RPC `export_html`（接受 `outputPath`）→ notify 路径 | 通知含导出路径 |
+| **`delete_session`** | 校验「已知会话 + 非当前会话」后 `unlink` | 三个分支全通过 |
+| **`(unnamed)` 解析** | 无 `session_info` 名字的会话按 `(unnamed)` 匹配（与 `pii` 一致） | 合成未命名会话可被解析 |
+
+**仍存的缺口（明确记录，迁移时降级或补齐）**：`.jsonl` 导出（RPC 仅 `export_html`）、scoped models 需写 settings + 重启子进程、面板**按键交互**不支持（只读）、TUI-only 项（`setWorkingIndicator`/`setFooter`/`setHeader` 等，宿主与 RPC 下本就 no-op）、自定义 session 目录（`PI_SESSION_DIR` 等）未覆盖。
+
 ### 15.3 架构分工
 
 ```text
@@ -829,8 +842,10 @@ pi-sdk-web 已实现并通过浏览器验收（本地提交，随本设计一起
 | 对话框 select/confirm/input/editor | ✅ | ✅（**启动期死锁**） | ✅（桥接接管，含启动期） |
 | ext-status / notify / 字符串 widget | ✅ | ✅ | ✅ |
 | **工厂 widget（`/todos` 等）** | ✅ | ❌ 静默丢弃 | ✅ **改写 setWidget** |
-| **`custom()` 面板** | ❌（现状返回 undefined） | ❌ 返回 undefined | ✅ **改写 custom()**（比现状更强） |
-| **theme 切换** | ✅（自有 UI context） | ❌ `{success:false}` | ✅ **改写 setTheme** |
+| **`custom()` 面板** | ❌（现状返回 undefined） | ❌ 返回 undefined | ✅ **改写 custom()** + 前端只读模态（比现状更强；面板内按键交互仍不支持） |
+| **theme 切换** | ✅（自有 UI context） | ❌ `{success:false}` | ✅ **改写 `ui.theme`**（自有 Pi Theme，暗/亮热切换，已实测对其他扩展生效） |
+| `/usage`（pi-web 原生） | ✅（读 session 文件） | ❌ 无命令 | ✅ 服务端原生拦截 + 复用同模块（0 处 SDK 依赖） |
+| `export` / `delete_session` | ✅ | ⚠️ 仅 `export_html` | ✅（`.jsonl` 导出降级） |
 | 扩展命令（`/aft-status` 等） | ✅ 直调 `extensionRunner.getCommand` | ✅ 经 `prompt "/cmd"`（`agent-session.ts:2060-2063`） | ✅ |
 | 会话操作 new/fork/switch/reload | ✅ | ✅（`commandContextActions` 已绑定） | ✅ |
 | 模型/thinking | ✅ | ✅ `set_model` / `set_thinking_level` | ✅ |
@@ -876,15 +891,15 @@ pi-sdk-web 已实现并通过浏览器验收（本地提交，随本设计一起
 | 6 | 启动期对话框死锁这一 RPC 缺陷 | 已由决策 3 覆盖；若将来上游修复 stdin 时序，可简化但不能依赖 |
 | 7 | `pii`（Python RPC 桥）与本方案的关系 | 本节方案在 TS 侧重建 RPC 通道；`pii` 保留为用户入口与「RPC 版」实现，是否收敛待迁移完成后再定 |
 
-### 15.8 迁移步骤（阶段化，尚未实施）
+### 15.8 迁移步骤（阶段化；A/B/C 已在原型中部分完成，见括号内状态）
 
-| 阶段 | 内容 | 完成判据 |
-|---|---|---|
-| A | 服务端抽象「引擎接口」，SDK 实现与 native 实现并列（如 `--engine sdk\|native`） | 两种引擎都能起服务，前端无感 |
-| B | 实现 RPC 客户端（TS）+ 桥接扩展（把 `ui-context.ts` 语义搬入）+ 侧信道 server（复用现有 WS 协议） | §15.2 的 9 项在真实架构内复现 |
-| C | 逐项对齐：history 走 `get_entries`；会话列表/删除沿用文件操作；scoped models 走 settings+重启；theme 走桥接 | 与现状功能清单逐条对齐 |
-| D | 端到端冒烟：现有 42 项扩展为覆盖两种引擎，真实会话跑通 | 全绿后把 `native` 设为默认 |
-| E | **移除 SDK 引擎**：删除 `pi-coding-agent`/`pi-agent-core` 依赖与 SDK 宿主实现（含 `ui-context.ts`，语义已在阶段 B 移植进桥接扩展），更新发布说明 | 依赖树中不再有 pi-coding-agent；`native` 为唯一引擎 |
+| 阶段 | 内容 | 完成判据 | 原型状态（2026-10） |
+|---|---|---|---|
+| A | 服务端抽象「引擎接口」，SDK 实现与 native 实现并列（如 `--engine sdk\|native`） | 两种引擎都能起服务，前端无感 | 未做（原型是独立 server） |
+| B | 实现 RPC 客户端（TS）+ 桥接扩展（把 `ui-context.ts` 语义搬入）+ 侧信道 server（复用现有 WS 协议） | §15.2 的 9 项在真实架构内复现 | **已完成**（`experiments/rpc-bridge/`） |
+| C | 逐项对齐：history 走 `get_entries`；会话列表/删除沿用文件操作；scoped models 走 settings+重启；theme / panels / usage / export 对齐 | 与现状功能清单逐条对齐 | **大部分完成**（§15.2 缺口补齐表；余 `.jsonl` 导出、面板按键交互、scoped models 重启、自定义 session 目录） |
+| D | 端到端冒烟：现有 42 项扩展为覆盖两种引擎，真实会话跑通 | 全绿后把 `native` 设为默认 | 部分：冒烟 **42/42 已在 native 上通过**，尚未扩为覆盖两引擎 |
+| E | **移除 SDK 引擎**：删除 `pi-coding-agent`/`pi-agent-core` 依赖与 SDK 宿主实现（含 `ui-context.ts`，语义已在阶段 B 移植进桥接扩展），更新发布说明 | 依赖树中不再有 pi-coding-agent；`native` 为唯一引擎 | 未做 |
 
 ### 15.9 与 §14 路线的关系（终态：替换，而非并存）
 

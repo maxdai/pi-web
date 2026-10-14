@@ -2085,6 +2085,10 @@ class PiWebClient {
       this.openExtensionEditor(req);
     } else if (method === 'notify') {
       this.openExtensionNotify(req);
+    } else if (method === 'panel') {
+      // custom() 面板：扩展自己渲染的 TUI 组件，我们在网页里以模态呈现其文本行
+      // （只读；组件自身的按键交互不支持 —— 见 pi-web-design.md §15）
+      this.openExtensionPanel(req);
     } else if (method === 'setWidget') {
       // Persistent widget panel (TUI: above/below editor). Not a popup.
       this.renderWidget(req);
@@ -2243,6 +2247,33 @@ class PiWebClient {
       return;
     }
     this.appendNotifyLine(req.message || '', req.notifyType);
+  }
+
+  /** custom() 面板（桥接扩展经 method:'panel' 送来）：只读展示扩展渲染的文本行。
+   *  关闭时统一由 closeModal() 回 cancelled —— 服务端会采用组件自己 done(value) 的结论。 */
+  openExtensionPanel(req) {
+    this.openModal(req.title || 'Extension panel', 'extension-panel');
+    this.currentExtRequest = req;
+    this.startDialogCountdown(req);
+    const lines = Array.isArray(req.lines) ? req.lines : [];
+    const body = ansiToHtml(lines.join('\n'));
+    this.modalList.innerHTML = `
+      <pre class="modal-panel-body">${body}</pre>
+      <div class="modal-actions">
+        <button class="modal-btn confirm-btn">Close</button>
+      </div>`;
+    this.modalList.querySelector('.confirm-btn').addEventListener('click', () => {
+      // 自行回应一次就够；清掉 currentExtRequest，避免 closeModal() 再发一个 cancelled
+      // （第二个响应会因找不到等待者而落到 RPC stdin，属噪音）
+      const value = req.value;
+      this.currentExtRequest = null;
+      this.send(
+        value !== undefined
+          ? { type: 'extension_ui_response', id: req.id, value }
+          : { type: 'extension_ui_response', id: req.id, cancelled: true },
+      );
+      this.closeModal();
+    });
   }
 
   appendNotifyLine(message, type) {
