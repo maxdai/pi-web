@@ -166,6 +166,9 @@ async function rpcData(type, extra) {
 const clients = new Set();
 const bridgeDialogs = new Map(); // id -> resolve（桥接发起的对话框）
 let lastScopedNoticeAt = 0; // scoped-models 提示去抖（避免每次勾选都刷一行）
+/** 面板可用列/行数，由前端按实际版面量出后上报；桥接据此决定组件渲染宽度。
+ *  默认值只在浏览器还没上报时兜底（例如扩展在页面连上之前就弹面板）。 */
+let panelGeometry = { cols: 100, rows: 40 };
 /** 对话框/面板超时。可用环境变量缩短，便于自动化测试（默认 10 分钟）。 */
 const DIALOG_TIMEOUT_MS = Number(process.env.PI_WEB_BRIDGE_DIALOG_TIMEOUT_MS ?? 10 * 60 * 1000);
 const widgetSnapshot = new Map(); // key -> {widgetKey, widgetLines, widgetPlacement}
@@ -253,6 +256,9 @@ async function buildState() {
     messageCount: st.messageCount,
     version: PI_VERSION,
     piWebVersion: PI_WEB_VERSION,
+    // 能力位：本引擎支持 {type:'panel_geometry'}（前端据此决定是否上报面板尺寸）。
+    // SDK 宿主不懂这个消息且会回 error 帧，所以前端必须按能力位来决定发不发。
+    panelGeometry: true,
     cwd: displayCwd(cwd),
     gitBranch: gitBranch(cwd),
     commands: withNativeCommands(bridgeInfo.commands ?? []),
@@ -467,6 +473,16 @@ async function handleClientMessage(ws, msg) {
       case "get_state":
         await sendState(ws);
         break;
+      case "panel_geometry": {
+        // 前端量出的面板可用列/行数（见 app.js sendPanelGeometry）
+        const cols = Number(msg.cols);
+        const rows = Number(msg.rows);
+        if (Number.isFinite(cols) && Number.isFinite(rows) && cols >= 20 && rows >= 5) {
+          panelGeometry = { cols: Math.floor(cols), rows: Math.floor(rows) };
+          console.log(`[proto] panel geometry ← ${panelGeometry.cols}×${panelGeometry.rows}`);
+        }
+        break;
+      }
       case "get_stats":
         // SDK 宿主也有这个命令（前端当前不发，保留同形接口）
         await sendStats();
@@ -717,6 +733,10 @@ const server = createServer(async (req, res) => {
       if (route === "theme") {
         // 桥接轮询用（GET）：返回浏览器当前主题，供扩展 ANSI 取色
         return reply({ name: themeName });
+      }
+      if (route === "geometry") {
+        // 桥接 render 前取用：按面板实际宽度渲染扩展组件，避免折行
+        return reply(panelGeometry);
       }
       if (route === "theme-ack") {
         console.log(`[proto] bridge set theme → ${data.name}`);

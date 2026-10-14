@@ -353,6 +353,13 @@ class PiWebClient {
     switch (data.type) {
       case 'state':
         this.renderState(data.data);
+        // 引擎声明支持 panel_geometry 时上报一次面板可用列/行数：
+        // TUI 组件按终端宽度渲染，网页等价物是面板宽度（不报则桥接只能用默认 100 列 → 折行折断框图）。
+        // 必须按能力位判断：SDK 宿主不认这个消息，会回一个 error 帧。
+        if (data.data && data.data.panelGeometry === true && !this.panelGeometrySupported) {
+          this.panelGeometrySupported = true;
+          this.sendPanelGeometry();
+        }
         break;
       case 'theme_set':
         // Server acknowledged the theme switch. No reload needed: CSS
@@ -2249,6 +2256,56 @@ class PiWebClient {
     this.appendNotifyLine(req.message || '', req.notifyType);
   }
 
+  /** 计算「面板能容纳多少列/行」并上报服务端，供桥接按该宽度渲染扩展的 TUI 组件。
+   *  TUI 组件是按终端宽度排版的（例：magic-context 的 StatusDialogComponent 读
+   *  `tui.terminal.rows` 并以传入 width 画框）；网页这边的等价物就是面板的可用宽度，
+   *  按它渲染才能既折不了框、又不需要横向滚动。 */
+  sendPanelGeometry() {
+    if (!this.panelGeometrySupported) return; // 服务端未声明支持就不要发（SDK 引擎会报错）
+    const overlay = document.querySelector('#modal-overlay');
+    let cols = 100;
+    let rows = 40;
+    try {
+      const prevDisplay = overlay ? overlay.style.display : '';
+      const prevVisibility = overlay ? overlay.style.visibility : '';
+      if (overlay) {
+        overlay.style.visibility = 'hidden'; // 只为了量尺寸，不闪屏
+        if (prevDisplay !== 'flex') overlay.style.display = 'flex';
+      }
+      // 注意是 id 选择器：#modal-list / #modal（写成 .modal-list 会落空 → 量到 body 宽度）
+      const host = overlay?.querySelector('#modal-list') || overlay?.querySelector('#modal') || document.body;
+      const probe = document.createElement('pre');
+      probe.className = 'modal-panel-body';
+      // 必须留在文档流内测量：position:absolute 会以「最近的定位祖先」为包含块，
+      // 而 #modal/#modal-list 未定位 → 会以视口为基准，量出的是整屏宽度（曾因此得到 162 列）
+      probe.style.cssText = 'width:100%;max-height:none;height:0;overflow:hidden;visibility:hidden;';
+      probe.textContent = '0';
+      host.appendChild(probe);
+      const cs = getComputedStyle(probe);
+      const padX = (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0);
+      const contentW = probe.clientWidth - padX;
+      const span = document.createElement('span');
+      span.style.cssText =
+        `position:absolute;visibility:hidden;white-space:pre;font-family:${cs.fontFamily};font-size:${cs.fontSize};`;
+      span.textContent = '0'.repeat(100);
+      document.body.appendChild(span);
+      const charW = span.getBoundingClientRect().width / 100;
+      span.remove();
+      probe.remove();
+      if (overlay) {
+        overlay.style.display = prevDisplay;
+        overlay.style.visibility = prevVisibility;
+      }
+      // 留 1 列余量：亚像素取整/滚动条会让「刚好装下」变成折行
+      if (contentW > 0 && charW > 0) cols = Math.max(40, Math.floor(contentW / charW) - 1);
+      const lineH = parseFloat(cs.lineHeight) || 16;
+      rows = Math.max(10, Math.min(60, Math.floor((window.innerHeight * 0.6) / lineH)));
+    } catch {
+      /* 量不到就用默认值 */
+    }
+    this.send({ type: 'panel_geometry', cols, rows });
+  }
+
   /** custom() 面板（桥接扩展经 method:'panel' 送来）：只读展示扩展组件渲染出的文本行。
    *  关闭时统一由 closeModal() 回 cancelled —— 服务端会采用组件自己 done(value) 的结论。 */
   openExtensionPanel(req) {
@@ -2895,5 +2952,11 @@ class PiWebClient {
 }
 
 window.addEventListener('DOMContentLoaded', () => {
-  new PiWebClient();
+  const client = new PiWebClient();
+  // 窗口尺寸/字号变化会改变面板可用列数 —— 防抖后重新上报（供桥接按该宽度渲染扩展组件）
+  let geomTimer = null;
+  window.addEventListener('resize', () => {
+    clearTimeout(geomTimer);
+    geomTimer = setTimeout(() => client.sendPanelGeometry(), 300);
+  });
 });

@@ -55,6 +55,9 @@ export default function (pi) {
   // 且用 256 色，无法切换；我们在桥接里构造 Pi 自己的 Theme（truecolor，与 SDK 宿主一致）
   // 并改写 ui.theme，浏览器切换亮/暗时由服务端经侧信道告知，随后重渲染 widget。
   let themeName = "dark";
+  /** 面板尺寸兜底（浏览器尚未上报时用）；实际渲染宽度取 fetchPanelGeometry()。 */
+  const PANEL_ROWS = Number(process.env.PI_WEB_BRIDGE_PANEL_ROWS ?? 40);
+  const PANEL_COLS = Number(process.env.PI_WEB_BRIDGE_PANEL_COLS ?? 100);
   let themes = null; // { dark, light }
   let themePoll = null;
   let pkgDirCache = null;
@@ -111,6 +114,24 @@ export default function (pi) {
       themes = null;
     }
     return themes;
+  }
+
+  /** 面板可用列/行数：由网页按实际版面量出后经服务端中转（见 app.js sendPanelGeometry）。
+   *  组件按这个宽度渲染才不会折行、也不需要横向滚动。取不到时回退到环境变量/默认值。 */
+  async function fetchPanelGeometry() {
+    const fallback = { cols: PANEL_COLS, rows: PANEL_ROWS };
+    try {
+      const res = await fetch(`${url}/side/geometry`, { headers: { "x-pi-web-token": token } });
+      const data = await res.json().catch(() => undefined);
+      const cols = Number(data?.cols);
+      const rows = Number(data?.rows);
+      if (Number.isFinite(cols) && Number.isFinite(rows) && cols >= 20 && rows >= 5) {
+        return { cols: Math.floor(cols), rows: Math.floor(rows) };
+      }
+    } catch {
+      /* 侧信道暂时不可用 */
+    }
+    return fallback;
   }
 
   async function pollTheme() {
@@ -304,17 +325,18 @@ export default function (pi) {
     //      缺了会抛 `Cannot read properties of undefined (reading 'rows')`（曾因此得到空面板）。
     //    · 渲染是**只读快照**：组件内的按键交互（滚动/翻页）网页端不支持；组件若自己调
     //      `done(value)` 则采用该结论，否则用户关闭面板即视为取消。
-    const PANEL_ROWS = Number(process.env.PI_WEB_BRIDGE_PANEL_ROWS ?? 40);
-    const PANEL_COLS = Number(process.env.PI_WEB_BRIDGE_PANEL_COLS ?? 100);
     ui.custom = async (factory, options) => {
       let doneValue;
       let hasDone = false;
+      // 按**网页面板实际可用列/行数**渲染（组件在 TUI 下也是按终端宽度排版）；
+      // 量不到则回退 PANEL_COLS/PANEL_ROWS，避免装不下而折行折断框图。
+      const { cols: panelCols, rows: panelRows } = await fetchPanelGeometry();
       const stubTui = {
         requestRender() {},
         requestLayout() {},
         invalidate() {},
         requestFocus() {},
-        terminal: { rows: PANEL_ROWS, cols: PANEL_COLS, width: PANEL_COLS, height: PANEL_ROWS },
+        terminal: { rows: panelRows, cols: panelCols, width: panelCols, height: panelRows },
       };
       let component;
       try {
@@ -328,7 +350,7 @@ export default function (pi) {
       }
       let lines = [];
       try {
-        if (component) lines = component.render(PANEL_COLS) ?? [];
+        if (component) lines = component.render(panelCols) ?? [];
       } catch (err) {
         console.error(`[pi-web-bridge] custom() render failed: ${err.message}`);
         lines = [`[pi-web] 组件渲染失败：${err.message}`];
