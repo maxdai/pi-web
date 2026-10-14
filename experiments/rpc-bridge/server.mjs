@@ -31,8 +31,11 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, "../..");
 const STATIC_DIR = join(REPO, "static");
 const BRIDGE_EXT = join(HERE, "bridge.mjs");
-const SESSIONS_ROOT = join(process.env.HOME, ".pi", "agent", "sessions");
-const SETTINGS_FILE = join(process.env.HOME, ".pi", "agent", "settings.json");
+// 与 Pi 自身一致：尊重 PI_CODING_AGENT_DIR（默认 ~/.pi/agent）。
+// 曾硬编码 $HOME/.pi/agent —— 自定义配置目录下会读错 settings / 扫错 sessions。
+const AGENT_DIR = process.env.PI_CODING_AGENT_DIR ?? join(process.env.HOME, ".pi", "agent");
+const SESSIONS_ROOT = join(AGENT_DIR, "sessions");
+const SETTINGS_FILE = join(AGENT_DIR, "settings.json");
 const TOKEN = randomUUID();
 const PI_WEB_VERSION = "0.0.0-rpc-proto";
 
@@ -162,6 +165,7 @@ async function rpcData(type, extra) {
 // ------------------------------------------------------------------ WS 广播
 const clients = new Set();
 const bridgeDialogs = new Map(); // id -> resolve（桥接发起的对话框）
+let lastScopedNoticeAt = 0; // scoped-models 提示去抖（避免每次勾选都刷一行）
 /** 对话框/面板超时。可用环境变量缩短，便于自动化测试（默认 10 分钟）。 */
 const DIALOG_TIMEOUT_MS = Number(process.env.PI_WEB_BRIDGE_DIALOG_TIMEOUT_MS ?? 10 * 60 * 1000);
 const widgetSnapshot = new Map(); // key -> {widgetKey, widgetLines, widgetPlacement}
@@ -558,15 +562,36 @@ async function handleClientMessage(ws, msg) {
         break;
       }
       case "set_scoped_models": {
-        // 原型：写 settings.json 的 enabledModels（启动时读取，需重启 pi 子进程生效）
+        // 语义与 TUI/SDK 对齐：**只有 persist=true 才写 settings.json**
+        // （TUI 的 onChange 是仅内存生效，Ctrl+S/保存才持久化；前端每次勾选发 persist=false）
         const patterns = (msg.models ?? [])
           .filter((m) => m.provider && m.modelId)
           .map((m) => `${m.provider}/${m.modelId}`);
+        if (msg.persist !== true) {
+          // 原生引擎**无法**在会话内改 scoped models：RPC 无此命令、ExtensionAPI 无此方法，
+          // 且实测 ctx.reload() 不会重算 scopedModels —— 只能写 settings + 重启子进程。
+          // 所以这里明确不写 settings（避免勾一下就把用户的 settings.json 改掉），并给出提示。
+          const now = Date.now();
+          if (now - lastScopedNoticeAt > 30_000) {
+            lastScopedNoticeAt = now;
+            notify(
+              "scoped-models",
+              "原生引擎：勾选仅在保存后生效（保存会写 settings，需重启 pi 子进程；SDK 版可即时生效）",
+              "warning",
+            );
+          }
+          break;
+        }
         const settings = JSON.parse(readFileSync(SETTINGS_FILE, "utf8"));
         if (patterns.length > 0) settings.enabledModels = patterns;
         else delete settings.enabledModels;
         writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2));
         console.log(`[proto] enabledModels → ${JSON.stringify(patterns)}（重启本原型后生效）`);
+        notify(
+          "scoped-models",
+          `已保存 ${patterns.length} 个 scoped models；原生引擎需重启 pi 子进程后生效`,
+          "warning",
+        );
         break;
       }
       case "set_theme":
@@ -576,7 +601,17 @@ async function handleClientMessage(ws, msg) {
         ws.send(JSON.stringify({ type: "theme_set", data: { name: themeName } }));
         break;
       case "get_scoped_models": {
-        const available = bridgeInfo.scopedModels ?? [];
+        // available = **完整模型目录**（不是当前已 scoped 的列表！）
+        // TUI/SDK 用的是 modelRuntime.getAvailableSnapshot()；RPC 的等价物就是
+        // get_available_models（实测两边同为 162 条、集合一致）。曾把 scoped 列表当
+        // available 传过去，导致弹窗里只有已选中的 11 个、无法添加新模型。
+        let available = [];
+        try {
+          const catalog = await rpcData("get_available_models");
+          available = catalog?.models ?? [];
+        } catch {
+          /* ignore */
+        }
         const configured = (() => {
           try {
             return JSON.parse(readFileSync(SETTINGS_FILE, "utf8")).enabledModels ?? [];
@@ -590,7 +625,7 @@ async function handleClientMessage(ws, msg) {
             data: {
               // 前端用 scoped 预勾选多选项（SDK 宿主也有这个字段）
               scoped: bridgeInfo.scopedModels ?? [],
-              available: bridgeInfo.scopedModels ?? [],
+              available,
               configured,
             },
           }),

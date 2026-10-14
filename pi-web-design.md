@@ -1003,7 +1003,9 @@ node deadlock-harness.mjs --bridge             # 桥接接管：resolve = true
 | 项 | SDK 宿主 | 原生原型（本轮前） | 现状 |
 |---|---|---|---|
 | `/session` | 只读信息模态（name/ID/file/model/thinking + 消息数/Token/费用/上下文） | 只刷新 state，**无模态** | ✅ 已按同形同内容实现 |
-| `get_scoped_models` | 返回 `{scoped, available, configured}` | 缺 `scoped`（前端用它预勾选） | ✅ 已补齐 |
+| `get_scoped_models` | 返回 `{scoped, available, configured}`，`available` = **完整模型目录**（`modelRuntime.getAvailableSnapshot()`，162 条） | ① 缺 `scoped`（前端用它预勾选）；② **`available` 传成了 scoped 列表** → 弹窗里只有已选的 11 个、**无法添加新模型** | ✅ 已补齐：`available` 改取 RPC `get_available_models`（同 162 条）。浏览器实测 SDK 与原生均 **162 行 / 11 项勾选**，逐项一致 |
+| `set_scoped_models` 的 `persist` 语义 | 仅 `persist===true`（显式保存）才写 settings；勾选（`persist=false`）**仅内存生效**，绝不改 `settings.json` | 原型**不看 `persist` 就写 settings** → 每勾一下都会改写用户的 `settings.json` | ✅ 已修：`persist=false` 只给一次行内提示（30s 去抖）、不落盘；`persist=true` 才写。隔离目录实测：`false` 后 settings md5 不变、`true` 后写入且保留其余 15 个顶层键 |
+| 配置目录解析 | 尊重 `PI_CODING_AGENT_DIR`（SDK/pi 自身都尊重） | 硬编码 `$HOME/.pi/agent` → 自定义配置目录下读错 settings、扫错 sessions | ✅ 已修（`AGENT_DIR = PI_CODING_AGENT_DIR ?? ~/.pi/agent`） |
 | `dialog_dismissed` | 超时/中止/切会话时通知前端关模态（`ui-context.ts:209`） | **不发** → 模态残留在屏幕上 | ✅ 已实现三条路径（timeout/aborted/session-switch，实测通过） |
 | `get_stats` | 有（前端当前不发） | 无 | ✅ 已补（同形接口） |
 
@@ -1016,6 +1018,13 @@ node deadlock-harness.mjs --bridge             # 桥接接管：resolve = true
 | **scoped models 即时生效** | SDK 走 `session.setScopedModels()` 立即生效；原生只能写 `settings.json`。**实测 `ctx.reload()` 不会重算 scoped models**（改 `enabledModels` 后 reload，`ctx.scopedModels` 仍是旧值）→ 必须**重启 pi 子进程** | `/scoped-models` 改动与页脚模型列表要重启后才反映（未实现自动重启） |
 | **`.jsonl` 导出** | SDK 有 `session.exportToJsonl`；RPC 只有 `export_html` | 原生下 `.jsonl` 导出以降级提示代替 |
 | **非功能性** | SDK 宿主有 WS 背压与堆水位保护、`PI_SESSION_DIR`/自定义配置目录解析；原型无（原型服务端很薄，pi 子进程自带内存策略） | 极端流量/自定义目录场景下的健壮性与解析差异 |
+
+**为什么 `/scoped-models` 会和 TUI 不一样（两层原因，2026-10 定位）**：
+
+1. **列表内容（实现 bug，已修）**：TUI 的候选来自 `session.modelRuntime.getAvailableSnapshot()`（`interactive-mode.ts:5233/5268`），即**完整模型目录**；我最初把**当前已 scoped 的列表**当成 `available` 传给前端，于是弹窗只剩已选中的那些，自然"和 TUI 不一样"。改成 RPC 的 `get_available_models` 后两边逐项一致（162/162）。
+   - **附带好消息**：原生目录是 Pi 自己的目录，**包含** `deepinfra/zai-org/GLM-5.3-Flash` —— 正是 §14 时期 SDK 宿主看不到、需要 `modelRuntime.refresh()` 兜的那个模型。原生路由在**目录保真度上反而更强**（无 catalog swap 时序问题）。
+2. **生效机制（架构性差异，仍在）**：TUI/SDK 都在**进程内**，切换时直接 `session.setScopedModels(...)`（`interactive-mode.ts:5418`）→ 立即生效；只有显式保存才 `settingsManager.setEnabledModels()`（`:5456`）。原生路由**在进程外**：RPC 命令表没有 scoped-models 命令，ExtensionAPI 也没有对应方法，且**实测 `ctx.reload()` 不会重算 scopedModels**（改 `enabledModels` 后 reload，值不变）→ 唯一路径是**写 settings + 重启 pi 子进程**。
+   - 因此原生侧当前语义：**勾选不生效也不落盘**（给提示），**保存才写 settings、重启后生效**。要做到 TUI 那样的即时生效，需要实现"保存后自动重启子进程"（未实现，见 §15.11 差异表）。
 
 ## 16. 宿主（Pi）依赖与兼容性核对清单
 
