@@ -37,13 +37,14 @@ node tools/smoke.mjs http://127.0.0.1:4096
 | 面板 | 结果 |
 |---|---|
 | **Extensions** | **9 / 9 完全一致**（5 真实 + 4 内置） |
-| **Tools** | SDK 21 / 原生 20 —— 仅差 `codemode`（原因见下，原生侧符合 Pi CLI/TUI 默认） |
+| **Tools** | 启动时 SDK 21 / 原生 20（仅差 `codemode`）；**原生执行一次 reload 后变为 21，与 SDK 一致** |
 | **Loaded Resources / `/` 菜单** | 仅多 `/pi-web:reload`（桥接提供 reload 能力的必要命令；SDK 版的 `/reload` 由前端内置列表提供，两边都能用） |
 
-**`codemode` 差异的根因**：SDK 宿主自己注入内置扩展（`pi-web/pi-sdk-web/src/session.ts` 的
-`loadBuiltinExtensions()`），副作用是 codemode 被算作 active；原生走 Pi 自己的 CLI 路径，codemode 的
-`exposure` 是 `model-only`、**不在 active 列表**（实测 `pi.getActiveTools()` 不含它）。也就是说
-**原生侧给出的才是 Pi 自己的答案**；迁移时 SDK 侧应改为不自行注入内置扩展（原生引擎已天然如此）。
+**`codemode` 差异的根因（2026-10 更正）**：不是「SDK 宿主自己注入内置扩展」——实测**同一个原生进程**，
+启动时 `pi.getActiveTools()` 为 20 项（`codemode` 的 `exposure === "model-only"`、未列入 active），
+执行一次 `/pi-web:reload` 后变为 21 项（含 `codemode`），与 SDK 侧一致。也就是说这是 **Pi 自身
+「启动 loadout vs reload loadout」的差异**，与 pi-web 两侧的接入方式无关；副作用是**侧栏 Tools 名单在
+reload 前后会变**（记录在 pi-web-design.md §16.5）。
 
 ### 名单口径（与 SDK 宿主对齐）
 
