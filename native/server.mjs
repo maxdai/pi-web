@@ -103,7 +103,10 @@ function logErr(message) {
 
 // 位置参数（与 pii 调用 Python 服务端的契约同形）：pi-web-native <session-id> <cwd> --port <n>
 const POSITIONAL = argv.filter((a, i) => !a.startsWith("--") && !(i > 0 && argv[i - 1].startsWith("--")));
-const POS_SESSION_ID = arg("session", undefined) ?? POSITIONAL[0] ?? undefined;
+// 两种入口语义不同，不能混：位置参数按**会话 id** 匹配（pii 的调用契约），
+// `--session <name>` 按**显示名**匹配（含 "(unnamed)"）。曾把二者合并且都按 id 匹配 → --session 失效。
+const SESSION_NAME = arg("session", undefined);
+const POS_SESSION_ID = POSITIONAL[0] ?? undefined;
 const POS_CWD = arg("cwd", undefined) ?? POSITIONAL[1] ?? undefined;
 const SESSION_FILE = arg("session-file", undefined);
 const PORT = Number(arg("port", "4080"));
@@ -113,7 +116,7 @@ if (!Number.isInteger(PORT) || PORT < 1 || PORT > 65535) {
   logErr(`Invalid port: ${arg("port", "")}`);
   process.exit(1);
 }
-if (!POS_SESSION_ID && !SESSION_FILE) {
+if (!POS_SESSION_ID && !SESSION_NAME && !SESSION_FILE) {
   logErr("usage: pi-web-native <session-id> [cwd] [--port 4080]");
   logErr("       pi-web-native --session <name> --port 4080");
   logErr("       pi-web-native --session-file <path> --port 4080");
@@ -180,18 +183,16 @@ async function resolveSession() {
     // "(unnamed)" 是 pi-web 对未命名会话的展示名（与 pii 一致），匹配没有 name 的会话
     const sessionName = nameMatch?.[1] ?? "(unnamed)";
     const header = JSON.parse(text.split("\n")[0]);
-    const matched = POS_SESSION_ID
-      ? header.id === POS_SESSION_ID
-      : sessionName === POS_SESSION_ID;
+    const matched = SESSION_NAME ? sessionName === SESSION_NAME : header.id === POS_SESSION_ID;
     if (!matched) continue;
     const st = await stat(p);
     hits.push({ path: p, cwd: header.cwd ?? process.cwd(), name: sessionName, mtime: st.mtimeMs });
   }
   if (hits.length === 0) {
     logErr(
-      POS_SESSION_ID && POS_SESSION_ID !== "(unnamed)"
-        ? `No session with id or name '${POS_SESSION_ID}' under ${SESSIONS_ROOT}`
-        : `No session named '(unnamed)' under ${SESSIONS_ROOT}`,
+      SESSION_NAME
+        ? `No session named '${SESSION_NAME}' under ${SESSIONS_ROOT}`
+        : `No session with id '${POS_SESSION_ID}' under ${SESSIONS_ROOT}`,
     );
     process.exit(1);
   }

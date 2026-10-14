@@ -130,11 +130,25 @@ def cmd_resume(name, web=False, port=None):
         # 2026-10 起 --web 使用**原生引擎**（RPC + 桥接扩展），不再是打包的 Python RPC 服务端。
         # 契约与 Python 版同形：<session-id> <cwd> --port <n>（端口默认 4080，不自动换端口）。
         cmd = _native_server_cmd(target["id"], target["cwd"], port or 4080)
+        proc = subprocess.Popen(cmd)
         try:
-            sys.exit(subprocess.call(cmd))
+            rc = proc.wait()
         except KeyboardInterrupt:
-            print()
-            sys.exit(130)
+            # Ctrl+C 同时送达**同一前台进程组**（pii + 服务端 + pi 子进程），服务端会自行优雅关停
+            # （杀 pi 子进程、关 socket、打印收尾日志）。这里**必须等它退出**再返回：
+            # 若立刻 sys.exit，bash 会先打印提示符，服务端的收尾日志就落到提示符之后
+            # （表现为"提示符后又多一行/被顶掉"，2026-10-14 实测定位）。
+            # 也不再自己 print() 空行：服务端输出自带换行，多打一个就是提示符前多一个空行。
+            try:
+                rc = proc.wait(timeout=5)
+            except KeyboardInterrupt:
+                # 再次 Ctrl+C = 不等了，直接强杀
+                proc.kill()
+                rc = proc.wait()
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                rc = proc.wait()
+        sys.exit(rc)
     else:
         try:
             sys.exit(subprocess.call(["pi", "--session", target["id"]]))
