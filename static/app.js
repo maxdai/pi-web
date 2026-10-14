@@ -2282,6 +2282,8 @@ class PiWebClient {
     // （曾误在 try 内用 const 声明，导致上报那一行 ReferenceError、几何再也发不出去）
     let contentW = 0;
     let charW = 0;
+    let boxW = 0;
+    let blockW = 0;
     try {
       const prevDisplay = overlay ? overlay.style.display : '';
       const prevVisibility = overlay ? overlay.style.visibility : '';
@@ -2301,20 +2303,19 @@ class PiWebClient {
       const cs = getComputedStyle(probe);
       const padX = (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0);
       contentW = probe.clientWidth - padX;
-      const span = document.createElement('span');
-      span.style.cssText =
-        `position:absolute;visibility:hidden;white-space:pre;font-family:${cs.fontFamily};font-size:${cs.fontSize};`;
-      span.textContent = '0'.repeat(100);
-      document.body.appendChild(span);
-      charW = span.getBoundingClientRect().width / 100;
-      span.remove();
+      const metrics = this.monoCharMetrics(cs);
+      charW = metrics.digit;
+      boxW = metrics.box;
+      blockW = metrics.block;
       probe.remove();
       if (overlay) {
         overlay.style.display = prevDisplay;
         overlay.style.visibility = prevVisibility;
       }
-      // 留 1 列余量：亚像素取整/滚动条会让「刚好装下」变成折行
-      if (contentW > 0 && charW > 0) cols = Math.max(40, Math.floor(contentW / charW) - 1);
+      // 容量按**最宽字符类**（数字/框图/色块里最宽者）估算，再留 2 列余量：
+      // 亚像素取整、滚动条、以及组件可能比下发宽度多画 1 列（用户浏览器实测 174 > 173）。
+      const widest = Math.max(charW, boxW, blockW);
+      if (contentW > 0 && widest > 0) cols = Math.max(40, Math.floor(contentW / widest) - 2);
       const lineH = parseFloat(cs.lineHeight) || 16;
       rows = Math.max(10, Math.min(60, Math.floor((window.innerHeight * 0.6) / lineH)));
     } catch {
@@ -2328,7 +2329,30 @@ class PiWebClient {
       // 中间量一并上报：日志里能直接看出列数是怎么来的（contentW ÷ charW）
       contentW: Math.round(contentW) || undefined,
       charW: charW ? Number(charW.toFixed(3)) : undefined,
+      boxW: boxW ? Number(boxW.toFixed(3)) : undefined,
+      blockW: blockW ? Number(blockW.toFixed(3)) : undefined,
     });
+  }
+
+  /** 量面板字体下各**字符类**的真实宽度（px）。
+   *  必须分开量：当等宽字体缺制表符 U+2500 时浏览器会回退到全角字体，单个 `─` 可能是
+   *  数字宽度的两倍 —— 只按数字算列数就会让横框折行（2026-10-14 用户实测）。 */
+  monoCharMetrics(cs) {
+    const measure = (sample) => {
+      const span = document.createElement('span');
+      span.style.cssText =
+        `position:absolute;visibility:hidden;white-space:pre;font-family:${cs.fontFamily};font-size:${cs.fontSize};`;
+      span.textContent = sample;
+      document.body.appendChild(span);
+      const w = span.getBoundingClientRect().width / [...sample].length;
+      span.remove();
+      return w;
+    };
+    const digit = measure('0'.repeat(20));
+    const box = measure('─'.repeat(20)); // 横框：最能暴露全角回退
+    const block = measure('█'.repeat(20)); // 进度条色块
+    const cjk = measure('中'.repeat(20));
+    return { digit, box, block, cjk, max: Math.max(digit, box, block) };
   }
 
   /** 面板内容比容器宽时逐档缩小字号，直到最长行放得下（保证不折行、不横滚；下限 8px）。
@@ -2342,25 +2366,69 @@ class PiWebClient {
     const padX = (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0);
     const contentW = pre.clientWidth - padX;
     if (contentW <= 0) return null;
-    const charWidthAt = (px) => {
+    const base = parseFloat(cs.fontSize) || 12;
+    /** 逐字符类量宽：数字/框图/色块/CJK 的宽度可能互不相同（字体回退会放大框图字符）。 */
+    const widthAt = (px, sample) => {
       const span = document.createElement('span');
       span.style.cssText = `position:absolute;visibility:hidden;white-space:pre;font-family:${cs.fontFamily};font-size:${px}px;`;
-      span.textContent = '0'.repeat(50);
+      span.textContent = sample.repeat(20);
       document.body.appendChild(span);
-      const w = span.getBoundingClientRect().width / 50;
+      const w = span.getBoundingClientRect().width / 20;
       span.remove();
       return w;
     };
-    const base = parseFloat(cs.fontSize) || 12;
-    const baseCharW = charWidthAt(base);
-    const fitsBase = Math.floor(contentW / baseCharW) - 1;
-    if (longest <= fitsBase) return { longest, fitsBase, shrunkTo: base, overflow: false };
-    // 放不下：先缩小字号（按实际渲染宽度迭代 0.5px 一档，下限 8px）
+    const widthOf = (px) => {
+      const m = {
+        digit: widthAt(px, '0'),
+        box: widthAt(px, '─'),
+        block: widthAt(px, '█'),
+        cjk: widthAt(px, '中'),
+      };
+      return { ...m, max: Math.max(m.digit, m.box, m.block, m.cjk) };
+    };
+    const pxWidthOfLine = (line, m) => {
+      let px = 0;
+      for (const ch of line) {
+        const c = ch.codePointAt(0);
+        if (c >= 0x2500 && c <= 0x257f) px += m.box; // 框图
+        else if (c >= 0x2580 && c <= 0x259f) px += m.block; // 色块/进度条
+        else if (c > 0x2e7f) px += m.cjk; // CJK、全角、emoji 等宽字符
+        else px += m.digit;
+      }
+      return px;
+    };
+    const m0 = widthOf(base);
+    // 只把**内容里真正出现**的字符类计入最宽值（否则纯 ASCII 面板会被 CJK 宽度白白压窄）
+    const present = { box: false, block: false, cjk: false };
+    for (const line of stripped) {
+      for (const ch of line) {
+        const c = ch.codePointAt(0);
+        if (c >= 0x2500 && c <= 0x257f) present.box = true;
+        else if (c >= 0x2580 && c <= 0x259f) present.block = true;
+        else if (c > 0x2e7f) present.cjk = true;
+      }
+    }
+    const presentMax = Math.max(
+      m0.digit,
+      present.box ? m0.box : 0,
+      present.block ? m0.block : 0,
+      present.cjk ? m0.cjk : 0,
+    );
+    const maxPx = Math.max(...stripped.map((l) => pxWidthOfLine(l, m0)));
+    // 容量按**内容里出现的最宽字符类**算（并留 2 列余量，吸收组件多画 1 列与取整误差）
+    const fitsBase = Math.max(0, Math.floor(contentW / presentMax) - 2);
+    if (maxPx <= contentW) return { longest, fitsBase, shrunkTo: base, overflow: false };
+    // 放不下：按需要的比例缩小字号（0.5px 一档、下限 8px）
     let size = base;
-    while (size > 8 && longest * charWidthAt(size) > contentW) size -= 0.5;
+    while (size > 8) {
+      const need = (size * contentW) / maxPx; // 线性缩放：字号乘该比例即可放下
+      if (need >= size - 0.25 || size - 0.5 < 8) break;
+      size = Math.max(8, Math.floor(need * 2) / 2);
+    }
+    const m1 = widthOf(size);
+    const maxPx1 = Math.max(...stripped.map((l) => pxWidthOfLine(l, m1)));
     pre.style.fontSize = `${size}px`;
-    // 缩到下限仍放不下 → 交给调用方退横向滚动（保住框图完整，不折行）
-    return { longest, fitsBase, shrunkTo: size, overflow: longest * charWidthAt(size) > contentW };
+    return { longest, fitsBase, shrunkTo: size, overflow: maxPx1 > contentW + 0.5 };
   }
 
   /** custom() 面板（桥接扩展经 method:'panel' 送来）：只读展示扩展组件渲染出的文本行。
@@ -2389,15 +2457,17 @@ class PiWebClient {
     // 并把"基准字号下真实能容纳多少列"回报给服务端，让下次渲染直接合适。
     const pre = this.modalList.querySelector('.modal-panel-body');
     const fit = this.fitPanelToWidth(pre, lines);
-    if (fit && fit.longest > fit.fitsBase) {
-      // 回报"基准字号下真实容量"，让服务端下次直接按它渲染（这才是根治）
+    if (fit) {
+      // 用**真实面板**回测的容量回报（比开工前用探针估的更准），服务端下次即按它渲染
       this.send({
         type: 'panel_geometry',
-        cols: Math.max(20, fit.fitsBase),
+        cols: Math.max(20, fit.fitsBase - 2), // 同样留 2 列余量（组件可能多画 1 列）
         rows: this.panelRows || 22,
         longest: fit.longest,
+        fits: fit.fitsBase,
         shrunkTo: fit.shrunkTo,
         overflow: fit.overflow,
+        contentW: Math.round(this.modalList.querySelector('.modal-panel-body')?.clientWidth || 0),
       });
       // 连缩字号都放不下：该面板退横向滚动，绝不让框图被折成几段
       if (fit.overflow) pre?.classList.add('modal-panel-scrollx');

@@ -1,4 +1,8 @@
 :root {
+  /* 统一等宽字体栈：优先选**含制表符/框图字符**（U+2500 起）的等宽字体，避免浏览器
+     因缺字回退到全角字体 —— 那会让 ─ 的宽度变成数字的两倍，横框被折行（2026-10-14 实测）。 */
+  --font-mono: "DejaVu Sans Mono", "Liberation Mono", "Noto Sans Mono", "Cascadia Mono",
+    Consolas, Menlo, "Courier New", "Sarasa Mono SC", monospace;
   --bg: #18181e;
   --text: #d4d4d4;
   --dim: #666666;
@@ -347,7 +351,7 @@ body {
   color: var(--muted);
   margin-top: 4px;
   white-space: pre-wrap;
-  font-family: monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
 }
 
@@ -364,7 +368,7 @@ body {
   color: var(--text);
   margin-top: 4px;
   white-space: pre-wrap;
-  font-family: monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
 }
 
@@ -507,7 +511,7 @@ body {
   color: var(--accent);
   padding: 0.1em 0.35em;
   border-radius: 3px;
-  font-family: monospace;
+  font-family: var(--font-mono);
   font-size: 0.9em;
 }
 
@@ -693,7 +697,7 @@ body {
 .widget-body {
   color: var(--muted);
   white-space: pre-wrap;
-  font-family: monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
   line-height: 1.4;
 }
@@ -978,7 +982,7 @@ body {
   padding: 8px 10px;
   background: var(--panel, rgba(0, 0, 0, 0.25));
   border-radius: 4px;
-  font-family: monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
   line-height: 1.35;
   white-space: pre-wrap;
@@ -1012,7 +1016,7 @@ body {
   color: var(--accent);
   padding: 0.1em 0.35em;
   border-radius: 3px;
-  font-family: monospace;
+  font-family: var(--font-mono);
   font-size: 0.9em;
 }
 
@@ -1091,7 +1095,7 @@ body {
   border-radius: 6px;
   padding: 8px 10px;
   font-size: 13px;
-  font-family: monospace;
+  font-family: var(--font-mono);
   outline: none;
   resize: vertical;
 }
@@ -1313,7 +1317,7 @@ body {
 
 .usage-num {
   text-align: right;
-  font-family: monospace;
+  font-family: var(--font-mono);
 }
 
 .usage-provider-row {
@@ -1359,7 +1363,7 @@ body {
 .usage-insight-stat {
   font-weight: 700;
   color: var(--accent);
-  font-family: monospace;
+  font-family: var(--font-mono);
   white-space: nowrap;
 }
 
@@ -1414,7 +1418,7 @@ body {
 .usage-bar-val {
   width: 70px;
   text-align: right;
-  font-family: monospace;
+  font-family: var(--font-mono);
   color: var(--muted);
 }
 

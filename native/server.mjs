@@ -727,16 +727,30 @@ async function handleClientMessage(ws, msg) {
         const rows = Number(msg.rows);
         if (Number.isFinite(cols) && Number.isFinite(rows) && cols >= 20 && rows >= 5) {
           panelGeometry = { cols: Math.floor(cols), rows: Math.floor(rows) };
-          const extra =
-            Number.isFinite(Number(msg.charW)) && Number.isFinite(Number(msg.contentW))
-              ? `（= 内容区 ${msg.contentW}px ÷ 单字符 ${msg.charW}px）`
+          const charW = Number(msg.charW);
+          const boxW = Number(msg.boxW);
+          let extra =
+            Number.isFinite(charW) && Number.isFinite(Number(msg.contentW))
+              ? `（= 内容区 ${msg.contentW}px ÷ 单字符 ${charW}px）`
               : "";
+          // 框图字符明显更宽 = 字体缺制表符、回退到全角字体 —— 这会直接导致横框折行，必须点出来
+          if (Number.isFinite(charW) && Number.isFinite(boxW) && boxW > charW * 1.15) {
+            extra += `；⚠️ 框图字符 ${boxW}px 是数字的 ${(boxW / charW).toFixed(1)} 倍（字体缺制表符 U+2500 → 回退全角），面板已按框图宽度计算容量`;
+          }
           log(`[pi-web] panel geometry ← ${panelGeometry.cols}×${panelGeometry.rows}${extra}`);
-          if (Number(msg.longest) > panelGeometry.cols) {
+          const longest = Number(msg.longest);
+          const fits = Number(msg.fits);
+          if (Number.isFinite(longest) && Number.isFinite(fits) && longest > fits) {
+            // 真实画布也容不下 → 真会折行（正常不应出现；出现即兜底层生效）
             log(
-              `[pi-web] 面板内容过宽：最长行 ${msg.longest} 列 > 容量 ${panelGeometry.cols} 列` +
-                `（已缩至 ${msg.shrunkTo}px${msg.overflow ? "，仍放不下 → 该面板横向滚动" : ""}）` +
-                `；下次将按 ${panelGeometry.cols} 列渲染`,
+              `[pi-web] 面板内容过宽：最长行 ${longest} 列 > 画布 ${fits} 列` +
+                `（已缩至 ${msg.shrunkTo}px${msg.overflow ? "，仍放不下 → 该面板横向滚动" : ""}）`,
+            );
+          } else if (Number.isFinite(longest) && longest > panelGeometry.cols) {
+            // 组件比下发的列数多画了：画布容得下，不会折行，仅记录（便于对照组件行为）
+            log(
+              `[pi-web] 组件实际渲染 ${longest} 列 > 下发 ${panelGeometry.cols} 列` +
+                `（画布可容 ${fits} 列，不折行）；下次按 ${panelGeometry.cols} 列渲染`,
             );
           }
         }
