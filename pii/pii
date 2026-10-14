@@ -48,12 +48,15 @@ def _native_server_cmd(session_id, cwd, port):
     exe = shutil.which("pi-web-native")
     if exe:
         return [exe, session_id, cwd, "--port", str(port)]
-    script = PROJECT_ROOT / "native" / "server.mjs"
-    if script.is_file():
-        return ["node", str(script), session_id, cwd, "--port", str(port)]
+    # 发布布局下包装器把 PI_WEB_DIR 设为 <pkg>/dist/pi-bin（Python 桥所在处），
+    # 而原生引擎在 <pkg>/dist/native/ —— 两个候选都试，避免依赖 PATH 才能找到。
+    for script in (PROJECT_ROOT / "native" / "server.mjs",
+                   PROJECT_ROOT.parent / "native" / "server.mjs"):
+        if script.is_file():
+            return ["node", str(script), session_id, cwd, "--port", str(port)]
     print(
         "Native server not found: expected `pi-web-native` on PATH or "
-        f"{script}",
+        f"{PROJECT_ROOT / 'native' / 'server.mjs'}",
         file=sys.stderr,
     )
     sys.exit(1)

@@ -47,6 +47,15 @@ if (!python) {
 // is dist/ (no server/ there). The bridge lives at dist/pi-bin/server/,
 // so export PI_WEB_DIR pointing at pi-bin so _resolve_project_root() picks
 // the right server/ directory (its env_dir branch).
+// Ctrl+C 会送到整个前台进程组（包装器 + Python 启动器 + 原生服务端 + pi 子进程）。
+// 真正的收尾由 Python 启动器负责：它会**等**原生服务端优雅关停（杀 pi 子进程、关 socket、
+// 打印收尾日志）。若这里放任 Node 默认的 SIGINT 行为立刻杀掉包装器，bash 会在收尾完成前
+// 打印提示符，服务端的收尾日志就落到提示符之后（现象：提示符后又多一行，2026-10-14 逐字节定位）。
+// 因此这里忽略这两个信号，等 spawnSync 自然返回（Python 侧有 5s 上限，不会永久卡住）。
+const ignoreSignal = () => {};
+process.on("SIGINT", ignoreSignal);
+process.on("SIGTERM", ignoreSignal);
+
 const result = spawnSync(
   python,
   [piiScript, ...process.argv.slice(2)],

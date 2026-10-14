@@ -1184,8 +1184,10 @@ pi-web-native <session-id> <cwd> --port <n>          # 对应 server.py <session
 **Ctrl+C 的退出次序（2026-10-14 实测定位并修复）**：Ctrl+C 会把 SIGINT 送给**整个前台进程组**（pii + 服务端 + pi 子进程），服务端因此自行优雅关停（杀 pi 子进程、关 socket、打印收尾日志）。
 若 `pii` 收到 KeyboardInterrupt 就**立刻 `sys.exit`**，则 bash 会先打印提示符，而服务端仍在关停、它的收尾日志会**落到提示符之后**（现象：提示符后多一行/被顶掉，且带不确定性）。修法两条：
 
-- `pii` 的 `--web` 分支改为 `Popen` + `wait()`：首次 Ctrl+C 后**继续等子进程**收尾（上限 5s，超时或再次 Ctrl+C 才 `kill`），**不再自己 `print()` 空行**（服务端输出自带换行）；
-- 实测（pty 逐字节）：修复前 `…关停…\r\n\r\n bash提示符 [pi-web] pi子进程已退出…\r\n \r\n`，修复后连续 3 次均为 `…关停…\r\n[pi-web] pi子进程已退出…\r\n bash提示符`，干净且确定。
+- **第 1 层 · Python 启动器 `pii`**：`--web` 分支改为 `Popen` + `wait()`：首次 Ctrl+C 后**继续等子进程**收尾（上限 5s，超时或再次 Ctrl+C 才 `kill`），**不再自己 `print()` 空行**（服务端输出自带换行）；
+- **第 2 层 · npm bin 包装器 `pii-cli.js`**（Node，`spawnSync` 调 Python 启动器）：必须**忽略 SIGINT/SIGTERM**，否则 Node 默认行为会立刻杀掉包装器——而包装器才是 bash 的直接子进程，bash 照样会先打印提示符、把后续日志挤到提示符之后；
+- 实测（pty 逐字节）：修复前 `…关停…\r\n\r\n bash提示符 [pi-web] pi子进程已退出…\r\n \r\n`；修复后经**真实 `pii` 命令**连测 3 次均为 `…关停…\r\n[pi-web] pi子进程已退出…\r\n bash提示符`，干净且确定。
+- 一般化教训：**前台进程组里每一层都要么自己收尾、要么耐心等下一层**；任何一层抢先退出，shell 的提示符就会插到别人的收尾输出中间。
 
 **会话解析三种入口（语义不可混）**：位置参数 ` <session-id> [cwd]` 按 header `id` 匹配（pii 的调用契约）；`--session <name>` 按**显示名**匹配（含 `"(unnamed)"`）；`--session-file <path>` 直接指定。曾把位置参数与 `--session` 合并且都按 id 匹配 → `--session <name>` 静默失效（2026-10-14 修复）。
 
