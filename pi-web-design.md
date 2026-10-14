@@ -1136,6 +1136,74 @@ TUI（宿主，与 Pi 同进程、同代码库）
 
 **恢复这项工作的入口**（无需重新调研）：A = 上文 3 处改动（`types.ts` 白名单 + `bindCore` 绑定 + context 暴露）；B = 「写 settings → kill → 以同一会话重拉 → 重发 state/history」。
 
+## 17. 落地切换：`pii r <name> --web` 改为原生引擎（2026-10 决定）
+
+### 17.1 决定
+
+| 入口 | 现状 | 切换后 |
+|---|---|---|
+| `pii r <name>` | TUI（exec `pi`） | **不变** |
+| `pii r <name> --web [port]` | 打包的 **Python RPC 服务端**（`server/server.py`，内部 spawn `pi --mode rpc`） | **一步切换**为**独立原生服务端 bin**（RPC + 桥接扩展 + 现有 WS 协议/前端） |
+| `pi-web r <name>` | SDK 宿主 | **保持不动**（过渡期对照与回退；最终去留见 §15.8 阶段 E） |
+
+要点：**不新增用户可见命令/参数**——`--web` 的语义、默认端口 4080、端口越界与占用报错行为全部保持不变，换的只是背后的引擎。
+
+选择理由：① `--web` 本就是「RPC 式 web」的槽位，而桥接是对 RPC UI 通道缺陷的补丁，语义吻合；
+② 去掉版本漂移（驱动已安装的 `pi`，不再内嵌 SDK）；③ SDK 版原样保留，回退只需改 `pii` 一行。
+
+### 17.2 接口契约（与 `pii` / Python 服务端同形）
+
+```bash
+pi-web-native <session-id> <cwd> --port <n>          # 对应 server.py <session_id> <cwd> --port
+```
+
+- `pii`（Python）继续负责：按**会话名**扫描 `~/.pi/agent/sessions/**/*.jsonl`、重名取最近并警告、`chdir(cwd)`
+- 原生服务端新增按 **header `id`** 解析会话（并保留原型已有的 `--session <name>` / `--session-file <path>`）
+- 端口默认 **4080**、越界与非数字报错退出；`cwd` 不存在报错退出（与 Python 版一致，不自动换端口）
+
+### 17.3 代码位置与打包
+
+| 项 | 位置 |
+|---|---|
+| 原生服务端源码 | 仓库根新增 `native/`（与既有 `pii/`、`server/` 同级，保持"非 TS 运行期资产放根目录"的既有约定）：`cli.mjs`（参数解析/会话解析）、`server.mjs`（HTTP+WS+侧信道）、`bridge.mjs`（注入 `pi` 的桥接扩展） |
+| 打包 | `pi-sdk-web/scripts/build-assets.mjs` 增加一步：`native/ → dist/native/`（含执行位）；`package.json` 的 `bin` 增加 `pi-web-native: ./dist/native/cli.mjs` |
+| 前端 | 复用现有 `static/`（`panelGeometry` 能力位已门控，SDK 引擎不受影响） |
+| `pii` 改动 | 仅把 `--web` 分支的 `cmd` 从 `[python, server.py, id, cwd, --port]` 换成 `[pi-web-native, id, cwd, --port]` |
+
+原型（`experiments/rpc-bridge/`）作为验证与回归对照保留，正式代码从它提升而来。
+
+### 17.4 切换前必须补齐（非功能性；只在日常使用中暴露）
+
+| 项 | 要求 |
+|---|---|
+| **pi 子进程生命周期** | 启动失败给出明确报错（不静默）；子进程异常退出时在界面提示；服务端退出（SIGINT/SIGTERM）时清理子进程；不遗留孤儿进程 |
+| **WS 背压** | 客户端落后时跳过流式增量、追上后恢复（对齐 SDK 宿主的做法与日志格式），避免长会话/大输出时内存飙升 |
+| **同会话并发写保护** | 同一 `.jsonl` 已被其它宿主（TUI / 另一个 web 实例）打开时给出提示。检测手段：扫描 `/proc/*/cmdline` 找引用同一 session 文件的其它 `pi` 进程（尽力而为），命中则在界面提示风险 |
+| 端口/cwd 校验 | 与 Python 版一致（见 §17.2） |
+
+### 17.5 切换后仍存在的缺口（明确记录，不视为 bug）
+
+- **scoped models 改动需重启 pi 子进程**（实测 `ctx.reload()` 不重算；§15.11）
+- **`.jsonl` 导出降级**为提示（RPC 仅 `export_html`）
+- **命令产生的历史条目不复刻**（= 与 TUI 一致；SDK 版会多出 `[ctx-status] (click to expand)` 之类记录；§15.11 A3，2026-10 用户拍板）
+
+### 17.6 验证计划
+
+1. 冒烟 42 项全绿（原生实例）
+2. **`pii r <name> --web <port>` 端到端跑通**（真实会话；若该会话同时被 TUI 打开，先确认并发写提示生效）
+3. 与 SDK 版 A/B：三列表（Extensions/Tools/`/` 菜单）、命令输出呈现、对话框语义（timeout/无限等待/倒计时/中止）
+4. 宿主契约核对器全绿（Pi 1.2.0 基线，§16）
+5. **回退演练**：`pi-web r <name>` 仍可用，改回 `pii` 一行即可复原
+
+### 17.7 风险
+
+| 风险 | 缓解 |
+|---|---|
+| 一步切换 ⇒ 缺口立刻暴露在日常使用中 | SDK 版原样保留；回退只需改 `pii` 一行；缺口清单见 §17.5 |
+| 进程模型变复杂（服务端 + pi 子进程，SDK 版是单进程） | §17.4 的生命周期/背压/并发保护作为切换前置条件 |
+| Pi 升级后宿主契约可能变 | 升级后跑 §16 核对器（已有基线与 14 项关键判定） |
+| 打包路径/执行位问题 | 沿用 `build-assets.mjs` 既有做法，并加自检（文件存在 + 执行位） |
+
 ## 16. 宿主（Pi）依赖与兼容性核对清单
 
 > 本节是 §15 方案的**配套维护契约**。RPC + 注入扩展的做法**替换/改写了宿主 pi 的对象**，并直接依赖若干
