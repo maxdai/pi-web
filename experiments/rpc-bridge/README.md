@@ -133,7 +133,9 @@ node experiments/rpc-bridge/check-host-contract.mjs --json     # 只看当前快
 - **命令面完全一致**（31 个客户端命令逐一 diff）。
 - 本轮补齐：`/session` 只读模态、`get_scoped_models` 的 `scoped` 字段、`dialog_dismissed`（timeout /
   aborted / session-switch 三条路径，实测通过）、`get_stats`。
-- **仍存差异**：① scoped models 改动需**重启 pi 子进程**（实测 `ctx.reload()` 不会重算）；
+- **冻结决定（2026-10）**：不做「保存后自动重启子进程」（重启会打断正在运行的会话）。
+  当前语义：勾选不生效也不落盘（仅提示）／保存写 `settings.json`（**会改真实配置**）、下次启动生效。
+- **仍存差异**：① scoped models 改动需**重启 pi 子进程**（实测 `ctx.reload()` 不会重算；扩展拿不到 session 对象，原因与证据见设计文档 §15.11）；
   ② `.jsonl` 导出降级（RPC 仅 `export_html`）；③ 非功能性（SDK 宿主的 WS 背压/堆水位保护、
   自定义 session 目录解析）。
 
