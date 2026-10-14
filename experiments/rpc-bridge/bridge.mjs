@@ -11,6 +11,7 @@
  * 设计依据见 pi-web-design.md §15。原理：`ctx.ui` 是 runner 的**单一共享可变对象**
  * （runner.ts `get ui() { return runner.uiContext }`），改写它的成员会影响所有扩展。
  */
+import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -365,16 +366,34 @@ export default function (pi) {
 
     // 3) 对话框：必须由我们接管——RPC 的 stdin 在 session_start 期间未挂载，原生
     //    转发在此阶段必然死锁（已实测）。侧信道从第一个字节起就可用。
-    const ask = async (method, payload, fallback) => {
-      const answer = await post("/side/dialog", { method, ...payload });
-      if (!answer || answer.cancelled) return fallback;
+    /**
+     * 打开一个网页对话框。`opts` 语义与 SDK 宿主（ui-context.ts）一致：
+     *  · `opts.timeout`      → 原样作为计时器交给服务端，并下发 deadline 供前端显示倒计时
+     *  · `opts.defaultValue` → 超时/中止（cancelled）时用它结算
+     *  · `opts.signal`       → 中止时认领同一对话框（带 token），让服务端按默认值结算并关掉模态
+     * 早先这里把 `opts` 整个丢掉了：扩展设了 timeout 也不生效、中止也不感知。
+     */
+    const ask = async (method, payload, fallback, opts) => {
+      const token = `bridge-${randomUUID()}`;
+      const timeout = typeof opts?.timeout === "number" && opts.timeout > 0 ? opts.timeout : undefined;
+      const useDefault = () => (opts && "defaultValue" in opts ? opts.defaultValue : fallback);
+      if (opts?.signal?.aborted) return useDefault();
+      const onAbort = () => void post("/side/cancel-dialog", { token });
+      if (opts?.signal?.addEventListener) opts.signal.addEventListener("abort", onAbort, { once: true });
+      let answer;
+      try {
+        answer = await post("/side/dialog", { method, token, timeout, ...payload });
+      } finally {
+        if (opts?.signal?.removeEventListener) opts.signal.removeEventListener("abort", onAbort);
+      }
+      if (!answer || answer.cancelled) return useDefault();
       if (method === "confirm") return Boolean(answer.confirmed ?? answer.value);
-      return answer.value ?? fallback;
+      return answer.value ?? useDefault();
     };
-    ui.select = (title, options) => ask("select", { title, options }, undefined);
-    ui.confirm = (title, message) => ask("confirm", { title, message }, false);
-    ui.input = (title, placeholder) => ask("input", { title, placeholder }, undefined);
-    ui.editor = (title, prefill) => ask("editor", { title, prefill }, undefined);
+    ui.select = (title, options, opts) => ask("select", { title, options }, undefined, opts);
+    ui.confirm = (title, message, opts) => ask("confirm", { title, message }, false, opts);
+    ui.input = (title, placeholder, opts) => ask("input", { title, placeholder }, undefined, opts);
+    ui.editor = (title, prefill, opts) => ask("editor", { title, prefill }, undefined, opts);
 
     // 4) setTheme：RPC 原生返回 {success:false}；记录并接受（真正的换肤见上面）
     ui.setTheme = (name) => {
@@ -480,6 +499,18 @@ export default function (pi) {
     handler: async (_args, ctx) => {
       const ok = await ctx.ui.confirm("pi-web demo", "Did this dialog reach the browser?");
       await post("/side/event", { type: "demo-dialog", answer: ok });
+    },
+  });
+
+  pi.registerCommand("pi-web:demo-dialog-timeout", {
+    description: "Ask a confirm dialog with the extension's own 2s timeout",
+    handler: async (_args, ctx) => {
+      // opts.timeout 必须被遵守（倒计时 + 自动按 defaultValue 结算）
+      const ok = await ctx.ui.confirm("pi-web demo (timeout)", "This dialog auto-cancels in 2s", {
+        timeout: 2000,
+        defaultValue: false,
+      });
+      await post("/side/event", { type: "demo-dialog-timeout", answer: ok });
     },
   });
 

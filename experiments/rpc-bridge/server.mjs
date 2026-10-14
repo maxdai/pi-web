@@ -164,13 +164,17 @@ async function rpcData(type, extra) {
 
 // ------------------------------------------------------------------ WS 广播
 const clients = new Set();
-const bridgeDialogs = new Map(); // id -> resolve（桥接发起的对话框）
 let lastScopedNoticeAt = 0; // scoped-models 提示去抖（避免每次勾选都刷一行）
 /** 面板可用列/行数，由前端按实际版面量出后上报；桥接据此决定组件渲染宽度。
  *  默认值只在浏览器还没上报时兜底（例如扩展在页面连上之前就弹面板）。 */
 let panelGeometry = { cols: 100, rows: 40 };
-/** 对话框/面板超时。可用环境变量缩短，便于自动化测试（默认 10 分钟）。 */
-const DIALOG_TIMEOUT_MS = Number(process.env.PI_WEB_BRIDGE_DIALOG_TIMEOUT_MS ?? 10 * 60 * 1000);
+/** **无浏览器时**的对话框兜底超时（pi-web 自己的保护，不是扩展的 timeout）：
+ *  有浏览器连接时对话框**无限等待**（与 TUI/SDK 宿主一致，绝不抢走用户的作答权）；
+ *  只有浏览器不在（标签页关了）才用这个兜底，避免扩展永远挂住 agent 循环；重连即撤销。 */
+const DIALOG_FALLBACK_TIMEOUT_MS = Number(process.env.PI_WEB_BRIDGE_DIALOG_TIMEOUT_MS ?? 10 * 60 * 1000);
+/** 当前正在执行的扩展命令名（用于把命令期间的 notify 标题改写为 `/<命令名>`，
+ *  与 SDK 宿主的 executeCommand 一致 —— 前端据此把命令输出渲染成模态而非行内状态行）。 */
+let runningCommand = null;
 const widgetSnapshot = new Map(); // key -> {widgetKey, widgetLines, widgetPlacement}
 let extStatusSnapshot = {};
 let themeName = "dark"; // 浏览器主题：桥接经 GET /side/theme 取用（扩展 ANSI 换肤）
@@ -418,6 +422,12 @@ child.stdout.on("data", (chunk) => {
         if (ev.statusText === undefined || ev.statusText === null) delete extStatusSnapshot[ev.statusKey];
         else extStatusSnapshot[ev.statusKey] = ev.statusText;
       }
+      // 命令运行期间的 notify：标题改写为 `/<命令名>`（与 SDK 宿主 executeCommand 一致），
+      // 前端据此把命令输出渲染成**模态**而不是行内状态行。
+      if (method === "notify" && runningCommand) {
+        broadcast({ ...ev, title: `/${runningCommand}` });
+        continue;
+      }
       // 形状与前端期望一致（我们的 UI context 当年就是照它建模的）：原样转发
       broadcast(ev);
       continue;
@@ -560,20 +570,29 @@ async function handleClientMessage(ws, msg) {
           await sendUsage(msg.scope === "all" ? "all" : "session", ws);
           break;
         }
-        // 其余扩展命令经 prompt 触发（session.prompt 会先尝试扩展命令）
-        await rpc("prompt", { message: `/${msg.name}${msg.args ? " " + msg.args : ""}` });
+        // 其余扩展命令经 prompt 触发（session.prompt 会先尝试扩展命令）。
+        // 命令执行期间置 runningCommand：期间产生的 notify 会被改写成 `/<命令名>` 标题，
+        // 前端就按「/ 开头」把它渲染成模态（与 SDK 宿主的行为一致）。
+        runningCommand = msg.name;
+        try {
+          await rpc("prompt", { message: `/${msg.name}${msg.args ? " " + msg.args : ""}` });
+        } finally {
+          runningCommand = null;
+        }
         break;
       case "reload":
         // RPC 没有 reload 命令：走桥接扩展注册的命令（ExtensionCommandContext.reload）
-        await rpc("prompt", { message: "/pi-web:reload" });
+        runningCommand = "pi-web:reload";
+        try {
+          await rpc("prompt", { message: "/pi-web:reload" });
+        } finally {
+          runningCommand = null;
+        }
         break;
       case "extension_ui_response": {
-        const waiter = bridgeDialogs.get(msg.id);
-        if (waiter) {
-          bridgeDialogs.delete(msg.id);
-          waiter(msg);
-        } else {
-          child.stdin.write(JSON.stringify(msg) + "\n"); // RPC 原生对话框
+        // 命中桥接自建的对话框（用户作答，无需再通知前端关模态）；否则转发给 RPC 原生对话框
+        if (!settleDialog(msg.id, msg, null)) {
+          child.stdin.write(JSON.stringify(msg) + "\n");
         }
         break;
       }
@@ -684,15 +703,78 @@ async function handleClientMessage(ws, msg) {
 
 /** 会话切换/中止时撤销挂起的对话框：resolve 为 cancelled 并让浏览器关掉模态。
  *  与 SDK 宿主的 dismissDialog(id, "session-switch" | "aborted") 对齐。 */
-function dismissDialogs(reason) {
-  for (const [id, resolveAnswer] of bridgeDialogs) {
-    bridgeDialogs.delete(id);
-    try {
-      resolveAnswer({ cancelled: true });
-    } catch {
-      /* ignore */
+/** 挂起中的对话框/面板：id -> {resolve, extensionTimeout, timer, fallback} */
+const pendingDialogs = new Map();
+
+function clearDialogTimer(entry) {
+  if (entry.timer) {
+    clearTimeout(entry.timer);
+    entry.timer = undefined;
+  }
+}
+
+/** 无浏览器连接时的兜底计时器（有浏览器时不应该存在这个计时器）。 */
+function armDialogFallback(id, entry) {
+  entry.fallback = true;
+  entry.timer = setTimeout(() => {
+    console.log(`[proto] dialog ${id}: 无浏览器应答，${DIALOG_FALLBACK_TIMEOUT_MS}ms 后按默认值结算`);
+    settleDialog(id, { cancelled: true }, "timeout");
+  }, DIALOG_FALLBACK_TIMEOUT_MS);
+}
+
+/** 浏览器上下线：按 SDK 宿主语义调整所有挂起对话框的计时器。
+ *  有浏览器 → 无限等待（撤销兜底）；无浏览器 → 给未自带 timeout 的对话框启兜底。 */
+function onBrowserPresenceChanged() {
+  const attached = clients.size > 0;
+  for (const [id, entry] of pendingDialogs) {
+    if (entry.extensionTimeout !== undefined) continue; // 扩展自己的 timeout，永远不动
+    if (attached) {
+      if (entry.fallback) {
+        clearDialogTimer(entry);
+        entry.fallback = false;
+      }
+    } else if (!entry.timer) {
+      armDialogFallback(id, entry);
     }
-    broadcast({ type: "dialog_dismissed", id, reason });
+  }
+}
+
+/** 打开一个对话框/面板：注册等待者、按 SDK 语义设置计时器、把请求帧发给浏览器。
+ *  语义（对齐 SDK 宿主 ui-context.ts）：① 扩展给了 timeout 就原样遵守，并下发 deadline
+ *  供前端显示倒计时；② 否则**有浏览器连接时无限等待**（绝不抢走用户的作答权）；
+ *  ③ 只有没有浏览器（标签页关了）才启兜底超时；④ 重连即撤销兜底。 */
+function openDialog(id, frame, extensionTimeout) {
+  return new Promise((resolve) => {
+    const entry = { resolve, extensionTimeout, timer: undefined, fallback: false };
+    pendingDialogs.set(id, entry);
+    if (extensionTimeout !== undefined) {
+      entry.timer = setTimeout(() => settleDialog(id, { cancelled: true }, "timeout"), extensionTimeout);
+    } else if (clients.size === 0) {
+      armDialogFallback(id, entry);
+    }
+    broadcast(frame);
+  });
+}
+
+/** 结算并清理一个对话框；reason 非空时通知前端关闭模态。返回是否命中。 */
+function settleDialog(id, response, reason) {
+  const entry = pendingDialogs.get(id);
+  if (!entry) return false;
+  pendingDialogs.delete(id);
+  clearDialogTimer(entry);
+  try {
+    entry.resolve(response);
+  } catch {
+    /* ignore */
+  }
+  if (reason) broadcast({ type: "dialog_dismissed", id, reason });
+  return true;
+}
+
+/** 会话切换/中止时撤销所有挂起的对话框（与 SDK 宿主的 dismissDialog 对齐）。 */
+function dismissDialogs(reason) {
+  for (const id of [...pendingDialogs.keys()]) {
+    settleDialog(id, { cancelled: true }, reason);
   }
 }
 
@@ -774,45 +856,41 @@ const server = createServer(async (req, res) => {
         // custom()：桥接把扩展 TUI 组件渲染出的文本行送来，浏览器以**只读**模态呈现；
         // 用户关闭后回传结论（组件自己 done(value) 过则采用该值）。
         const id = `panel-${randomUUID()}`;
-        const answer = await new Promise((resolveAnswer) => {
-          const timer = setTimeout(() => {
-            bridgeDialogs.delete(id);
-            resolveAnswer({ cancelled: true });
-            // 服务端已放手：必须告诉浏览器关掉模态，否则它会一直留在屏幕上
-            broadcast({ type: "dialog_dismissed", id, reason: "timeout" });
-          }, DIALOG_TIMEOUT_MS);
-          bridgeDialogs.set(id, (response) => {
-            clearTimeout(timer);
-            resolveAnswer(response);
-          });
-          broadcast({
-            type: "extension_ui_request",
-            id,
-            method: "panel",
-            title: data.title,
-            lines: data.lines ?? [],
-            value: data.value,
-            deadline: Date.now() + DIALOG_TIMEOUT_MS,
-          });
+        // 面板没有「扩展 timeout」概念 → 有浏览器就无限等待，无浏览器才兜底
+        const answer = await openDialog(id, {
+          type: "extension_ui_request",
+          id,
+          method: "panel",
+          title: data.title,
+          lines: data.lines ?? [],
+          value: data.value,
         });
         const value = answer && "value" in answer && answer.value !== undefined ? answer.value : data.value;
         return reply(value === undefined ? {} : { value });
       }
       if (route === "dialog") {
-        const id = `bridge-${randomUUID()}`;
-        const answer = await new Promise((resolveAnswer) => {
-          const timer = setTimeout(() => {
-            bridgeDialogs.delete(id);
-            resolveAnswer({ cancelled: true });
-            broadcast({ type: "dialog_dismissed", id, reason: "timeout" });
-          }, DIALOG_TIMEOUT_MS);
-          bridgeDialogs.set(id, (response) => {
-            clearTimeout(timer);
-            resolveAnswer(response);
-          });
-          broadcast({ type: "extension_ui_request", id, ...data });
-        });
+        // 桥接可带 token（用于 opts.signal 中止时认领同一个对话框）
+        const id = typeof data.token === "string" && data.token ? data.token : `bridge-${randomUUID()}`;
+        const extensionTimeout =
+          typeof data.timeout === "number" && data.timeout > 0 ? data.timeout : undefined;
+        const { token: _token, timeout: _timeout, ...frame } = data;
+        const answer = await openDialog(
+          id,
+          {
+            type: "extension_ui_request",
+            id,
+            ...frame,
+            // 只有扩展自己给了 timeout 才下发 deadline（前端据此才显示倒计时）
+            ...(extensionTimeout !== undefined ? { deadline: Date.now() + extensionTimeout } : {}),
+          },
+          extensionTimeout,
+        );
         return reply(answer);
+      }
+      if (route === "cancel-dialog") {
+        // 扩展的 AbortSignal 中止：按默认值结算并让前端关掉模态
+        const ok = settleDialog(String(data.token ?? ""), { cancelled: true }, "aborted");
+        return reply({ ok });
       }
       if (route === "event") {
         console.log(`[proto] bridge event: ${JSON.stringify(data)}`);
@@ -859,7 +937,11 @@ server.on("upgrade", (req, socket, head) => {
 
 wss.on("connection", async (ws) => {
   clients.add(ws);
-  ws.on("close", () => clients.delete(ws));
+  onBrowserPresenceChanged();
+  ws.on("close", () => {
+    clients.delete(ws);
+    onBrowserPresenceChanged();
+  });
   ws.on("message", (raw) => {
     let msg;
     try {

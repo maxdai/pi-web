@@ -1046,7 +1046,7 @@ node deadlock-harness.mjs --bridge             # 桥接接管：resolve = true
 - 渲染是**只读快照**：组件内的按键交互（滚动/翻页）不支持；组件自行 `done(value)` 则采用其结论，否则关闭面板视为取消。关闭**只用模态自带的 `Close (Esc)`**（在模态边框上、常驻可见）——早先额外加过一个面板内按钮，与它重复（两个 Close），且位于滚动区内、内容长时会被滚走。
 - 实测：`/ctx-status` 面板 33 行、含 `⚡ Magic Context Status` 边框内容——与 TUI 看到的对话框同源同内容。
 
-**SDK 宿主对「命令执行 / 对话框」的特化清单（2026-10 审计；除 ctx-status 外的同类改动）**
+**SDK 宿主对「命令执行 / 对话框」的特化清单（2026-10 审计 + 对齐；除 ctx-status 外的同类改动）**
 
 审计方法：扫 `pi-sdk-web/src` 中所有偏离 Pi 原生行为的标记（parity/workaround/Align with TUI…），再逐条在原生引擎实测对照。
 
@@ -1055,7 +1055,7 @@ node deadlock-harness.mjs --bridge             # 桥接接管：resolve = true
 | # | SDK 特化 | 原生现状 | 用户可见 | 可对齐 |
 |---|---|---|---|---|
 | A1 | **按扩展路径白名单强制 `hasUI:false`**：`/pi-magic-context\|magic-context\|aft-pi/` 命中的命令走文本兜底 | Pi 自己执行命令（`prompt`）→ `hasUI=true` → 扩展走 TUI 对话框分支 → 桥接渲染成面板（§15.11 前文） | 呈现不同、信息等价 | ❌ 需 runner 对象；不可 |
-| A2 | **命令期间把 notify 的标题改写为 `/<命令名>`** → 前端按「`/` 开头」弹**模态** | 用扩展自己的标题（通常没有）→ 前端渲染成**行内状态行** | ✅ **实测差异**：`/refresh-deepinfra`、`/mcp` 在 SDK 版是模态，原生版是行内行 | ✅ 可（桥接接管 notify + 服务端标注当前命令） |
+| A2 | **命令期间把 notify 的标题改写为 `/<命令名>`** → 前端按「`/` 开头」弹**模态** | ✅ **已对齐**：服务端在命令执行期间置 `runningCommand`，命令期间的 notify 帧标题改写为 `/<命令名>` | 已消除 | ✅ 已实施（实测 `/refresh-deepinfra`、`/mcp` 现在都弹模态、标题逐字一致） |
 | A3 | 命令产生的、带 `text` 的 custom entry 额外弹模态（无 text 的状态轨迹不弹） | 原生这些命令走对话框分支、不产生 custom entry；若产生则按普通聊天流渲染 | 目前不可见 | moot（A1 若可对齐才需要） |
 | A4 | `/usage` 原生拦截（不再依赖 pi-usage-extension） | ✅ 已实现 | — | — |
 
@@ -1063,10 +1063,10 @@ node deadlock-harness.mjs --bridge             # 桥接接管：resolve = true
 
 | # | SDK 特化 | 原生现状（`bridge.mjs` 的 `ask()`） | 用户可见 | 可对齐 |
 |---|---|---|---|---|
-| B1 | **扩展自己的 `opts.timeout` 原样遵守**，并据此下发 `deadline` 倒计时 | `ui.select/confirm/input/editor` 的第三个参数 `opts` **被整体忽略**（含 `timeout`/`defaultValue`/`signal`）；固定 10 分钟 | ✅ 设了 timeout 的扩展行为不同 | ✅ 可 |
-| B2 | **有浏览器连接 → 无限等待**（TUI parity，绝不抢走用户的作答权）；**只有**无浏览器时才启 10 分钟兜底，重连即撤销 | 不管有没有浏览器，一律 10 分钟后 `cancelled` | ✅ 挂 10 分钟会被自动取消 | ✅ 可（需跟踪浏览器在线状态） |
-| B3 | **只有扩展给了 timeout 才显示倒计时** | 所有对话框都显示倒计时（实测标题 `Extension panel (596s)`） | ✅ | ✅ 可 |
-| B4 | `opts.signal` 中止 → 用默认值结算 + `dialog_dismissed(aborted)` | 仅在服务端收到 `abort` 命令时撤销；扩展内部 abort 不感知 | 轻微 | ✅ 可 |
+| B1 | **扩展自己的 `opts.timeout` 原样遵守**，并据此下发 `deadline` 倒计时 | ✅ **已对齐**：`opts.timeout` 作为服务端计时器、`opts.defaultValue` 作为超时/中止的结算值 | 已消除 | ✅ 已实施（实测 `timeout:2000` + `defaultValue:false`：倒计时显示、2s 自动关闭、扩展收到 `false`） |
+| B2 | **有浏览器连接 → 无限等待**（TUI parity，绝不抢走用户的作答权）；**只有**无浏览器时才启兜底，重连即撤销 | ✅ **已对齐**：`clients.size` 作为在线判据；上线撤销兜底、下线启用兜底 | 已消除 | ✅ 已实施（兜底缩到 3s 实测：有浏览器时 4.5s 后仍开；关掉浏览器后才结算为 `false`） |
+| B3 | **只有扩展给了 timeout 才显示倒计时** | ✅ **已对齐**：只在扩展给了 timeout 时才下发 `deadline`（前端 `startDialogCountdown` 本就对无 `deadline` 直接返回） | 已消除 | ✅ 已实施（实测面板标题为 `pi-web demo panel`，无倒计时） |
+| B4 | `opts.signal` 中止 → 用默认值结算 + `dialog_dismissed(aborted)` | ✅ **已对齐**：桥接带 `token` 开对话框，signal 中止时 POST `/side/cancel-dialog`，服务端按默认值结算并广播 `dialog_dismissed(aborted)` | 已消除 | ✅ 已实施（代码路径；未单独造中止场景实测） |
 
 **C. 复核结论（此前已对齐全绿）**：`/session` 模态、`dialog_dismissed`、reload 忙时防护、tools/extensions 名单、`get_scoped_models`、`get_stats`、state 字段面。
 **D. 已知缺口（另有记录）**：`.jsonl` 导出降级、scoped models 需重启、WS 背压/堆水位、自定义 session 目录。

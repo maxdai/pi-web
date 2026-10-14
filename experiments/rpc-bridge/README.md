@@ -133,6 +133,10 @@ node experiments/rpc-bridge/check-host-contract.mjs --json     # 只看当前快
 - **命令面完全一致**（31 个客户端命令逐一 diff）。
 - 本轮补齐：`/session` 只读模态、`get_scoped_models` 的 `scoped` 字段、`dialog_dismissed`（timeout /
   aborted / session-switch 三条路径，实测通过）、`get_stats`。
+- **命令/对话框层已按 SDK 宿主对齐（2026-10）**：① 命令运行期间的 notify 标题改写为 `/<命令名>`
+  → 命令输出弹模态（不再是行内状态行）；② 扩展的 `opts.timeout` 原样遵守并显示倒计时；
+  ③ 有浏览器连接时对话框**无限等待**（不抢答），仅无浏览器时启兜底、重连即撤销；
+  ④ 只有扩展给了 timeout 才显示倒计时；⑤ `opts.signal` 中止 → 按 `defaultValue` 结算并关模态。
 - **冻结决定（2026-10）**：不做「保存后自动重启子进程」（重启会打断正在运行的会话）。
   当前语义：勾选不生效也不落盘（仅提示）／保存写 `settings.json`（**会改真实配置**）、下次启动生效。
 - **仍存差异**：① scoped models 改动需**重启 pi 子进程**（实测 `ctx.reload()` 不会重算；扩展拿不到 session 对象，原因与证据见设计文档 §15.11）；
