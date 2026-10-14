@@ -166,6 +166,8 @@ pi --session <id> --mode rpc
 - 可选：模型、thinking、abort 等
 
 ## 6. Web 服务（Python）
+> **状态（2026-10-14，阶段 E 已完成）**：本节描述的实现在阶段 E 已被**移除**（Python RPC 服务 `server/` 被删除；SDK 宿主 `src/` 与 `pi-agent-core`/`pi-coding-agent` 依赖被删除），当前唯一引擎为「RPC + 注入桥接扩展」（§15 / §15.13 / §17）。本节保留为历史设计与对照。
+
 
 ### 6.1 实现语言
 
@@ -519,6 +521,9 @@ pii r <name> --web [port]
 4. 验证效果后，再在不影响原有 TUI 功能基础上改造 `pii` 接入 Web 模式。
 
 ## 14. 备选方案：独立 pi-web 模块（SDK 客户端，主推）
+> **状态（2026-10-14，阶段 E 已完成）**：本节描述的实现在阶段 E 已被**移除**（Python RPC 服务 `server/` 被删除；SDK 宿主 `src/` 与 `pi-agent-core`/`pi-coding-agent` 依赖被删除），当前唯一引擎为「RPC + 注入桥接扩展」（§15 / §15.13 / §17）。本节保留为历史设计与对照。
+
+
 
 > 本节是 2025-08 的讨论结论，记录为**备选方案**，尚未决定实施。当前已实现并运行的仍是 RPC 桥接方案（§6）。
 >
@@ -900,7 +905,7 @@ pi-sdk-web 已实现并通过浏览器验收（本地提交，随本设计一起
 | B | 实现 RPC 客户端（TS）+ 桥接扩展（把 `ui-context.ts` 语义搬入）+ 侧信道 server（复用现有 WS 协议） | §15.2 的 9 项在真实架构内复现 | **已完成**（`native/`，原型位于 `experiments/rpc-bridge/` 时完成） |
 | C | 逐项对齐：history 走 `get_entries`；会话列表/删除沿用文件操作；scoped models 走 settings+重启；theme / panels / usage / export 对齐 | 与现状功能清单逐条对齐 | **大部分完成**（§15.2 缺口补齐表；余 `.jsonl` 导出、面板按键交互、scoped models 重启、自定义 session 目录） |
 | D | 端到端冒烟：现有 42 项扩展为覆盖两种引擎，真实会话跑通 | 全绿后把 `native` 设为默认 | 部分：冒烟 **42/42 已在 native 上通过**，尚未扩为覆盖两引擎 |
-| E | **移除 SDK 引擎**：删除 `pi-coding-agent`/`pi-agent-core` 依赖与 SDK 宿主实现（含 `ui-context.ts`，语义已在阶段 B 移植进桥接扩展）；并按 §15.13 决策一并去掉整个 TypeScript 构建链、包改为 `@maxdai/pi-web@1.0.0` | 依赖树中不再有 pi-coding-agent；`native` 为唯一引擎；包内无 TS 产物 | **方案已定稿（§15.13），未实施** |
+| E | **移除 SDK 引擎**：删除 `pi-coding-agent`/`pi-agent-core` 依赖与 SDK 宿主实现（含 `ui-context.ts`，语义已在阶段 B 移植进桥接扩展）；并按 §15.13 决策一并去掉整个 TypeScript 构建链、包改为 `@maxdai/pi-web@1.0.0` | 依赖树中不再有 pi-coding-agent；`native` 为唯一引擎；包内无 TS 产物 | ✅ **已完成**（2026-10-14，实施记录见 §15.13.6） |
 
 ### 15.9 与 §14 路线的关系（终态：替换，而非并存）
 
@@ -1306,6 +1311,28 @@ pi-web-native <session-id> <cwd> --port <n>          # 对应 server.py <session
 |---|---|---|
 | `pi-web:reload` 是否从 `/` 菜单隐藏 | **暂时保留** | 它是"reload 必须由注入扩展的命令实现（RPC 无 reload 通道）"的必然产物，当前作为**显式功能**留在 `/` 菜单。若日后菜单项造成困扰、或阶段 E 收敛入口时再评估隐藏方式 |
 | 原生引擎启动后是否自动 reload 一次（对齐 SDK/TUI 的 21 项工具 loadout，当前启动 20、缺 `codemode`） | **保持现状** | 不引入启动期自动 reload；需要 `codemode` 时手动执行一次 `/pi-web:reload`。该差异根因在 Pi 自身的"启动 loadout vs reload loadout"，非引擎实现差异（§16 第 22 项、`tools/ab-report-2026-10-14.md`） |
+
+#### 15.13.6 实施记录（2026-10-14，阶段 E 已完成）
+
+按 §15.13.3 的步骤执行，全部验证通过：
+
+| 项 | 结果 |
+|---|---|
+| 搬迁 | `usage-render`、`pii-cli` 以既有编译产物为基移植为 `native/*.mjs`（保留原作者注释）；`pi-web` 薄壳新写为 `native/cli.mjs`（`r/list/help` + 堆上限处理 → 转调引擎） |
+| 包改造 | `@maxdai/pi-web@1.0.0`；`dependencies` 只剩 `ws`（devDependency 只剩 `playwright-core`）；`bin` = `dist/native/{cli.mjs,server.mjs,pii-cli.mjs}` |
+| 删除 | `pi-sdk-web/src/`（约 2100 行 SDK 宿主）、`tsconfig.json`、仓库根 `server/`（Python RPC 服务 + `__pycache__`）、TS 相关 devDeps；`build` 改为**纯拷贝**（无 tsc），先清空 `dist/` 再装配 + 缺件自检 |
+| `pii` 改造 | 项目根探测由「`server/` 存在」改为「`native/` 存在」（`server/` 已删）；引擎候选路径新增「与 PI_WEB_DIR 同目录的 `server.mjs`」（发布布局 `dist/native`） |
+| 迁移引入的自身 bug（已修） | ① `build-assets` 的路径基准写错（`pkg` vs `repo` 混用 → 找不到 `static/`）；② 探针/移植文件里的旧布局注释 |
+| 验证 | 三条入口（`pi-web r`、`pii r --web`、`pi-web-native` 位置参数与 `--session` 名）全部可用；`pi-web help/list` 正常；**冒烟 42/42**（`pi-web r` 与 `pii r --web` 各一次）；header `pi v1.2.0 · pi-web v1.0.0`；`/usage` 在仓库与发布布局均返回 `usage_data`；`/ctx-status` 面板无折行（正常 + 模拟全角回退）；Ctrl+C 字节流干净（经薄壳，2/2）；`npm ls` 无 `pi-coding-agent`/`pi-agent-core`；宿主契约核对器零漂移 |
+| `dist` 结构 | `dist/native/{server,bridge,usage-render,cli,pii-cli}.mjs` + `dist/native/pii`（均可执行）+ `dist/static/*`；无 TS 产物、无 `pi-bin/` |
+
+**踩坑（值得记住）**：迁移后核对器报 `probe.commandCount` 26 → 23，一度疑似宿主契约变化。真实原因是**用户的
+`~/.pi/agent/prompts/` 里有 3 个指向旧全局包 `pi-sdk-web/node_modules/...` 的符号链接**——阶段 E 卸载旧包后
+软链悬空，Pi 于是少注册 3 个 prompt 命令（`implement`/`implement-and-review`/`scout-and-plan`）。已把软链改为
+**实体文件拷贝**（源取 Pi 自身安装目录的示例 prompts），命令数恢复 26、核对器回到零漂移。
+→ **教训与待办**：凡是"包内路径被用户配置引用"（软链/配置项）的地方，移动或重命名包都会静默破坏用户环境；
+发版说明里应提示检查 `~/.pi/agent/prompts/` 一类目录下的悬空软链（步骤 8 的用户侧升级提示已含此意）。
+
 
 ## 16. 宿主（Pi）依赖与兼容性核对清单
 

@@ -480,18 +480,13 @@ async function sendSessionInfo() {
 
 /** `/usage`：复用 pi-web 既有的 usage-render（读 session 文件，不依赖 SDK）。
  *  原型阶段 import pi-sdk-web 的构建产物；正式迁移时该模块并入原生服务端源码。 */
-/** usage-render 模块的位置：仓库内是 <repo>/pi-sdk-web/dist/，发布后是 <pkg>/dist/。
- *  （曾用已不存在的 REPO 常量拼接 → `/usage` 报 "REPO is not defined"，0.7.0~0.7.5 受影响。） */
+/** usage-render 模块路径：阶段 E 起与引擎**同目录**（native/usage-render.mjs）。
+ *  历史教训：曾用已删除的 REPO 常量拼接、又曾跨目录 import SDK 构建产物 →
+ *  `/usage` 报 "REPO is not defined"（0.7.0~0.7.5）。同目录是最终形态。 */
 function usageRenderPath() {
-  const candidates = [
-    join(HERE, "..", "pi-sdk-web", "dist", "usage-render.js"), // 仓库布局：<repo>/native
-    join(HERE, "..", "usage-render.js"), // 发布布局：<pkg>/dist/native → <pkg>/dist
-    join(HERE, "..", "..", "dist", "usage-render.js"), // 兜底
-  ];
-  for (const file of candidates) {
-    if (existsSync(file)) return file;
-  }
-  throw new Error(`usage-render.js not found（试过：${candidates.join(" · ")}）`);
+  const file = join(HERE, "usage-render.mjs");
+  if (existsSync(file)) return file;
+  throw new Error(`usage-render.mjs not found next to the server（${file}）`);
 }
 
 async function sendUsage(scope, target) {

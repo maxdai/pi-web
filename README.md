@@ -2,12 +2,19 @@
 
 给 [Pi](https://github.com/earendil-works/pi)（AI coding agent）提供浏览器 Web 访问方式，解决 SSH + TUI 场景下的终端渲染不稳定问题。
 
-**不改 Pi 本体**。提供两种可选的 Web 接入方案：
+**不改 Pi 本体**。唯一引擎是「原生 pi 的 RPC 模式 + 注入桥接扩展」：
+`pi --mode rpc` 提供命令与全部会话事件，桥接扩展在 pi 进程内接管 RPC 模式丢掉的 UI 方法层
+（`custom()` 面板、工厂 widget、对话框、换肤）。
 
-| 方案 | 入口 | 方式 | 状态 |
-|------|------|------|------|
-| RPC 桥接 | `pii r <name> --web` | Python 服务 + Pi RPC 子进程（JSON line 协议） | 稳定，保留 |
-| SDK 客户端 | `pi-web r <name>` | TypeScript 包（pi-sdk-web），用 Pi 公开 SDK 直连 AgentSession | 推荐，功能更全 |
+| 入口 | 说明 |
+|------|------|
+| `pii r <name> --web [port]` | 启动 Web 服务（默认 4080）；`pii r <name>` 仍是 TUI |
+| `pi-web r <name> [--port <port>]` | 等价入口（薄壳，保留原命令习惯）；另有 `pi-web list` / `pi-web help` |
+| `pi-web-native <session-id> [cwd] --port <n>` | 引擎本体（由上面两个命令调用；也支持 `--session <名字>`） |
+
+> 历史：早期是 Python RPC 服务，其后引入 SDK 宿主（`pi-sdk-web`，直接持有 `AgentSession`），
+> 因 SDK 的**版本漂移**问题，2026-10 按 pi-web-design.md §15/§17 迁移到当前引擎；
+> 阶段 E（§15.13）已移除 SDK 宿主与 Python RPC 服务，依赖只剩 `ws`。
 
 ## 特性
 
@@ -28,49 +35,37 @@
   - 直接执行 bash（`!command`；`!!command` 排除上下文不发给 LLM）
   - 斜杠命令菜单（`/`，支持键盘导航）
   - 扩展命令执行与弹窗（如 `/ctx-status`）
-  - 右侧栏 Tools 框（当前暴露给 LLM 的工具；SDK 方案）
+  - 右侧栏 Tools 框（当前暴露给 LLM 的工具）
   - `/resume` 会话切换
 - 事件驱动刷新，与 TUI 行为一致
 - 扩展输出渲染 ANSI 颜色（状态栏 / widget / 通知 / 工具输出）
 
 ## 架构
 
-### 方案 1：RPC 桥接（pii）
+## 架构
 
 ```text
 浏览器
-  |  HTTP / WebSocket
+  |  HTTP / WebSocket（复用 static/ 前端与既有 WS 协议）
   v
-Python Web 服务（127.0.0.1:<port>）
-  |  JSON line 协议（stdin/stdout）
+pi-web-native（Node，单进程：静态服务 + WS 协议 + RPC 客户端 + 侧信道）
+  |  JSON line 协议（stdin/stdout）+ 本机 HTTP 侧信道
   v
-Pi 后端（pi --session <id> --mode rpc）
-  |  AgentSession / Agent 事件
+pi 子进程（pi --session <id> --mode rpc --extension bridge.mjs）
+  |  AgentSession / Agent 事件 / 桥接扩展接管的 UI 方法
   v
 LLM / Provider
 ```
 
-### 方案 2：SDK 客户端（pi-web / pi-sdk-web，推荐）
-
-```text
-浏览器
-  |  HTTP / WebSocket
-  v
-pi-sdk-web（TypeScript，单进程）
-  |  公开 SDK（@earendil-works/pi-coding-agent）
-  v
-AgentSession（进程内）
-  |  Agent / 工具 / 扩展
-  v
-LLM / Provider
-```
-
-SDK 方案直接持有 AgentSession：无 JSON line 序列化边界、扩展 UI 完整（`/ctx-status` 弹窗、`setWidget` 常驻面板等）、内置命令更全（`/reload` `/scoped-models` `/export`），且 **Pi 本体零修改**（纯依赖公开 npm 包）。
+桥接扩展在 pi 进程内改写 `ctx.ui`（runner 的**共享可变对象**，实测跨扩展可见），
+因此 RPC 模式原本丢掉的 `custom()` 面板、工厂 widget、对话框、`setTheme` 都能在 Web 端呈现；
+RPC 拿不到的会话信息（cwd / scopedModels / commands / tools / extensions）由侧信道上报。
+宿主依赖清单与"Pi 升级后如何自检"见 pi-web-design.md §16 与 `tools/host-contract/`。
 
 ## 前置条件
 
-1. **Node.js ≥ 20 + npm**（SDK 方案及 pii 的 npm 启动器需要）
-2. **Python 3**（RPC 方案需要——pii 的内嵌 Python 桥）
+1. **Node.js ≥ 20 + npm**（引擎与 pii 的 npm 包装器需要）
+2. **Python 3**（`pii` 启动器需要：会话名解析 / TUI 入口）
 3. **Pi 已安装并配置完成**：`~/.pi/agent/` 下需有认证（`auth.json`）、模型库、设置及 session 文件。两个方案都依赖 Pi 的模型/认证/会话配置。
 
 ## 安装
@@ -82,39 +77,29 @@ git clone https://github.com/maxdai/pi-web.git
 cd pi-web
 ```
 
-### 2. 安装 pii（RPC 方案，可选）
+### 安装
 
-`pii` 已随 npm 包分发：安装 `pi-sdk-web` 后 `pii` 命令立即可用（无需单独复制脚本）。
-
-```bash
-npm install -g pi-sdk-web    # 同时提供 pi-web 和 pii 命令
-pii list                     # 验证
-```
-
-> pii 的 Node 启动器会调用本机 `python3` 运行内嵌的 Python 桥（RPC 方案），需要机器装有 Python 3。
-> 从仓库源码运行（开发）：`python3 pii/pii ...`（不依赖 npm 包装器）。
-
-### 3. 安装 pi-web（SDK 方案，推荐）
-
-**已发布到 npm registry**，直接安装（同时提供 `pi-web` 和 `pii` 命令）：
+**已发布到 npm**（作用域包 `@maxdai/pi-web`：`pi-web` 这个名字在 npm 上已被他人占用）：
 
 ```bash
-npm install -g pi-sdk-web    # 全局安装 pi-web / pii 命令
-pi-web list                  # 验证
-pii list                     # 验证（需 Python 3）
+npm install -g @maxdai/pi-web    # 同时提供 pi-web / pii / pi-web-native 命令
+pi-web list                      # 验证
+pii list                         # 验证（需 Python 3）
 ```
 
-升级：`npm update -g pi-sdk-web`。
+升级：`npm update -g @maxdai/pi-web`。
 
-> 从仓库源码安装/开发（在另一台设备同步源码时用）：
+> `pii` 的 Node 包装器会调用本机 `python3` 运行随包分发的 Python 启动器（会话名解析 / TUI 入口），
+> 需要机器装有 Python 3。
+> 从仓库源码安装/开发：
 > ```bash
-> cd pi-sdk-web && npm install && npm run build && npm install -g .
+> cd pi-sdk-web && npm run build && npm install -g .
 > ```
-> 开发期也可以不安装：`cd pi-sdk-web && npx tsx src/cli.ts r <name>`（源码改动即时生效）。
+> 这样全局命令会**软链到仓库**，之后改 `native/`、`static/` 只需 `npm run build` 即生效（无需发版）。
 
 ## 发布新版本（维护者）
 
-pi-sdk-web 已发布到 npm（`pi-sdk-web`，作者 maxdai）。发布新版本流程：
+已发布到 npm（`@maxdai/pi-web`，作者 maxdai）。发布新版本流程：
 
 ```bash
 # 0. 发布前两项检查
@@ -129,8 +114,8 @@ npm version patch                          # 或 minor / major（改 pi-sdk-web/
 
 # 2. 提交 + 打 tag（必须是**附注 tag**，见下方说明）
 git add pi-sdk-web/package.json pi-sdk-web/package-lock.json
-git commit -m "Release pi-sdk-web x.y.z"
-git tag -a vX.Y.Z -m "Release pi-sdk-web x.y.z"
+git commit -m "Release @maxdai/pi-web x.y.z"
+git tag -a vX.Y.Z -m "Release @maxdai/pi-web x.y.z"
 
 # 3. 发布（prepublishOnly 自动构建；自动化 token 无需交互式认证）
 cd pi-sdk-web && npm publish
@@ -138,11 +123,11 @@ cd pi-sdk-web && npm publish
 # 4. 推送 git（含 tag）
 cd .. && git push --follow-tags
 
-# 5. 更新本机全局安装（用户侧升级：npm install -g pi-sdk-web@latest）
-npm install -g pi-sdk-web@x.y.z
+# 5. 更新本机全局安装（用户侧升级：npm update -g @maxdai/pi-web）
+npm install -g @maxdai/pi-web@x.y.z
 ```
 
-> 认证：本机 `~/.npmrc` 配置 npm 的 **Automation/Granular token**（npmjs.org → Access Tokens 创建）后发布零交互；用户升级命令：`npm update -g pi-sdk-web`。
+> 认证：本机 `~/.npmrc` 配置 npm 的 **Automation/Granular token**（npmjs.org → Access Tokens 创建）后发布零交互；用户升级命令：`npm update -g @maxdai/pi-web`。
 
 > **tag 必须用 `-a`（附注 tag）**：`git push --follow-tags` **只推附注 tag**，轻量 tag（`git tag vX.Y.Z`）不会被推送——2026-10 实测发现 `v0.7.0`~`v0.7.5` 六个 tag 因此都没上远端（后已用 `git push origin --tags` 补推）。若还是漏了，用 `git ls-remote --tags origin` 核对。
 
@@ -167,24 +152,22 @@ node tools/smoke.mjs --headed # 需要肉眼观察时
 
 ## 使用
 
-### 方案 1：pii（RPC 桥接）
+### 启动 Web 服务
 
 ```bash
 pii r <name>                # TUI 模式（原有行为，不变）
 pii r <name> --web          # Web 模式，默认端口 4080
 pii r <name> --web 12345    # Web 模式，指定端口
-```
 
-### 方案 2：pi-web（SDK 客户端）
-
-```bash
-pi-web r <name> [--port]    # 启动 Web 服务（默认端口 4080）
+pi-web r <name> [--port]    # 等价入口（薄壳，转调同一个引擎）
 pi-web list                 # 列出所有 session
 ```
 
+> 两个入口完全等价（都启动原生引擎）；`pii` 侧重会话名解析与 TUI 习惯，`pi-web` 保留原有命令形态。
+
 > 从你自己的终端启动（继承 shell 环境变量，如 `DEEPSEEK_API_KEY`，否则对应 provider 的模型不可用）。
 
-**堆内存**：大会话加上进程内扩展（本地 embedding、historian、索引）可能超过 Node 默认的堆上限（本机约 2.2GB），导致 `FATAL ERROR: Reached heap limit` 中途崩溃。`pi-web r` 启动时若发现上限不足，会**自动以更大的 `--max-old-space-size`（默认 4096MB）重启一次**，并在终端打印生效值（`heap limit: 4288MB`）。
+**堆内存**：大会话加上进程内扩展（本地 embedding、historian、索引）可能超过 Node 默认的堆上限（本机约 2.2GB），导致 `FATAL ERROR: Reached heap limit` 中途崩溃。`pi-web r` 启动时若发现上限不足，会**为引擎子进程指定更大的 `--max-old-space-size`（默认 4096MB）**，并打印生效值（`heap: starting native engine with --max-old-space-size=4096 (current limit 2240MB)`）。
 
 - 自定义目标：`PI_WEB_MAX_OLD_SPACE_MB=8192 pi-web r <name>`；
 - 自己指定过 `--max-old-space-size`（argv 或 `NODE_OPTIONS`）时**完全尊重你的设置**，不再自动调整；
@@ -211,7 +194,7 @@ pii delete <name> # 删除 session
 
 ## SSH 隧道远程访问
 
-pi-web / pii 的 Web 服务只监听 **服务端本机的 `127.0.0.1`**（不暴露公网）。在另一台设备（如本地电脑）的浏览器访问时，用 SSH 隧道把服务端口安全转发到本地的 `127.0.0.1`：
+pi-web 的 Web 服务只监听 **服务端本机的 `127.0.0.1`**（不暴露公网）。在另一台设备（如本地电脑）的浏览器访问时，用 SSH 隧道把服务端口安全转发到本地的 `127.0.0.1`：
 
 1. **在 Pi 服务器上启动服务**（保持运行）：
 
@@ -283,37 +266,41 @@ systemctl --user status pi-web-tunnel   # 查看状态/日志
 
 ```text
 pi-web/
-├── AGENTS.md           # AI 代理工作指引
-├── pi-web-design.md    # 设计文档（含 §14 pi-sdk-web 方案）
+├── AGENTS.md            # AI 代理工作指引
+├── pi-web-design.md     # 设计文档（§15 原生引擎 / §15.13 阶段 E / §16 宿主契约 / §17 切换）
 ├── README.md
+├── native/              # 引擎运行时（全部为纯 JS，无 TypeScript 构建）
+│   ├── server.mjs       # bin: pi-web-native —— 静态服务 + WS 协议 + RPC 客户端 + 侧信道
+│   ├── bridge.mjs       # 注入 pi 的桥接扩展（接管 ctx.ui 的 UI 方法层 + 侧信道上报）
+│   ├── usage-render.mjs # /usage 面板数据（读 session 文件，零 SDK 依赖）
+│   ├── cli.mjs          # bin: pi-web —— 薄壳（r/list/help + 堆上限处理 → 转调引擎）
+│   └── pii-cli.mjs      # bin: pii —— Node 包装器（spawn 同目录的 Python 启动器）
 ├── pii/
-│   └── pii             # pii 启动脚本（RPC 方案）
-├── server/             # Python Web 服务（RPC 方案）
-│   ├── server.py       # HTTP + WebSocket 桥接
-│   ├── rpc_client.py   # Pi RPC 客户端
-│   └── websocket.py    # 标准库 WebSocket 实现
-├── pi-sdk-web/         # SDK 客户端模块（npm 包 pi-sdk-web，bin 命令 pi-web 和 pii）
-│   ├── package.json
-│   ├── tsconfig.json
-│   └── src/
-│       ├── cli.ts          # pi-web 命令入口（r/list）
-│       ├── pii-cli.ts      # pii 命令的 Node 启动器（spawn 内嵌 Python 桥）
-│       ├── session.ts      # session 查找 + 内置扩展加载
-│       ├── server.ts       # HTTP + WebSocket 桥接（AgentSession 直连）
-│       ├── ui-context.ts   # WebUIContext（扩展 UI 映射浏览器）
-│       └── verify-sdk.ts   # SDK 链路验证脚本（npm run verify）
-└── static/             # 浏览器前端（两方案共用）
-    ├── index.html
-    ├── style.css
-    ├── app.js
-    └── vendor/         # 本地第三方库（marked）
+│   └── pii              # Python 启动器（会话名解析、TUI 入口、--web 转调引擎）
+├── static/              # 浏览器前端（唯一一份，index/style/app + vendor）
+├── tools/
+│   ├── smoke.mjs        # 只读冒烟（42 项，含部署漂移校验）
+│   ├── ab-compare.mjs   # 两引擎 A/B 对比工具（阶段 E 前的对照证据）
+│   ├── ab-report-*.md   # A/B 记录
+│   └── host-contract/   # 宿主契约核对器 + 进程内探针 + 基线（Pi 升级后 / 发版前必跑）
+└── pi-sdk-web/          # npm 包源码目录（包名 @maxdai/pi-web；运行时资产在仓库根的 native/ 与 static/）
+    ├── package.json
+    ├── scripts/build-assets.mjs   # 装配 dist/：拷 static + native + pii（无 tsc）
+    └── dist/                      # 发布产物（files: ["dist"]）
+        ├── native/{server,bridge,usage-render,cli,pii-cli}.mjs + pii
+        └── static/
 ```
 
-> 打包：`npm run build` 把 pii 启动器 + Python 桥（`pii/pii`、`server/*.py`）复制进 `dist/pi-bin/`，随 npm 包分发（`files: ["dist"]`），安装后 `pii` / `pi-web` 命令均可用。
+> **打包**：`npm run build` 只做拷贝——`static/`、`native/*.mjs`、`pii/pii` → `dist/`（bin 补执行位，最后自检缺件）。
+> 阶段 E 起包内**没有 TypeScript**、`src/` 与 `tsconfig.json` 已删除，依赖只剩 `ws`（devDependency `playwright-core` 供工具链使用）。
+> 目录名 `pi-sdk-web/` 保留了历史名称（避免大面积引用改动），其内容已是"原生引擎包"。
 
 ## 技术说明
 
-- **RPC 方案**：Python 标准库实现 Web 服务（无第三方 Python 依赖），Pi RPC 协议 JSON line over stdin/stdout
-- **SDK 方案**：TypeScript + 公开 SDK（`@earendil-works/pi-coding-agent`），Node 内置 http + `ws` 包，单进程
-- **前端**：vanilla JS + marked（本地 vendor，无 CDN），两方案共用同一份前端
+- **引擎**：Node 单进程（内置 http + `ws`），spawn 已安装的 `pi --mode rpc` 子进程，JSON line over stdin/stdout
+- **扩展 UI**：随 `--extension` 注入 `bridge.mjs`，在 pi 进程内改写 `ctx.ui`（共享可变对象）——`custom()` 面板、工厂 widget、对话框、换肤由此呈现
+- **前端**：vanilla JS + marked（本地 vendor，无 CDN）
+- **Python**：只用于 `pii` 启动器（标准库，零第三方依赖；会话名解析 / TUI 入口 / `--web` 转调引擎）
 - 仅监听 `127.0.0.1`，单用户本机使用，暂不做鉴权
+
+> 旧的两套实现（Python RPC 服务 `server/`、SDK 宿主 `src/`）已在阶段 E 移除，历史设计与证据见 `pi-web-design.md` §11–§15。

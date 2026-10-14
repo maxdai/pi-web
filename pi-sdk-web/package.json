@@ -1,36 +1,28 @@
 {
-  "name": "pi-sdk-web",
-  "version": "0.7.5",
-  "description": "Browser Web access for Pi (AI coding agent) via the Pi SDK - standalone module, zero modification to Pi itself",
+  "name": "@maxdai/pi-web",
+  "version": "1.0.0",
+  "description": "Browser Web access for Pi (AI coding agent) via the native engine (pi --mode rpc + injected bridge extension) - zero modification to Pi itself",
   "type": "module",
   "bin": {
-    "pi-web": "./dist/cli.js",
-    "pii": "./dist/pi-bin/pii-cli.js",
-    "pi-web-native": "./dist/native/server.mjs"
+    "pi-web": "./dist/native/cli.mjs",
+    "pi-web-native": "./dist/native/server.mjs",
+    "pii": "./dist/native/pii-cli.mjs"
   },
   "files": [
     "dist"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json && node scripts/build-assets.mjs",
-    "dev": "tsx src/cli.ts",
-    "verify": "tsx src/verify-sdk.ts",
+    "build": "node scripts/build-assets.mjs",
     "prepublishOnly": "npm run build"
   },
   "engines": {
     "node": ">=20"
   },
   "dependencies": {
-    "@earendil-works/pi-agent-core": "^1.2.0",
-    "@earendil-works/pi-coding-agent": "^1.2.0",
     "ws": "^8.18.0"
   },
   "devDependencies": {
-    "@types/node": "^24.0.0",
-    "@types/ws": "^8.5.12",
-    "playwright-core": "^1.63.0",
-    "tsx": "^4.19.0",
-    "typescript": "^5.6.0"
+    "playwright-core": "^1.63.0"
   },
   "license": "MIT",
   "repository": {

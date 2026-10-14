@@ -6,17 +6,17 @@
 
 pi-web 是给 Pi（一款 AI coding agent 终端工具）提供浏览器 Web 访问方式的项目。核心目标：**不改 Pi 本体代码**，通过 `pii`（Python 启动脚本）编排，让用户在浏览器中访问 Pi，获得与 TUI 接近的使用体验。
 
-### 核心设计
+### 核心设计（2026-10 阶段 E 后的唯一引擎）
 
 ```text
 浏览器
-  |  HTTP / WebSocket / SSE
+  |  HTTP / WebSocket（复用仓库 static/ 前端与既有 WS 协议）
   v
-Python Web 服务（127.0.0.1:<port>）
-  |  JSON line 协议（stdin/stdout）
+pi-web-native（Node 单进程，127.0.0.1:<port>：静态服务 + WS + RPC 客户端 + 侧信道）
+  |  JSON line 协议（stdin/stdout）+ 本机 HTTP 侧信道
   v
-Pi 后端（pi --session <id> --mode rpc）
-  |  AgentSession / Agent 事件
+pi 子进程（pi --session <id> --mode rpc --extension native/bridge.mjs）
+  |  AgentSession / Agent 事件 / 桥接扩展接管的 ctx.ui 方法
   v
 LLM / Provider
 ```
@@ -24,8 +24,11 @@ LLM / Provider
 ### 关键技术决策
 
 - **不改 Pi 本体**：所有控制逻辑集中在 `pii` 脚本和 Web 服务。
-- **Pi RPC 模式**：Pi 已原生支持 `--mode rpc`（JSON line over stdin/stdout），`pii` 通过子进程方式启动。
-- **Web 服务**：Python 实现（MVP 用标准库起步即可）。
+- **Pi RPC 模式**：Pi 已原生支持 `--mode rpc`（JSON line over stdin/stdout），引擎以子进程方式启动。
+- **桥接扩展**：RPC 模式丢掉的 UI 方法层（`custom()` 面板、工厂 widget、对话框、换肤）由注入的
+  `native/bridge.mjs` 在 pi 进程内改写 `ctx.ui` 实现（`ctx.ui` 是 runner 的共享可变对象）。
+- **Web 服务**：Node 实现（`native/server.mjs`，bin `pi-web-native`；内置 http + `ws`）。
+- **历史**：Python RPC 服务与 SDK 宿主（`pi-sdk-web`）已在阶段 E 移除，依赖只剩 `ws`。
 - **Web UI 目标**：尽量还原 TUI 的展示结构和配色，而非做成通用聊天界面。
 
 ## 2. 命令行接口
@@ -97,35 +100,33 @@ pii r <name> --web <port>   # Web 服务，使用指定端口
   # ③ 用户确认满意后，才走下面的发版动作链
   ```
   - `npm install -g <仓库内包目录>` 会在全局 node_modules 建立**软链**指向仓库，因此之后改 `native/`、`static/`
-    只需 `npm run build`（`src/` 的 TS 改动必须先 build）即可被 `pi-web` / `pii` / `pi-web-native` 用上，**无需发版**。
+    只需 `npm run build`（纯拷贝，无 tsc）即可被 `pi-web` / `pii` / `pi-web-native` 用上，**无需发版**。
   - 更新开发环境（build + 安装）同样会重写 `dist/`，**需在用户 4080 实例停止时做**（见第 10 节规则 8）。
   - 未经用户明确说「发版 / 可以发版」，**只更新开发环境、不 npm publish**。
 - **重要**：发版（`npm publish`）前必须先向用户确认「是否修改完成」——用户可能还在调整中，未经确认不得发版；本地 `git commit` 不受此限制。
-- 版本号由用户确认后提升；用户设备升级命令 `npm install -g pi-sdk-web@latest`。
-- **发版是一系列动作，一次全部完成，不得遗漏**：① `git push --follow-tags`（推送 GitHub）→ ② `npm publish`（发布 npm）→ ③ `npm install -g pi-sdk-web@<版本>`（更新本机全局安装）。三步按序执行并各自验证。
+- 版本号由用户确认后提升；用户设备升级命令 `npm update -g @maxdai/pi-web`。
+- **发版是一系列动作，一次全部完成，不得遗漏**：① `git push --follow-tags`（推送 GitHub）→ ② `npm publish`（发布 npm）→ ③ `npm install -g @maxdai/pi-web@<版本>`（更新本机全局安装；包名已于阶段 E 改为作用域包）。三步按序执行并各自验证。
   - **tag 必须用附注 tag**（`git tag -a vX.Y.Z -m "Release pi-sdk-web X.Y.Z"`）：`--follow-tags` **只推附注 tag**，
     轻量 tag 会被静默跳过（2026-10 实测：`v0.7.0`~`v0.7.5` 六个 tag 因此都没上远端，后以 `git push origin --tags` 补推）。
     推送后用 `git ls-remote --tags origin` 核对远端确实有该 tag。
 - **发版前必跑宿主契约核对器**（§15.13 决策 5）：`node tools/host-contract/check-host-contract.mjs`——Pi 升级后与发版前各跑一次；FAIL 表示方案立足点被破坏（按 §16.7 降级），DRIFT 需人工判断。
 - **动作链执行前必须获得用户明确确认**（用户说出"发版 / 可以发版"等指令后才可执行）；用户仅说"修改完成"不算执行指令——需再确认是否执行发版动作链。
 
-## 5. 目录结构（提议，以实际为准）
+## 5. 目录结构（以实际为准）
 
 ```text
 ~/pi-web/
-├── AGENTS.md           # 本文档
-├── pi-web-design.md    # 设计文档
-├── .gitignore
-├── pii/                # pii 相关改造（可选）
-│   └── ...
-├── server/             # Python Web 服务
-│   ├── server.py
-│   └── ...
-├── static/             # 浏览器前端
-│   ├── index.html
-│   ├── style.css
-│   └── app.js
-└── README.md
+├── AGENTS.md
+├── pi-web-design.md
+├── native/          # 引擎运行时（纯 JS，无 TS 构建）：server.mjs / bridge.mjs /
+│                    #   usage-render.mjs / cli.mjs（pi-web 薄壳）/ pii-cli.mjs
+├── pii/pii          # Python 启动器（会话名解析、TUI 入口、--web 转调引擎）
+├── static/          # 浏览器前端（唯一一份）
+├── tools/           # smoke.mjs、ab-compare.mjs、host-contract/（宿主契约核对器）
+└── pi-sdk-web/      # npm 包源码目录（包名 @maxdai/pi-web）
+    ├── package.json
+    ├── scripts/build-assets.mjs   # 装配 dist/（只拷贝，无 tsc）
+    └── dist/                      # 发布产物（files: ["dist"]）
 ```
 
 ## 6. 相关源码位置
@@ -188,7 +189,7 @@ footer：
 ## 9. 编码注意事项
 
 - `pii` 使用 **Python 标准库**（当前实现零第三方依赖，尽量保持）。
-- Web 服务 MVP 阶段优先考虑标准库。
+- 引擎为纯 JS（`native/*.mjs`）；包内不再有 TypeScript，`build` 只做拷贝。
 - 前端优先还原 TUI 的深色主题和结构，不做花哨样式。
 
 ## 10. 本地实例与后台进程管理（经验教训，务必遵守）
@@ -228,11 +229,11 @@ footer：
    - 该端口上的实例是「常驻测试实例」，允许长期运行；但每次重启后要在回复里说明其状态。
 
 8. **升级全局安装前，先确认用户实例没在运行**（2026-10-14 发版 0.7.0 时的预防性规则）：
-   `npm install -g pi-sdk-web@x.y.z` 会**替换包目录**；若老进程仍从该目录懒加载代码/静态资源，
+   `npm install -g @maxdai/pi-web@x.y.z`（或旧的 `pi-sdk-web`）会**替换包目录**；若老进程仍从该目录懒加载代码/静态资源，
    替换的瞬间可能触发模块加载失败。因此发版/更新全局安装**之前**先看 4080 与 `tmux ls`，
    发现实例在跑就先告知用户，由其决定何时停。
    - 事实澄清（同次发版，勿误记为"升级搞崩了实例"）：用户 4080 实例是在 **20:30:12 收到 SIGINT
      正常关停**（tmux pane 里可见 `^C`），而全局安装发生在 **20:33:42** —— 时间上不是升级导致；
      该规则是**预防**，不是本次事故的复盘。
-   - 用户实例恢复命令（SDK 引擎，原样）：`pi-web r pi`（或 `pi-web r <会话名>`），它会自己占用 4080；
+   - 用户实例启动命令：`pi-web r pi`（或 `pi-web r <会话名>`）/ `pii r <会话名> --web`，两者都启动同一原生引擎并占用 4080；
    - 需要原生引擎时：`pii r <会话名> --web 4080`（详见 pi-web-design.md §17）。

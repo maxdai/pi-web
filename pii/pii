@@ -24,12 +24,13 @@ def _resolve_project_root() -> Path:
     if env_dir:
         return Path(env_dir).expanduser().resolve()
     script_dir = Path(__file__).resolve().parent
-    # If this script lives in <project>/pii/, the parent has server/
-    if (script_dir.parent / "server").is_dir():
+    # 仓库布局：<repo>/pii/pii → 上级有 native/（阶段 E 起 Python RPC 服务的 server/ 已删除，
+    # 故用 native/ 作为仓库标记；旧的 `server/` 判据已失效）
+    if (script_dir.parent / "native").is_dir():
         return script_dir.parent
-    # Common install location fallback
+    # 常见安装位置兜底
     home_pi_web = Path.home() / "pi-web"
-    if (home_pi_web / "server").is_dir():
+    if (home_pi_web / "native").is_dir():
         return home_pi_web
     return script_dir.parent.parent
 
@@ -50,13 +51,14 @@ def _native_server_cmd(session_id, cwd, port):
         return [exe, session_id, cwd, "--port", str(port)]
     # 发布布局下包装器把 PI_WEB_DIR 设为 <pkg>/dist/pi-bin（Python 桥所在处），
     # 而原生引擎在 <pkg>/dist/native/ —— 两个候选都试，避免依赖 PATH 才能找到。
-    for script in (PROJECT_ROOT / "native" / "server.mjs",
+    for script in (PROJECT_ROOT / "server.mjs",            # 发布布局：PI_WEB_DIR=dist/native（引擎同目录）
+                   PROJECT_ROOT / "native" / "server.mjs",  # 仓库布局：<repo>/native
                    PROJECT_ROOT.parent / "native" / "server.mjs"):
         if script.is_file():
             return ["node", str(script), session_id, cwd, "--port", str(port)]
     print(
         "Native server not found: expected `pi-web-native` on PATH or "
-        f"{PROJECT_ROOT / 'native' / 'server.mjs'}",
+        f"{PROJECT_ROOT / 'server.mjs'}",
         file=sys.stderr,
     )
     sys.exit(1)
