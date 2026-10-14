@@ -883,7 +883,7 @@ pi-sdk-web 已实现并通过浏览器验收（本地提交，随本设计一起
 
 | # | 风险/问题 | 现状与缓解 |
 |---|---|---|
-| 1 | 依赖未公开内部约定（共享可变 `ctx.ui`） | 1.2.0 实测成立；若上游 freeze 或改为 per-extension context 则失效 → 特性探测 + 降级 |
+| 1 | 依赖未公开内部约定（共享可变 `ctx.ui`） | 1.2.0 实测成立；若上游 freeze 或改为 per-extension context 则失效 → 特性探测 + 降级。**全部宿主依赖已逐项登记在 §16，并配可执行核对器 + 基线（Pi 升级后跑一次即可发现偏移）** |
 | 2 | 对话框语义需自实现（`signal`/`timeout`/默认值/分档超时） | 现有 `ui-context.ts` 已实现该语义，迁移时平移 |
 | 3 | `toJsonEvent` 剥掉 `partial` | ✅ **已结案**：前端不依赖 `partial`（只用 `partialResult` 与 `delta`，见 §15.5），无需补发 |
 | 4 | 两进程 + 侧信道（鉴权、生命周期、子进程重启） | pi-vscode 有同构范式；本仓库 `server/`（Python RPC 时代）亦有可复用经验 |
@@ -994,3 +994,84 @@ cd /tmp/proto && node harness.mjs              # 9/9
 node deadlock-harness.mjs                      # 对照组：启动期对话框死锁
 node deadlock-harness.mjs --bridge             # 桥接接管：resolve = true
 ```
+
+## 16. 宿主（Pi）依赖与兼容性核对清单
+
+> 本节是 §15 方案的**配套维护契约**。RPC + 注入扩展的做法**替换/改写了宿主 pi 的对象**，并直接依赖若干
+> 非公开的内部约定（对象共享性、包目录布局、session 文件格式、RPC 细节）。这些都不在 Pi 的公开契约里，
+> **Pi 版本更迭后必须逐项核对**。核对器与基线见 §16.6；失效后的降级路径见 §16.7。
+
+### 16.1 最高风险：被替换 / 改写的宿主对象
+
+| # | 对象 / 成员 | 我们的用法 | 依赖的假设 | 失效后果 | 核对项 |
+|---|---|---|---|---|---|
+| 1 | **`ctx.ui`（整体）** | 改写其方法（setWidget / custom / 对话框 / setTheme） | 它是 runner 的**单一共享可变对象**，改写**对其他扩展可见** | 桥接整体失效 → 回退 RPC 原生（丢工厂 widget、面板、启动期对话框、换肤） | `setTitlePatchable`、`crossExtensionUiVisible` |
+| 2 | `ctx.ui.setWidget` | 工厂式内容由我们渲染；字符串/undefined 转发原实现 | 签名 `(key, string[] \| factory, options?)`；组件有 `render(width)`；更新走 `tui.requestRender()`；**移除后须自行 `invalidate()` 并停止转发** | `/todos` 等常驻面板丢失、更新停滞或「复活」 | `signatures.setWidget` + 冒烟 widget 项 |
+| 3 | `ctx.ui.custom` | 渲染组件文本行 → 前端只读模态 | 签名 `custom(factory, options?)`，factory 收 `(tui, theme, keybindings, done)` | 面板不可见（现状本就不可见，属能力回退） | `signatures.custom` |
+| 4 | `ctx.ui.select/confirm/input/editor` | 接管为网页对话框 | 方法名与参数形态；响应形状 `cancelled` / `confirmed` / `value` | 对话框失效或挂起 | `signatures.select…editor` + 冒烟 dialog 项 |
+| 5 | `ctx.ui.setTheme` | 接管并返回 `{success:true}` | 方法存在 | 换肤调用报错 | `signatures.setTheme` |
+| 6 | **`ctx.ui.theme`** | `Object.defineProperty` 换成自有 Pi Theme（暗/亮热切换） | 该属性**可配置**（1.2.0 实测为可写+可配置的值属性，非 getter）；`theme.fg(name,text)` 语义 | 扩展 ANSI 颜色不随网页主题切换（降级为宿主主题） | `themeDescriptor`、`uiThemeFg` |
+
+### 16.2 宿主包布局与模块（换肤依赖）
+
+| # | 依赖 | 假设 | 失效后果 |
+|---|---|---|---|
+| 7 | `process.argv[1]` 指向 `node_modules/.bin/pi`，为指向 `<pkg>/dist/bundle/cli.js` 的符号链接 | 由此得 `pkgDir = resolve(dirname(realpath(argv1)), "../..")` | 换肤降级（保持宿主主题），不致命 |
+| 8 | `<pkg>/dist/index.js` 可 `import` 且导出 `Theme` | 导出名 `Theme` 为构造函数 | 同上 |
+| 9 | `<pkg>/dist/modes/interactive/theme/{dark,light}.json` | 结构含 `vars` + `colors`；背景键集合为 `selectedBg`/`scrollbarThumb`/`searchMatchBg`/`userMessageBg`/`customMessageBg`/`toolPendingBg`/`toolSuccessBg`/`toolErrorBg` | 同上 |
+
+### 16.3 直接解析的宿主数据文件（非 API 契约）
+
+| # | 依赖 | 假设 | 失效后果 |
+|---|---|---|---|
+| 10 | `~/.pi/agent/sessions/**/*.jsonl` | 首行 header 含 `cwd`（与 `id`）；展示名存于 `{"type":"session_info",…,"name":…}`；**无名字视为 `(unnamed)`** | 会话名解析、`(unnamed)` 入口、`get_sessions` 列表、`delete_session` 校验异常 |
+| 11 | `~/.pi/agent/settings.json` 的 `enabledModels` | scoped models 的持久化键；**启动时读取**（运行时改动需重启进程） | scoped models 点选/持久化异常 |
+| 12 | usage 统计字段（`usage-render.ts`） | session 条目里 message/usage 的形状 | `/usage` 面板数据缺失或错算 |
+
+### 16.4 RPC 协议与 CLI 细节
+
+| # | 依赖 | 假设 | 失效后果 |
+|---|---|---|---|
+| 13 | 启动参数 | `--session <file>`、`--mode rpc`、`--extension <path>`、`--no-session` 均有效 | 无法启动引擎 |
+| 14 | stdin/stdout 协议 | 命令信封 `{id,type,…}`；`response` 关联 `id`；事件经 `toJsonEvent`（剥 delta 的 `partial`，`toolcall_start` 保留 `id`/`toolName`） | 命令无响应/事件丢字段 |
+| 15 | `extension_ui_request` | method ∈ {select, confirm, input, editor, notify, setStatus, setWidget, setTitle, set_editor_text}；字段名 `title`/`options`/`message`/`statusKey`/`statusText`/`widgetKey`/`widgetLines`/`widgetPlacement` | 前端渲染错乱（状态/widget/对话框） |
+| 16 | `bash` 命令 | 用**命令信封 id** 作为执行 id（出现在 `bash_execution_update`）；**不发** `bash_result`（服务端合成） | bash 流式块匹配失败/无法定稿 |
+| 17 | 响应形状 | `get_entries → {entries, leafId}`；`get_state → RpcSessionState`；`get_session_stats`；`get_available_models → {models}`；`get_available_thinking_levels → {levels}`；`get_commands → {commands}`；`export_html{outputPath}`；`switch_session{sessionPath}` | 首屏/模型/thinking/会话切换异常 |
+| 18 | 启动时序 | stdin 在 **`session_start` 之后**才挂载 → 启动期对话框必死锁，故对话框必须由桥接接管 | 若上游修复该时序：可简化，但**不能依赖**它 |
+| 19 | 模式语义 | RPC 下 `ctx.mode === "rpc"`、`ctx.hasUI === true` | 扩展的 UI 分支行为改变 |
+| 20 | ExtensionAPI | `pi.on` / `registerCommand` / `getCommands` / `getActiveTools`；命令形状 `{name,description,source,sourceInfo{path,origin,scope,baseDir}}`；`sourceInfo.path` 的 `builtin:` 与 `<inline:>` 约定；`ctx.reload()`（ExtensionCommandContext） | 扩展列表/资源面板失真；`/pi-web:reload` 失效 |
+
+### 16.5 依赖分级与「不用改」的部分
+
+- **公开契约（低风险）**：`--mode rpc` 本身是 Pi 对外协议；ExtensionAPI 是给扩展作者的公开面。
+- **非公开约定（高风险）**：第 1–6 项（对象改写）、第 7–9 项（包布局）、第 10–12 项（数据文件）。
+- 明确**不依赖**：Pi 的 TUI 渲染内部、`InteractiveMode`、Pi 的私有模块路径（除第 8 项那个 import 入口）。
+
+### 16.6 核对方法（Pi 升级后执行）
+
+```bash
+# 与基线对比：关键项是否满足 + 结构有无漂移
+node experiments/rpc-bridge/check-host-contract.mjs
+
+# 记录/更新基线（确认新版本可接受后）
+node experiments/rpc-bridge/check-host-contract.mjs --update
+
+# 只看当前快照
+node experiments/rpc-bridge/check-host-contract.mjs --json
+```
+
+- **核对器**：`experiments/rpc-bridge/check-host-contract.mjs`（内含 14 项关键判定 + 结构 diff）
+- **进程内探针**：`host-contract-probe.mjs`（A：探测并改写 `setTitle`）+ `host-contract-probe-b.mjs`（B：触发调用，验证改写跨扩展可见）
+- **基线**：`experiments/rpc-bridge/host-contract.baseline.json`（当前记录：**Pi 1.2.0 / node v24.18.0**）
+- **判定**：`FAIL` = 立足点被破坏（须处理）；`DRIFT` = 与基线有差异（须人工判断，例如 UI 方法增删）
+- 补充验证：`node tools/smoke.mjs http://127.0.0.1:4096`（42 项）+ 桥接自带诊断命令 `/pi-web:demo-widget`、`/pi-web:demo-clear`、`/pi-web:demo-dialog`、`/pi-web:demo-panel`
+- 核对器自身可靠性已验证（2026-10）：篡改基线（移除一个 UI 方法、把 `theme` 改为不可配置 getter）后，核对器正确报出 4 处差异。
+
+### 16.7 失效后的降级路径
+
+| 失效项 | 降级行为 |
+|---|---|
+| 主题相关（第 6–9 项） | 桥接保持宿主主题（已实现：加载失败即不改写 `ui.theme`），扩展 ANSI 不随网页主题切换 |
+| 对象改写（第 1–5 项） | 退回 RPC 原生行为：工厂 widget / 面板 / 启动期对话框 / 换肤丧失，会话仍可用 |
+| 共享可变 ui 根本不再成立 | 方案整体退回 **SDK 宿主**（§14），即 §15.9 记录的回退路径（代价：版本漂移） |
+| 数据文件格式（第 10–12 项） | 会话列表/`(unnamed)`/scoped models/`/usage` 局部失效，需按新格式适配 |

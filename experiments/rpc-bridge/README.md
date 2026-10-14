@@ -79,6 +79,23 @@ RPC 命令表里没有的能力）。
 | TUI-only 项 | `setWorkingIndicator`/`setFooter`/`setHeader`/`setEditorComponent` 等：宿主与 RPC 下都是 no-op，未实现（与现状一致） |
 | 会话目录约定 | 解析按 `session_info` 名 + `(unnamed)`；自定义 session 目录（`PI_SESSION_DIR` 等）未覆盖 |
 
+## 宿主契约核对（Pi 升级后必须执行）
+
+本方案**替换/改写了宿主 pi 的对象**并依赖若干内部约定 —— 完整清单、失效后果与降级路径见
+`pi-web-design.md` §16。可执行核对器：
+
+```bash
+node experiments/rpc-bridge/check-host-contract.mjs            # 与基线对比（14 项关键判定 + 结构 diff）
+node experiments/rpc-bridge/check-host-contract.mjs --update   # 记录新基线
+node experiments/rpc-bridge/check-host-contract.mjs --json     # 只看当前快照
+```
+
+- 进程内探针：`host-contract-probe.mjs`（探测并改写 `setTitle`）+ `host-contract-probe-b.mjs`（触发调用，
+  验证「改写跨扩展可见」这一最关键假设）
+- 基线：`host-contract.baseline.json`（当前 **Pi 1.2.0 / node v24.18.0**）
+- `FAIL` = 立足点被破坏；`DRIFT` = 与基线有差异（需人工判断）
+- 核对器自身已验证：篡改基线（移除一个 UI 方法 + 把 `theme` 改成不可配置 getter）后能正确报出 4 处差异
+
 ## 下一步
 
 见 pi-web-design.md §15.8：阶段 A 抽象引擎接口（`--engine sdk|native`）→ B 落地本原型 →

@@ -1,0 +1,171 @@
+{
+ "checkedAt": "2026-10-14T07:37:21.596Z",
+ "piVersion": "1.2.0",
+ "node": "v24.18.0",
+ "probe": {
+  "mode": "rpc",
+  "hasUI": true,
+  "cwdType": "string",
+  "uiIsObject": true,
+  "uiMethods": [
+   "addAutocompleteProvider",
+   "confirm",
+   "custom",
+   "editor",
+   "getAllThemes",
+   "getEditorComponent",
+   "getEditorText",
+   "getTheme",
+   "getToolsExpanded",
+   "input",
+   "notify",
+   "onTerminalInput",
+   "pasteToEditor",
+   "select",
+   "setEditorComponent",
+   "setEditorText",
+   "setFooter",
+   "setHeader",
+   "setHiddenThinkingLabel",
+   "setStatus",
+   "setTheme",
+   "setTitle",
+   "setToolsExpanded",
+   "setWidget",
+   "setWorkingIndicator",
+   "setWorkingMessage",
+   "setWorkingVisible",
+   "theme"
+  ],
+  "themeDescriptor": {
+   "configurable": true,
+   "writable": true,
+   "kind": "object"
+  },
+  "uiThemeFg": "\u001b[38;5;140mX\u001b[39m",
+  "signatures": {
+   "select": "function",
+   "confirm": "function",
+   "input": "function",
+   "editor": "function",
+   "custom": "function",
+   "setWidget": "function",
+   "setStatus": "function",
+   "notify": "function",
+   "setTheme": "function",
+   "setTitle": "function"
+  },
+  "setTitlePatchable": true,
+  "scopedModelsEntryKeys": [
+   "model",
+   "thinkingLevel"
+  ],
+  "scopedModelsCount": 11,
+  "sessionManager": {
+   "getSessionFile": "function",
+   "ownKeys": [
+    "sessionId",
+    "sessionFile",
+    "sessionDir",
+    "cwd",
+    "persist",
+    "flushed",
+    "fileEntries",
+    "byId",
+    "labelsById",
+    "labelTimestampsById"
+   ]
+  },
+  "commandCount": 26,
+  "commandKeys": [
+   "description",
+   "name",
+   "source",
+   "sourceInfo"
+  ],
+  "sourceInfoKeys": [
+   "baseDir",
+   "origin",
+   "path",
+   "scope",
+   "source"
+  ],
+  "builtinPathCount": 2,
+  "commandSources": [
+   "extension",
+   "prompt",
+   "skill"
+  ],
+  "activeTools": {
+   "type": "object",
+   "count": 20
+  },
+  "registerCommand": "ok",
+  "argv1": "/root/.pi/agent/install/releases/1.2.0/node_modules/.bin/pi",
+  "pkgDir": "/root/.pi/agent/install/releases/1.2.0/node_modules/@earendil-works/pi-coding-agent",
+  "pkgFiles": {
+   "distIndex": true,
+   "themeDark": true,
+   "themeLight": true
+  },
+  "themeExport": "function",
+  "themeJsonKeys": [
+   "$schema",
+   "appearance",
+   "colors",
+   "export",
+   "name",
+   "vars"
+  ],
+  "themeColorEntrySample": [
+   [
+    "accent",
+    "violet"
+   ],
+   [
+    "border",
+    "okhsl(231 57% 65%)"
+   ]
+  ],
+  "builtThemeFg": "\u001b[38;2;167;152;215mX\u001b[39m",
+  "builtThemeFgLight": "\u001b[38;2;116;89;180mX\u001b[39m",
+  "crossExtensionUiVisible": true
+ },
+ "host": {
+  "sessionFiles": {
+   "files": 13,
+   "headerKeys": [
+    "cwd",
+    "id",
+    "timestamp",
+    "type",
+    "version"
+   ],
+   "sessionInfoKeys": [
+    "id",
+    "name",
+    "parentId",
+    "timestamp",
+    "type"
+   ],
+   "namedCount": 13,
+   "unnamedCount": 0,
+   "error": null
+  },
+  "settings": {
+   "exists": true,
+   "hasEnabledModels": true,
+   "enabledModelsType": "array",
+   "keyCount": 16
+  },
+  "rpc": {
+   "bashExecutionUpdate": 1,
+   "response": {
+    "success": true,
+    "hasData": true
+   },
+   "bashResultEvent": 0,
+   "errorFrames": 0
+  }
+ }
+}
