@@ -1330,6 +1330,9 @@ pi-web-native <session-id> <cwd> --port <n>          # 对应 server.py <session
 `~/.pi/agent/prompts/` 里有 3 个指向旧全局包 `pi-sdk-web/node_modules/...` 的符号链接**——阶段 E 卸载旧包后
 软链悬空，Pi 于是少注册 3 个 prompt 命令（`implement`/`implement-and-review`/`scout-and-plan`）。已把软链改为
 **实体文件拷贝**（源取 Pi 自身安装目录的示例 prompts），命令数恢复 26、核对器回到零漂移。
+复查时又发现同类残留：`~/.pi/agent/agents/` 下 **4 个子代理定义**（`reviewer`/`worker`/`planner`/`scout`）
+同样是悬空软链（指向旧包 `examples/extensions/subagent/agents/*.md`），一并改为实体拷贝；
+最终 `find ~/.pi/agent -xtype l` 计数为 **0**。
 → **教训与待办**：凡是"包内路径被用户配置引用"（软链/配置项）的地方，移动或重命名包都会静默破坏用户环境；
 发版说明里应提示检查 `~/.pi/agent/prompts/` 一类目录下的悬空软链（步骤 8 的用户侧升级提示已含此意）。
 
