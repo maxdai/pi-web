@@ -728,14 +728,14 @@ async function handleClientMessage(ws, msg) {
         if (Number.isFinite(cols) && Number.isFinite(rows) && cols >= 20 && rows >= 5) {
           panelGeometry = { cols: Math.floor(cols), rows: Math.floor(rows) };
           const extra =
-            Number.isFinite(Number(data.charW)) && Number.isFinite(Number(data.contentW))
-              ? `（可容纳 ${panelGeometry.cols} 列 = 内容区 ${data.contentW}px ÷ 单字符 ${data.charW}px）`
+            Number.isFinite(Number(msg.charW)) && Number.isFinite(Number(msg.contentW))
+              ? `（= 内容区 ${msg.contentW}px ÷ 单字符 ${msg.charW}px）`
               : "";
           log(`[pi-web] panel geometry ← ${panelGeometry.cols}×${panelGeometry.rows}${extra}`);
-          if (Number(data.longest) > panelGeometry.cols) {
+          if (Number(msg.longest) > panelGeometry.cols) {
             log(
-              `[pi-web] 面板内容过宽：最长行 ${data.longest} 列 > 容量 ${panelGeometry.cols} 列` +
-                `（已缩至 ${data.shrunkTo}px${data.overflow ? "，仍放不下 → 该面板横向滚动" : ""}）` +
+              `[pi-web] 面板内容过宽：最长行 ${msg.longest} 列 > 容量 ${panelGeometry.cols} 列` +
+                `（已缩至 ${msg.shrunkTo}px${msg.overflow ? "，仍放不下 → 该面板横向滚动" : ""}）` +
                 `；下次将按 ${panelGeometry.cols} 列渲染`,
             );
           }
