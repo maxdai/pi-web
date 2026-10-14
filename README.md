@@ -89,6 +89,21 @@ pii list                         # 验证（需 Python 3）
 
 升级：`npm update -g @maxdai/pi-web`。
 
+**从旧版（`pi-sdk-web`）迁移**（1.0.0 起包名变更 + 引擎切换）：
+
+```bash
+npm uninstall -g pi-sdk-web          # 先卸载旧包，避免同名 bin 冲突
+npm install -g @maxdai/pi-web        # 三个 bin（pi-web / pii / pi-web-native）随之更新
+```
+
+> ⚠️ 旧包的 `package.json` 可能被你的配置以**软链**形式引用（常见于 `~/.pi/agent/prompts/` 下的
+> prompt 文件软链指向旧包的 `node_modules/...`）。卸载旧包会让这些软链**悬空**、Pi 静默少注册对应
+> 命令。升级后请检查并改为实体文件：
+> ```bash
+> find ~/.pi/agent -xtype l 2>/dev/null          # 列出悬空软链
+> ```
+> （2026-10 本机就遇到过 3 个 prompt 软链因此失效。）
+
 > `pii` 的 Node 包装器会调用本机 `python3` 运行随包分发的 Python 启动器（会话名解析 / TUI 入口），
 > 需要机器装有 Python 3。
 > 从仓库源码安装/开发：
