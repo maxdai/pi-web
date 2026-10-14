@@ -48,6 +48,10 @@ const AGENT_DIR = process.env.PI_CODING_AGENT_DIR ?? join(process.env.HOME, ".pi
 const SESSIONS_ROOT = join(AGENT_DIR, "sessions");
 const SETTINGS_FILE = join(AGENT_DIR, "settings.json");
 const TOKEN = randomUUID();
+/** 本次运行的唯一 id：注入 pi 子进程环境，用于把「自己这棵树」与「另一个实例」区分开。
+ *  否则 pi 子进程派生的助手进程（aft bridge、LSP、bash…）会继承会话标记而被误判成
+ *  "另一个 web 实例"（2026-10-14 实测误报：同一实例被报成 3 个 PID）。 */
+const RUN_ID = randomUUID();
 const PI_WEB_VERSION = "0.0.0-rpc-proto";
 
 // ------------------------------------------------------------------ 参数解析
@@ -202,6 +206,7 @@ const child = spawn(
       // 会话文件路径：让**其它**原生实例能检测出"同一会话被多个 web 实例打开"
       // （pi 会覆写 process.title，argv 被 NUL 填充盖住，所以不能靠 cmdline 匹配）
       PI_WEB_BRIDGE_SESSION: session.path,
+      PI_WEB_BRIDGE_RUN: RUN_ID,
       // 诊断命令（/pi-web:demo-*）默认关闭：它们会污染用户的 `/` 菜单
       ...(argv.includes("--demo") ? { PI_WEB_BRIDGE_DEMO: "1" } : {}),
     },
@@ -617,24 +622,31 @@ process.on("exit", () => {
  *    为了不误报，这里不对 TUI 做猜测；仅在设计文档中记录该边界。
  */
 async function detectSessionSharers() {
-  const found = [];
+  const byRun = new Map(); // 对方 run id（或 pid）→ 该实例里最小的 PID
   const marker = `PI_WEB_BRIDGE_SESSION=${session.path}`;
+  const ownRun = `PI_WEB_BRIDGE_RUN=${RUN_ID}`;
   try {
     for (const entry of await readdir("/proc")) {
       if (!/^\d+$/.test(entry)) continue;
       if (Number(entry) === child.pid) continue; // 我们自己的 pi 子进程
-      let env = "";
+      let vars;
       try {
-        env = (await readFile(`/proc/${entry}/environ`)).toString();
+        vars = (await readFile(`/proc/${entry}/environ`)).toString().split("\0");
       } catch {
         continue;
       }
-      if (env.split("\0").includes(marker)) found.push({ pid: entry });
+      if (!vars.includes(marker)) continue;
+      // 自己这棵树（子进程 + 它派生的助手进程）都带自己的 RUN_ID → 排除，避免误报
+      if (vars.includes(ownRun)) continue;
+      const foreignRun = vars.find((v) => v.startsWith("PI_WEB_BRIDGE_RUN=")) ?? `pid:${entry}`;
+      const pid = Number(entry);
+      const prev = byRun.get(foreignRun);
+      if (prev === undefined || pid < prev) byRun.set(foreignRun, pid);
     }
   } catch {
     /* 非 Linux 或 /proc 不可读：跳过这项尽力而为的检查 */
   }
-  return found;
+  return [...byRun.values()].sort((a, b) => a - b).map((pid) => ({ pid }));
 }
 
 let sharersWarned = false;
