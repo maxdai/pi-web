@@ -1018,7 +1018,7 @@ node deadlock-harness.mjs --bridge             # 桥接接管：resolve = true
 |---|---|---|---|
 | 7 | `process.argv[1]` 指向 `node_modules/.bin/pi`，为指向 `<pkg>/dist/bundle/cli.js` 的符号链接 | 由此得 `pkgDir = resolve(dirname(realpath(argv1)), "../..")` | 换肤降级（保持宿主主题），不致命 |
 | 8 | `<pkg>/dist/index.js` 可 `import` 且导出 `Theme` | 导出名 `Theme` 为构造函数 | 同上 |
-| 9 | `<pkg>/dist/modes/interactive/theme/{dark,light}.json` | 结构含 `vars` + `colors`；背景键集合为 `selectedBg`/`scrollbarThumb`/`searchMatchBg`/`userMessageBg`/`customMessageBg`/`toolPendingBg`/`toolSuccessBg`/`toolErrorBg` | 同上 |
+| 9 | `<pkg>/dist/modes/interactive/theme/{dark,light}.json` | 结构含 `vars` + `colors`；背景键集合为 `selectedBg`/`scrollbarThumb`/`searchMatchBg`/`userMessageBg`/`customMessageBg`/`toolPendingBg`/`toolSuccessBg`/`toolErrorBg`。**`new Theme(fg, bg, …)` 会校验所有 token 可解析**：实测传入不完整的颜色表会抛 `Theme token <key> has unresolved fallback <name>`（我们传整份 `colors`，故正常）；若 Pi 新增背景类 token 而未被上面的集合识别，会被误归为前景键 | 同上 |
 
 ### 16.3 直接解析的宿主数据文件（非 API 契约）
 
