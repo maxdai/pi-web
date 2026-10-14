@@ -1062,7 +1062,7 @@ node deadlock-harness.mjs --bridge             # 桥接接管：resolve = true
 |---|---|---|---|---|
 | A1 | **按扩展路径白名单强制 `hasUI:false`**：`/pi-magic-context\|magic-context\|aft-pi/` 命中的命令走文本兜底 | Pi 自己执行命令（`prompt`）→ `hasUI=true` → 扩展走 TUI 对话框分支 → 桥接渲染成面板（§15.11 前文） | 呈现不同、信息等价 | ❌ 需 runner 对象；不可 |
 | A2 | **命令期间把 notify 的标题改写为 `/<命令名>`** → 前端按「`/` 开头」弹**模态** | ✅ **已对齐**：服务端在命令执行期间置 `runningCommand`，命令期间的 notify 帧标题改写为 `/<命令名>` | 已消除 | ✅ 已实施（实测 `/refresh-deepinfra`、`/mcp` 现在都弹模态、标题逐字一致） |
-| A3 | 命令产生的、带 `text` 的 custom entry 额外弹模态（无 text 的状态轨迹不弹） | 原生这些命令走对话框分支、不产生 custom entry；若产生则按普通聊天流渲染 | 目前不可见 | moot（A1 若可对齐才需要） |
+| A3 | 命令产生的、带 `text` 的 custom entry 额外弹模态——**这些历史条目本身也是扩展在 `hasUI=false` 路径下 `pi.appendEntry` 写的**（不是 pi-web 造的） | 原生走对话框分支、**不产生条目（= 与 TUI 一致：TUI 也没有）**；渲染器本身完好 | 已知差异：SDK 版历史里每条 `/ctx-status` 留一个 `[ctx-status] (click to expand)`，原生不留 | ❌ **决定不复刻（2026-10 用户拍板）**。依据：① 实测页面历史里已渲染 2 条 `[ctx-status]`，与会话文件里的 2 条一一对应 → 原生渲染这类条目没问题；② 原生执行 `/ctx-status` 只收到 `panel` 帧、**无 `entry_appended`** → 扩展在 `hasUI=true` 分支下不写记录；③ 复刻只能由桥接"伪造"，且拿到的是**带边框的对话框文本**，而非 SDK 那条干净 markdown（扩展的文本构造器在 hasUI=true 时不会执行） |
 | A4 | `/usage` 原生拦截（不再依赖 pi-usage-extension） | ✅ 已实现 | — | — |
 
 **B. 对话框生命周期（`ui-context.ts`）**
