@@ -1286,6 +1286,7 @@ pi-web-native <session-id> <cwd> --port <n>          # 对应 server.py <session
 5. **`pii` 项目根探测更新**：现有实现用"`<parent>/server` 是否存在"判断仓库根，`server/` 删除后该启发式失效 → 改用 `native/`（或 `.git`）作为标记；同时更新 `_native_server_cmd` 的候选路径。
 6. **验证（全绿才算完成）**：`npm run build` 产物正确且无 TS 残留；三条入口都可用（`pi-web r <name>`、`pii r <name> --web`、`pi-web-native <id> <cwd> --port`）；冒烟 42/42；`/usage` 有数据；`/ctx-status`、`/aft-status` 面板不折行；Ctrl+C 字节流干净（pty 复现）；`npm ls --all` 无 `pi-coding-agent`/`pi-agent-core`；宿主契约核对器全绿。
 7. **文档与发版**：README 改单引擎表述 + 安装命令改 `@maxdai/pi-web` + 发布流程加"跑核对器"；AGENTS 更新引擎说明；设计文档 §14/§15.8/§15.9 状态收口；发布 `@maxdai/pi-web@1.0.0`，并 **`npm deprecate pi-sdk-web@'<1.0.0' "已迁移到 @maxdai/pi-web"`** 指向新包。
+   - 发版说明须写明：**0.7.5 的 `/usage` 回归**（`sendUsage` 引用了已被删除的 `REPO` 常量 → `usage unavailable: REPO is not defined`）**已修复**（commit `14ee75a`），**不单独发 0.7.6**，随 1.0.0 一并发布（2026-10-14 用户决定）。
 8. **用户侧升级**：`npm uninstall -g pi-sdk-web && npm install -g @maxdai/pi-web`（先卸载再装，避免 bin 同名指向旧包）。
 
 #### 15.13.4 风险与回退
