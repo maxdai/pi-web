@@ -79,7 +79,7 @@ RPC 命令表里没有的能力）。
 | 能力 | 实现方式 | 验证结果 |
 |---|---|---|
 | **扩展 ANSI 换肤** | 桥接从**运行中的 pi 包目录**（`realpath(argv[1])/../..`）动态 import Pi 的 `Theme` 类，用 `dark.json`/`light.json` 构造主题（truecolor，与 SDK 宿主一致），并改写 `ui.theme`；服务端暴露 `GET /side/theme`，桥接每 2s 轮询，变化时强制重渲染所有 widget | 切换 Light 后 widget 的 ANSI 颜色立即改变（`themeSwapped: true`，帧 `theme_set` ×2） |
-| **`custom()` 面板** | 桥接把组件 `render(width)` 的文本行经侧信道送到服务端 → 前端以只读模态 `extension-panel` 呈现（Esc/×/Close 关闭），关闭时回传结论；组件若已 `done(value)` 则采用该值 | 面板标题带倒计时、两行内容正确、Close 后遮罩关闭、桥接收 `{"type":"demo-panel","value":null}` |
+| **`custom()` 面板** | 桥接用**带 `terminal: {rows, cols}` 的 stub TUI** 调 factory 并 `render(width)`，把文本行经侧信道送到服务端 → 前端只读模态 `extension-panel`（Esc/×/Close 关闭）回传结论；组件已 `done(value)` 则采用该值。**必须给 `terminal`**：真实组件（如 magic-context 的 StatusDialogComponent）读 `tui.terminal.rows`，缺了会抛错 → 空面板 | `/ctx-status` 面板 40 行真实内容；demo panel 3 行；关闭/回传均通过 |
 | **`/usage`** | 服务端原生拦截（`command` 名为 `usage` 时优先于扩展命令，与 SDK 宿主一致），复用 pi-web 既有的 `usage-render`（读 session 文件，**0 处 SDK 依赖**——证明该功能本就与引擎无关） | `usage_data` 帧 + 前端 usage 面板打开 |
 | **`export`** | RPC `export_html`（接受 `outputPath`）→ notify 导出路径 | 收到 `/export: Session exported to: …` |
 | **`delete_session`** | 校验「已知会话 + 非当前会话」后删除文件 | 三个分支全通过：伪造路径被拒、当前会话被拒、临时会话被删 |

@@ -291,37 +291,53 @@ export default function (pi) {
       render(false);
     };
 
-    // 2) custom() 面板：把渲染结果交给服务端在浏览器里以模态呈现
+    // 2) custom()：把扩展的 TUI 组件**渲染成文本行**，交浏览器以只读模态呈现
+    //
+    //    为什么这里必须真渲染（2026-10 实测，与 SDK 宿主行为不同的根因）：
+    //    · Pi 在 RPC 模式**仍然绑定了 UI 上下文** → 扩展看到的 `ctx.hasUI === true`
+    //      → 扩展会走「TUI 对话框」分支，例如 magic-context 的 /ctx-status：
+    //        `if (ctx.hasUI) { await showStatusDialog(pi, ctx, ...); return; }`（文本兜底在 else 之后）
+    //      SDK 宿主之所以显示**文本**，是因为它自己构造 `hasUI:false` 的上下文去调命令 handler
+    //      （它能拿到 extensionRunner.getCommand）；我们经 Pi 的 `prompt` 执行命令，拿不到这个杠杆。
+    //      所以在原生引擎里 custom() 若不真渲染，用户**什么都看不到**。
+    //    · 组件依赖终端尺寸：实测 StatusDialogComponent.render() 读 `tui.terminal.rows`，
+    //      缺了会抛 `Cannot read properties of undefined (reading 'rows')`（曾因此得到空面板）。
+    //    · 渲染是**只读快照**：组件内的按键交互（滚动/翻页）网页端不支持；组件若自己调
+    //      `done(value)` 则采用该结论，否则用户关闭面板即视为取消。
+    const PANEL_ROWS = Number(process.env.PI_WEB_BRIDGE_PANEL_ROWS ?? 40);
+    const PANEL_COLS = Number(process.env.PI_WEB_BRIDGE_PANEL_COLS ?? 100);
     ui.custom = async (factory, options) => {
       let doneValue;
       let hasDone = false;
+      const stubTui = {
+        requestRender() {},
+        requestLayout() {},
+        invalidate() {},
+        requestFocus() {},
+        terminal: { rows: PANEL_ROWS, cols: PANEL_COLS, width: PANEL_COLS, height: PANEL_ROWS },
+      };
       let component;
       try {
-        component = await factory(
-          { requestRender() {}, requestLayout() {}, invalidate() {} },
-          ui.theme,
-          {},
-          (value) => {
-            hasDone = true;
-            doneValue = value;
-          },
-        );
-      } catch {
-        return undefined;
+        component = await factory(stubTui, ui.theme, {}, (value) => {
+          hasDone = true;
+          doneValue = value;
+        });
+      } catch (err) {
+        console.error(`[pi-web-bridge] custom() factory failed: ${err.message}`);
+        return hasDone ? doneValue : undefined;
       }
       let lines = [];
       try {
-        if (component) lines = component.render(WIDTH);
-      } catch {
-        /* ignore */
+        if (component) lines = component.render(PANEL_COLS) ?? [];
+      } catch (err) {
+        console.error(`[pi-web-bridge] custom() render failed: ${err.message}`);
+        lines = [`[pi-web] 组件渲染失败：${err.message}`];
       }
       const answer = await post("/side/panel", {
         title: options?.title,
         lines,
-        // 组件若已自行给出结论（done(value)），一并带上，服务端据此决定返回值
         value: hasDone ? doneValue : undefined,
       });
-      // 用户在网页上关闭面板后，若组件没有自己给结论，则由服务端兜底返回
       return answer && "value" in answer ? answer.value : hasDone ? doneValue : undefined;
     };
 
@@ -448,9 +464,14 @@ export default function (pi) {
   pi.registerCommand("pi-web:demo-panel", {
     description: "Show a custom() panel rendered through the bridge",
     handler: async (_args, ctx) => {
+      // 组件刻意读 tui.terminal.rows —— 与真实扩展组件（StatusDialogComponent）同样的要求
       const picked = await ctx.ui.custom(
-        async () => ({
-          render: () => ["[demo] custom() panel line 1", "[demo] line 2 — rendered via the bridge"],
+        (_tui) => ({
+          render: () => [
+            "[demo] custom() panel line 1",
+            "[demo] line 2 — 由桥接渲染成文本行",
+            `[demo] terminal.rows = ${_tui.terminal.rows}`,
+          ],
           invalidate: () => {},
         }),
         { title: "pi-web demo panel" },

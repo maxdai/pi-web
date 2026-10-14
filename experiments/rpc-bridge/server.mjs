@@ -751,8 +751,8 @@ const server = createServer(async (req, res) => {
         return reply({ ok: true });
       }
       if (route === "panel") {
-        // custom() 面板：把渲染出的文本行送到浏览器模态呈现，等用户关闭后回传结论。
-        // 组件的 done(value) 若已给出结论（data.value），用户关闭时直接采用。
+        // custom()：桥接把扩展 TUI 组件渲染出的文本行送来，浏览器以**只读**模态呈现；
+        // 用户关闭后回传结论（组件自己 done(value) 过则采用该值）。
         const id = `panel-${randomUUID()}`;
         const answer = await new Promise((resolveAnswer) => {
           const timer = setTimeout(() => {
@@ -772,7 +772,6 @@ const server = createServer(async (req, res) => {
             title: data.title,
             lines: data.lines ?? [],
             value: data.value,
-            // 与面板超时一致，前端据此显示倒计时（同对话框）
             deadline: Date.now() + DIALOG_TIMEOUT_MS,
           });
         });

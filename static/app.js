@@ -2086,8 +2086,8 @@ class PiWebClient {
     } else if (method === 'notify') {
       this.openExtensionNotify(req);
     } else if (method === 'panel') {
-      // custom() 面板：扩展自己渲染的 TUI 组件，我们在网页里以模态呈现其文本行
-      // （只读；组件自身的按键交互不支持 —— 见 pi-web-design.md §15）
+      // custom()：扩展的 TUI 组件由桥接渲染成文本行，网页以只读模态呈现
+      // （组件自身的按键交互不支持 —— 见 pi-web-design.md §15.11）
       this.openExtensionPanel(req);
     } else if (method === 'setWidget') {
       // Persistent widget panel (TUI: above/below editor). Not a popup.
@@ -2249,7 +2249,7 @@ class PiWebClient {
     this.appendNotifyLine(req.message || '', req.notifyType);
   }
 
-  /** custom() 面板（桥接扩展经 method:'panel' 送来）：只读展示扩展渲染的文本行。
+  /** custom() 面板（桥接扩展经 method:'panel' 送来）：只读展示扩展组件渲染出的文本行。
    *  关闭时统一由 closeModal() 回 cancelled —— 服务端会采用组件自己 done(value) 的结论。 */
   openExtensionPanel(req) {
     this.openModal(req.title || 'Extension panel', 'extension-panel');
