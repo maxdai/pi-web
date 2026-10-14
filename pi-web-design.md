@@ -1165,10 +1165,10 @@ pi-web-native <session-id> <cwd> --port <n>          # 对应 server.py <session
 
 | 项 | 位置 |
 |---|---|
-| 原生服务端源码 | 仓库根新增 `native/`（与既有 `pii/`、`server/` 同级，保持"非 TS 运行期资产放根目录"的既有约定）：`cli.mjs`（参数解析/会话解析）、`server.mjs`（HTTP+WS+侧信道）、`bridge.mjs`（注入 `pi` 的桥接扩展） |
-| 打包 | `pi-sdk-web/scripts/build-assets.mjs` 增加一步：`native/ → dist/native/`（含执行位）；`package.json` 的 `bin` 增加 `pi-web-native: ./dist/native/cli.mjs` |
+| 原生服务端源码 | 仓库根新增 `native/`（与既有 `pii/`、`server/` 同级，沿用「非 TS 运行期资产放根目录」的约定）：`server.mjs`（**单文件 bin**：参数/会话解析 + HTTP 静态 + WS 协议 + RPC 客户端 + 侧信道）、`bridge.mjs`（注入 `pi` 的桥接扩展）。不做无谓拆分——参数与会话解析只有几十行，单拆 `cli.mjs` 反而多一层间接 |
+| 打包 | `pi-sdk-web/scripts/build-assets.mjs` 增加一步：`native/ → dist/native/`（含执行位）；`package.json` 的 `bin` 增加 **`pi-web-native: ./dist/native/server.mjs`** |
 | 前端 | 复用现有 `static/`（`panelGeometry` 能力位已门控，SDK 引擎不受影响） |
-| `pii` 改动 | 仅把 `--web` 分支的 `cmd` 从 `[python, server.py, id, cwd, --port]` 换成 `[pi-web-native, id, cwd, --port]` |
+| `pii` 改动 | `--web` 分支改为 `_native_server_cmd()`：解析顺序 `PI_WEB_NATIVE_BIN` → PATH 上的 `pi-web-native` → 仓库内 `native/server.mjs`（用 `node` 执行） |
 
 原型（`experiments/rpc-bridge/`）作为验证与回归对照保留，正式代码从它提升而来。
 
@@ -1178,7 +1178,7 @@ pi-web-native <session-id> <cwd> --port <n>          # 对应 server.py <session
 |---|---|
 | **pi 子进程生命周期** | 启动失败给出明确报错（不静默）；子进程异常退出时在界面提示；服务端退出（SIGINT/SIGTERM）时清理子进程；不遗留孤儿进程 |
 | **WS 背压** | 客户端落后时跳过流式增量、追上后恢复（对齐 SDK 宿主的做法与日志格式），避免长会话/大输出时内存飙升 |
-| **同会话并发写保护** | 同一 `.jsonl` 已被其它宿主（TUI / 另一个 web 实例）打开时给出提示。检测手段：扫描 `/proc/*/cmdline` 找引用同一 session 文件的其它 `pi` 进程（尽力而为），命中则在界面提示风险 |
+| **同会话并发写保护** | 同一 `.jsonl` 已被另一个**原生 web 实例**占用时在界面提示：每个实例把 `PI_WEB_BRIDGE_SESSION=<会话文件>` 注入 pi 子进程环境，扫 `/proc/<pid>/environ` 可靠命中。**TUI 无法可靠检测**（2026-10 实测：pi 用 `process.title` 覆写 argv、会话文件写完即关、Pi 无任何锁机制）——为避免误报不对 TUI 做猜测，仅记录该边界 |
 | 端口/cwd 校验 | 与 Python 版一致（见 §17.2） |
 
 ### 17.5 切换后仍存在的缺口（明确记录，不视为 bug）
@@ -1194,6 +1194,22 @@ pi-web-native <session-id> <cwd> --port <n>          # 对应 server.py <session
 3. 与 SDK 版 A/B：三列表（Extensions/Tools/`/` 菜单）、命令输出呈现、对话框语义（timeout/无限等待/倒计时/中止）
 4. 宿主契约核对器全绿（Pi 1.2.0 基线，§16）
 5. **回退演练**：`pi-web r <name>` 仍可用，改回 `pii` 一行即可复原
+
+### 17.6.1 实施与验证结果（2026-10-14）
+
+| 项 | 结果 |
+|---|---|
+| `native/` 提升 | `git mv experiments/rpc-bridge/{server,bridge}.mjs → native/`；原型目录保留宿主契约核对器与探针 |
+| 打包 | `npm run build` 后 `dist/native/{server.mjs,bridge.mjs}` 就位（server 带执行位）；bin `pi-web-native` 可独立运行 |
+| **发布布局实测** | `node pi-sdk-web/dist/native/server.mjs <id> /root --port 4099`：**冒烟 42/42**（静态前端取自 `dist/static`、`ws` 从包内 node_modules 解析、桥接取自 `dist/native/bridge.mjs`） |
+| **`pii --web` 端到端** | `PI_WEB_DIR=/root/pi-web python3 pii/pii r install --web 4098` → 原生引擎启动、页面 200、**冒烟 42/42** |
+| 参数/错误路径 | 无参数→用法；非法端口→`Invalid port`；cwd 不存在→`Working directory not found`；会话 id 不存在→明确报错（均带时间戳） |
+| 子进程生命周期 | SIGTERM 关停：先 SIGTERM 子进程（实测 code=143），1.5s 未退则 SIGKILL；**无孤儿**；子进程意外退出会向界面提示原因（不静默） |
+| 并发写提示 | 同会话起第二个实例 → 实测命中 `警告：同一会话已被另一个原生 web 实例打开（PID …）` |
+| WS 背压 | 「连上即暂停读取」的客户端 + 4MB 输出实测：命中 `client is behind (0.3MB queued) - skipping stream deltas until it catches up`，服务端保持可用；阈值可经 `PI_WEB_BACKPRESSURE_HIGH/LOW` 调整（默认 8MB/2MB） |
+| 自身日志 | 服务端全部诊断行带本地时间戳（命令/扩展输出保持原样不加） |
+| 迁移引入的两个真问题 | ① `STATIC_DIR` 原以 `../..` 解析 → 迁移后指到仓库外，已改 `../static`（仓库与发布两种布局均成立）；② `ws` 原用硬编码绝对路径 `createRequire("/root/pi-web/pi-sdk-web/package.json")` → 发布后必然失效，已改为「按自身位置解析，失败回退同级 pi-sdk-web」 |
+
 
 ### 17.7 风险
 
