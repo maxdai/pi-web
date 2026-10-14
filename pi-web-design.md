@@ -346,6 +346,8 @@ Pi RPC 模式不支持「工厂函数 / 自定义组件」类 UI，导致以下 
 
 > 解决方向：需 Pi 或 magic-context 支持在 RPC 模式下序列化这些自定义组件内容（例如让 `hasUI` 正确为 false 以走 fallback，或让 `custom()`/`setWidget()` 输出渲染文本）。
 
+> **2026-10 更新（见 §15）**：上述两项限制**已在 pi-web 侧解决，无需 Pi 或 magic-context 改动**。做法是随 `--extension` 注入一个桥接扩展，改写 `ctx.ui` 的方法自行渲染——`ctx.ui` 是 runner 的共享可变对象，实测能拦截其他扩展的调用。`setWidget(工厂)`、`custom()`、`setTheme` 与对话框均已实测可用。
+
 #### 其他暂不做
 
 - `/login`、`/logout` 等认证命令（RPC 不支持，需在 TUI 中操作）
@@ -521,6 +523,8 @@ pii r <name> --web [port]
 > 本节是 2025-08 的讨论结论，记录为**备选方案**，尚未决定实施。当前已实现并运行的仍是 RPC 桥接方案（§6）。
 >
 > **方案演进**：本节初稿记录的是「Pi 内置 WebMode」（改 Pi 源码）。后续调研发现 Pi 以**公开 npm 包 + SDK**形式发布，因此主推方案调整为「**独立 pi-web npm 包（SDK 客户端）**」——不改 Pi 本体，安装 pi-web 后接管 TUI 场景的职责。「改 Pi 内置 WebMode」降为次选（见 §14.5）。
+>
+> **2026-10 再演进（见 §15）**：实测发现「原生 pi + 注入桥接扩展」可在**不并行 SDK 副本**的前提下拿到等价 UI 能力，因此 SDK 宿主不再是唯一主推；它在迁移完成前仍是**在运行的实现**。
 
 ### 14.1 动机
 
@@ -590,7 +594,7 @@ pi-sdk-web（独立 npm 包，位于 pi-web 仓库 pi-sdk-web/ 子目录）
 | 维度 | 现状（RPC 桥接，pii） | 独立 SDK 客户端模块（pi-sdk-web） |
 |------|-----------------|---------------------------|
 | 改 Pi 本体 | 不改 | 不改 |
-| 扩展 UI 完整性 | 受 RPC 序列化限制（§6.16） | 完整（Web UI context） |
+| 扩展 UI 完整性 | 受 RPC 序列化限制（§6.16）→ **2026-10 起由注入桥接扩展补齐（§15）** | 完整（Web UI context） |
 | 事件/数据开销 | JSON line 编解码 + partial 剥离 | 零序列化，对象直接透传 |
 | 进程模型 | pii 编排 Python 服务 + Pi 子进程 | 单进程（pi-sdk-web 内部） |
 | Web 服务语言 | Python（标准库） | TypeScript（与 Pi SDK 同语言） |
@@ -716,6 +720,7 @@ pi-sdk-web 已实现并通过浏览器验收（本地提交，随本设计一起
 **为什么不能通过 pi 命令启动（SDK 模式）**：
 - SDK 模式本质是 **pi-web 进程 = 宿主 = Pi 运行时**（`createAgentSession*` 在 pi-web 进程内创建 AgentSession，UI 层由 pi-web 实现，与 `InteractiveMode` 平级）。宿主进程必须有入口，即 pi-web 自身 bin。
 - 若入口换成 pi 命令：`pi`（TUI）→ 消息流/输入框/footer 是 `InteractiveMode` 硬编码，pi-web 无法接管 UI，失去存在意义；`pi --mode rpc` → 回到 RPC 模式，序列化边界兼容性问题全部重现（setWidget 工厂函数丢弃、custom() no-op），且用户明确不采用。
+  > **2026-10 修正（见 §15）**：后半句的两个具体限制**不再成立**——随 `--extension` 注入的桥接扩展可在 pi 进程内改写 `ctx.ui`，实测拿到 `setWidget(工厂)`、`custom()`、`setTheme` 与对话框。「进程是 pi 的则 UI 归不了 pi-web」的结论因此被推翻：进程可以是 pi 的，UI 方法层仍归我们（代价是依赖共享可变 `ctx.ui` 这一未公开约定）。
 - 因此「SDK 模式 + 通过 pi 命令启动」自相矛盾：进程是 pi 的则 UI 归不了 pi-web；进程是 pi-web 的则 `argv[1]` 是 pi-web。
 
 **为什么没有配置项可启用 pi-sdk-web**：
@@ -729,3 +734,195 @@ pi-sdk-web 已实现并通过浏览器验收（本地提交，随本设计一起
 **进一步消除伪装依赖的方向**（待上游，非本项目可定）：
 1. magic-context 上游 `resolvePiInvocation` 修复（PR-350：仅当 `argv[1]` 匹配 `pi-coding-agent/dist/cli.js` 才复用为宿主 CLI）——合入后任何嵌入宿主不再被误判，pi-web 伪装可退役。
 2. magic-context 开放 `piBinary` 配置（`PiSubagentRunner` 构造函数已有 `options.piBinary`，仅缺配置入口）。
+
+## 15. 路线升级：原生 pi + 注入桥接扩展（RPC 通道 + 侧信道，2026-10 验证）
+
+> 本节记录一次方向性变更的讨论与**实测**结论。它直接修正 §6.16、§14.11 中「RPC 模式做不到完整 UI，因此必须内嵌 SDK」的前提——该前提在 Pi 1.2.0 上被实验推翻。§14（SDK 宿主）在迁移完成前仍是**已发布的运行形态**。
+
+### 15.1 动机
+
+| 维度 | §14 SDK 宿主（现状） | 纯 RPC（§6，已弃） | 本节方案（原生 pi + 注入扩展） |
+|---|---|---|---|
+| 引擎来源 | 包内 `node_modules` 的 pi-coding-agent（**并行副本**） | 已安装 `pi` 二进制 | 已安装 `pi` 二进制 |
+| 版本一致性 | 由我们的依赖决定 → Pi 升级后需**跟随发版**（0.6.2 / 0.6.5 即为此） | 天然同步 | 天然同步 |
+| 磁盘开销 | +51MB 副本 | 0 | 0 |
+| UI 能力 | 完整（我们就是 UI 层） | 受 RPC 固定接口限制 | **完整**（不完整的那部分由我们注入的扩展接管） |
+
+用户诉求明确：**直接调用原生 pi，不再并行一个不同版本的 pi-coding-agent**。而「RPC 接口固定、无法扩展」这一顾虑，恰好被「我们可以在 pi 进程内注入自己的扩展」化解——因为 `ctx.ui` 是 **runner 的单一共享可变对象**，扩展可以改写它的方法，于是**接口由我们定义**。
+
+### 15.2 实测证据（Pi 1.2.0，原型见 §15.10）
+
+原型：`pi --mode rpc --no-session --extension bridge.mjs --extension fake.mjs`，桥接扩展经 HTTP 侧信道（带 token）与 pi-web 侧通讯；`fake.mjs` 复刻 magic-context `TodoOverlay` 的**原版调用形态**（工厂只注册一次、后续靠 `tui.requestRender()` 更新、`placement:"aboveEditor"`）。**9/9 全通过**：
+
+| # | 验证项 | 结果 |
+|---|---|---|
+| 1 | RPC 通道存活（事件到达） | PASS |
+| 2 | bash 事件面经 RPC 到达（零 token，`bash_execution_*`） | PASS |
+| 3 | 对话框可用（桥接侧信道接管） | PASS |
+| 4 | **工厂 widget 被拦截并渲染** | PASS `[ ] task-1 (78) \| [ ] task-2 (78)` |
+| 5 | **`requestRender()` 触发再渲染**（更新到达） | PASS `… \| [ ] task-3 (78)` |
+| 6 | **`custom()` 面板被接管**，宿主返回值回传给调用方 | PASS `"HOST-PICKED-VALUE"` |
+| 7 | 扩展命令可执行（`prompt "/cmd args"`） | PASS `disposition:"handled"` |
+| 8 | `setTheme` 接管（RPC 原生返回 `{success:false}`） | PASS |
+| 9 | `mode`/`hasUI` 与现状一致（`rpc`/`true`，28 个 UI 方法） | PASS |
+
+**三个额外发现**：
+
+1. **RPC 的一个真实缺陷，且本方案能修**：RPC 模式下 stdin 在 `session_start` **之后**才挂载（`rpc-mode.ts:319` 绑定扩展 → `:806-813` 挂载 stdin），因此**在 `session_start` 内 await 对话框必然死锁**。对照实验：无桥接时 harness 已在 stdin 上作答，扩展侧仍 6 秒未 resolve；桥接接管对话框（走侧信道）后，同一场景 `confirm resolved = true`。→ 对话框必须由桥接接管，这既是保平，也是**修好**。
+2. **scoped models 缺口有解**：CLI 在**启动时**由 `parsed.models ?? settingsManager.getEnabledModels()` 解析 scoped 列表（`main.ts:813-817`）。用配置副本实测：`enabledModels` 改为 2 项 → 启动时 `ctx.scopedModels` 精确为那 2 项。→ 「改 scoped models」= 写 `settings.json` + **重启 pi 子进程**（对我们是廉价操作）。
+3. **与真实扩展共存无冲突**：同一次运行加载了用户全部真实扩展（命令表含 `ctx-status`/`ctx-flush`/`aft-status`/`multi-viewers`/…，25 个工具），scoped 列表正确读出用户 11 个模型，桥接与其并存无报错。
+
+### 15.3 架构分工
+
+```text
+浏览器 ←─WS（协议不变）─→ pi-web server
+                              │  ├─ HTTP/WS + token（侧信道）─→ [桥接扩展：在 pi 进程内接管 UI 方法层]
+                              │  └─ stdin/stdout JSON line（RPC）─→ [原生 pi 子进程 --mode rpc --session <id>]
+```
+
+| 通道 | 负责 | 依据 |
+|---|---|---|
+| **RPC**（stdin/stdout） | 命令：`prompt` / `abort` / `abort_bash` / `bash` / `compact` / `cycle_*` / `set_model` / `set_thinking_level` / `get_state` / `get_entries` / `get_messages` / `set_session_name` / `switch_session` / `new_session` / `fork` / `clone` / `export_html` / `get_commands` / `get_session_stats` …（dispatch 实测 **33 项**，另有 `extension_ui_response` 在 dispatch 之前单独处理） | `rpc-mode.ts` dispatch |
+| | **全部 session 事件**：`session.subscribe(event => output(toJsonEvent(event)))`（与我们今天 SDK 宿主订阅的是**同一个流**） | `rpc-mode.ts:355-356` |
+| **桥接扩展**（侧信道） | RPC 丢掉或需接管的 UI 方法：`setWidget(工厂)`、`custom()`、`setTheme`、对话框 `select/confirm/input/editor`（并修掉启动期死锁） | 实测 |
+| | 我们自定义的命令/工具/渲染器（`registerCommand` / `registerTool` / `registerMessageRenderer` / `registerEntryRenderer` / `registerToolRenderer`） | `ExtensionAPI` |
+
+**环境变量与注入方式**（照抄 pi-vscode 的范式，方向相反）：`--extension <bridge.js>` + `PI_WEB_BRIDGE_URL` + `PI_WEB_BRIDGE_TOKEN`。
+
+### 15.4 能力对照（现状 SDK 宿主 vs 本节方案）
+
+| 能力 | SDK 宿主（现状） | RPC 原生 | 本节方案 |
+|---|---|---|---|
+| 消息/工具块/thinking 事件流 | ✅ | ✅（全量转发） | ✅ |
+| 对话框 select/confirm/input/editor | ✅ | ✅（**启动期死锁**） | ✅（桥接接管，含启动期） |
+| ext-status / notify / 字符串 widget | ✅ | ✅ | ✅ |
+| **工厂 widget（`/todos` 等）** | ✅ | ❌ 静默丢弃 | ✅ **改写 setWidget** |
+| **`custom()` 面板** | ❌（现状返回 undefined） | ❌ 返回 undefined | ✅ **改写 custom()**（比现状更强） |
+| **theme 切换** | ✅（自有 UI context） | ❌ `{success:false}` | ✅ **改写 setTheme** |
+| 扩展命令（`/aft-status` 等） | ✅ 直调 `extensionRunner.getCommand` | ✅ 经 `prompt "/cmd"`（`agent-session.ts:2060-2063`） | ✅ |
+| 会话操作 new/fork/switch/reload | ✅ | ✅（`commandContextActions` 已绑定） | ✅ |
+| 模型/thinking | ✅ | ✅ `set_model` / `set_thinking_level` | ✅ |
+| **scoped models 点选** | ✅ `session.setScopedModels`（`agent-session.ts:1671`） | ❌ 无命令 | ⚠️ 写 `settings.json`（`enabledModels`）+ 重启子进程 |
+| TUI-only no-op 项（`setWorkingIndicator`/`setFooter`/`setHeader`/`getEditorText`/`setEditorComponent`…） | ❌ 现状也是 no-op | ❌ no-op | ⭕ 可选增强（按需接管） |
+| 引擎版本 | 跟依赖走（需发版） | 跟已安装 pi 走 | 跟已安装 pi 走 |
+| 并行副本 | 51MB | 0 | 0 |
+
+### 15.5 关键机制与源码依据
+
+| 机制 | 依据 | 说明 |
+|---|---|---|
+| `ctx.ui` 是共享可变对象 | `runner.ts:890-893`（`get ui() { return runner.uiContext }`） | 拦截/改写能影响**所有**扩展；这是本方案成立的根基 |
+| 扩展**不能**替换整个 UI context | `ExtensionAPI` 无 `bindUI`/`setUIContext` | 只能逐方法改写，不是官方扩展点 |
+| `hasUI` 语义 | `runner.ts:628-630`（`uiContext !== noOpUIContext`） | RPC 下为 `true`，与现状一致 |
+| `mode` 取值 | `types.ts:323`：`"tui" \| "rpc" \| "json" \| "print"` | 现状我们报 `"rpc"`（`server.ts:219`）→ **零语义回归** |
+| 扩展命令经 prompt 可达 | `agent-session.ts:2058-2063` | 文本以 `/` 开头时先尝试扩展命令 |
+| 会话控制可用 | `ExtensionCommandContext`：`newSession`/`fork`/`navigateTree`/`switchSession`/`reload`/`waitForIdle`；RPC 已绑定 `commandContextActions` | |
+| 事件瘦身 | `json-event.ts`：`toJsonEvent` 剥掉 delta 的 `partial` 字段（`toolcall_start` 保留 `id`/`toolName`） | ⚠️ 待核对前端是否依赖 `partial`；若依赖，桥接可用 `pi.on("message_update")` 从侧信道补发 |
+| scoped models 来源 | `main.ts:813-817` + `agent-session.ts:489/1671` | 启动时解析，运行时仅 SDK 可改 |
+
+### 15.6 已确认的设计决策
+
+1. **目标方向**：pi-web 的引擎改为 **spawn 已安装的 `pi --mode rpc`**，内嵌 SDK 依赖最终移除（消除并行副本与版本漂移）。
+2. **注入桥接扩展**（`--extension`）承担 RPC 缺失的 UI 方法层，侧信道鉴权用 token（localhost）。
+3. **对话框由桥接接管**（而非复用 RPC 原生转发）——因为 RPC 原生在 `session_start` 期间必死锁。
+4. **RPC 仍作为命令与事件通道**，不重复造轮子；桥接只补缺口，不做全量转发。
+5. **前端不改**：WS 协议（state / history / 事件 / 对话框 / 命令）保持不变，只替换服务端适配层。
+6. **scoped models** 采用「写 `settings.json` + 重启 pi 子进程」，不追求运行时即时生效（TUI 同样是启动时读取）。
+7. **降级策略**：桥接改写属未公开内部约定，必须**特性探测**（`typeof ui.setWidget === "function"` + 改写是否生效）并在失败时退回 RPC 原生行为（功能降级为「工厂 widget 不显示」，不影响会话可用性）。
+
+### 15.7 风险与开放问题
+
+| # | 风险/问题 | 现状与缓解 |
+|---|---|---|
+| 1 | 依赖未公开内部约定（共享可变 `ctx.ui`） | 1.2.0 实测成立；若上游 freeze 或改为 per-extension context 则失效 → 特性探测 + 降级 |
+| 2 | 对话框语义需自实现（`signal`/`timeout`/默认值/分档超时） | 现有 `ui-context.ts` 已实现该语义，迁移时平移 |
+| 3 | `toJsonEvent` 剥掉 `partial` | **开放问题**：核对前端依赖；必要时桥接补发 |
+| 4 | 两进程 + 侧信道（鉴权、生命周期、子进程重启） | pi-vscode 有同构范式；本仓库 `server/`（Python RPC 时代）亦有可复用经验 |
+| 5 | 桥接扩展会出现在用户 Extensions 列表 | 需标注来源（如 `pi-web (bridge)`），并在文档说明用途 |
+| 6 | 启动期对话框死锁这一 RPC 缺陷 | 已由决策 3 覆盖；若将来上游修复 stdin 时序，可简化但不能依赖 |
+| 7 | `pii`（Python RPC 桥）与本方案的关系 | 本节方案在 TS 侧重建 RPC 通道；`pii` 保留为用户入口与「RPC 版」实现，是否收敛待迁移完成后再定 |
+
+### 15.8 迁移步骤（阶段化，尚未实施）
+
+| 阶段 | 内容 | 完成判据 |
+|---|---|---|
+| A | 服务端抽象「引擎接口」，SDK 实现与 native 实现并列（如 `--engine sdk\|native`） | 两种引擎都能起服务，前端无感 |
+| B | 实现 RPC 客户端（TS）+ 桥接扩展（把 `ui-context.ts` 语义搬入）+ 侧信道 server（复用现有 WS 协议） | §15.2 的 9 项在真实架构内复现 |
+| C | 逐项对齐：history 走 `get_entries`；会话列表/删除沿用文件操作；scoped models 走 settings+重启；theme 走桥接 | 与现状功能清单逐条对齐 |
+| D | 端到端冒烟：现有 42 项扩展为覆盖两种引擎，真实会话跑通 | 全绿后把 `native` 设为默认 |
+| E | 移除 `pi-coding-agent` 依赖（或降为可选），更新发布说明 | 包体积与依赖树明显缩小 |
+
+### 15.9 与 §14 路线的关系
+
+- §14（SDK 宿主）是**已发布的运行形态**，仍然是「能拿到完整 UI」的**参照实现**：它的 `ui-context.ts` 就是桥接扩展要移植的语义来源。
+- §14.5/§14.11 中「RPC 不可用」的结论**已被本节实测修正**：不是 RPC 变好了，而是我们找到了在 pi 进程内扩展接口的手段。
+- 两者短期**并存**（阶段 A 的 `--engine`），迁移稳定后 SDK 路线可降为历史方案；在 native 通过真实使用验证前**不删除** SDK 实现。
+
+### 15.10 原型与复现
+
+原型文件（临时目录，实施阶段 B 时移入仓库 `experiments/`）：
+
+| 文件 | 作用 |
+|---|---|
+| `/tmp/proto/bridge.mjs` | 桥接扩展：改写 `setWidget`(工厂)/`custom`/`setTheme`/对话框，注册命令，转发事件 |
+| `/tmp/proto/fake-extension.mjs` | 复刻第三方扩展的调用形态（TodoOverlay 模式 + custom + confirm + setTheme） |
+| `/tmp/proto/harness.mjs` | 侧信道 server（token 鉴权）+ spawn 原生 pi + 断言 9 项 |
+| `/tmp/proto/deadlock-harness.mjs` | 启动期对话框死锁的对照实验（有/无桥接接管） |
+
+桥接扩展骨架（关键部分，语义与 `ui-context.ts` 一致）：
+
+```js
+export default function (pi) {
+  const url = process.env.PI_WEB_BRIDGE_URL;
+  const token = process.env.PI_WEB_BRIDGE_TOKEN;
+  if (!url || !token) return;
+  const post = (path, body) =>
+    fetch(url + path, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-pi-web-token": token },
+      body: JSON.stringify(body ?? {}),
+    }).then((r) => r.json().catch(() => undefined));
+
+  pi.on("session_start", async (_event, ctx) => {
+    const ui = ctx.ui;
+    // 1) 工厂 widget（RPC 会静默丢弃）：自己渲染并在 requestRender 时重渲染
+    const origSetWidget = ui.setWidget.bind(ui);
+    ui.setWidget = (key, content, options) => {
+      if (typeof content !== "function") return origSetWidget(key, content, options);
+      let component;
+      const render = (update) => post("/widget", { key, lines: component.render(78), update: !!update });
+      component = content({ requestRender: () => render(true), invalidate() {} }, ui.theme);
+      render(false);
+    };
+    // 2) custom() 面板：渲染组件并取宿主返回的结论
+    ui.custom = async (factory, options) => {
+      let done;
+      const settled = new Promise((r) => (done = r));
+      const component = await factory({ requestRender() {}, invalidate() {} }, ui.theme, {}, (v) => done(v));
+      const answer = await Promise.race([post("/panel", { title: options?.title, lines: component.render(78) }), settled]);
+      return answer?.value;
+    };
+    // 3) 对话框：必须在启动期就可用（RPC 原生会死锁）
+    const ask = async (method, payload, fallback) => {
+      const a = await post("/dialog", { method, ...payload });
+      return !a || a.cancelled ? fallback : method === "confirm" ? !!a.value : (a.value ?? fallback);
+    };
+    ui.confirm = (title, message) => ask("confirm", { title, message }, false);
+    ui.select = (title, options) => ask("select", { title, options }, undefined);
+    ui.input = (title, placeholder) => ask("input", { title, placeholder }, undefined);
+    ui.editor = (title, prefill) => ask("editor", { title, prefill }, undefined);
+    // 4) theme（RPC 原生返回 success:false）
+    ui.setTheme = (name) => (void post("/theme", { name }), { success: true });
+  });
+
+  pi.registerCommand("pi-web:ping", { description: "pi-web bridge probe", handler: async (args) => post("/command", { args }) });
+}
+```
+
+复现命令（零 token，除 `prompt` 那步只走扩展命令不进模型）：
+
+```bash
+cd /tmp/proto && node harness.mjs              # 9/9
+node deadlock-harness.mjs                      # 对照组：启动期对话框死锁
+node deadlock-harness.mjs --bridge             # 桥接接管：resolve = true
+```
