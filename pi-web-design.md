@@ -787,6 +787,23 @@ pi-sdk-web 已实现并通过浏览器验收（本地提交，随本设计一起
 2. **scoped models 缺口有解**：CLI 在**启动时**由 `parsed.models ?? settingsManager.getEnabledModels()` 解析 scoped 列表（`main.ts:813-817`）。用配置副本实测：`enabledModels` 改为 2 项 → 启动时 `ctx.scopedModels` 精确为那 2 项。→ 「改 scoped models」= 写 `settings.json` + **重启 pi 子进程**（对我们是廉价操作）。
 3. **与真实扩展共存无冲突**：同一次运行加载了用户全部真实扩展（命令表含 `ctx-status`/`ctx-flush`/`aft-status`/`multi-viewers`/…，25 个工具），scoped 列表正确读出用户 11 个模型，桥接与其并存无报错。
 
+**端到端原型（2026-10，`experiments/rpc-bridge/`，见 §15.10）**——机制验证之后又做了一次「**不改前端**」的整体验证：服务端改为「spawn 原生 pi + 桥接扩展」，复用仓库 `static/` 与同一套 WS 协议：
+
+| 验证项 | 结果 |
+|---|---|
+| **既有冒烟套件 42 项**（含静态文件一致性、state/history 快照、Extensions builtin 标注） | **42/42 通过** |
+| bash：UI → WS → RPC → 事件 → 渲染 | 通过（`tool-block success` + 输出） |
+| 工厂 widget：「扩展 → 侧信道 → 服务端 → 浏览器」渲染 | 通过 |
+| `requestRender()` 增量更新（TodoOverlay 的更新方式） | 通过（render #1 → #2） |
+| 对话框：浏览器点击 → 服务端 → 桥接 → `ctx.ui.confirm()` 返回值 | 通过（桥接收到 `answer: true`） |
+| `setWidget(key, undefined)` 移除 widget | 通过（修复生命周期后，见下） |
+| 页面错误 | 0 |
+
+**原型暴露的两个必须处理的机制点**：
+
+- **widget 生命周期要由桥接接管**：TUI 下组件由 TUI 管理（移除时 `invalidate()`）。我们改写 `setWidget` 后若不自己管，扩展的更新定时器会让面板「复活」——实测：`setWidget(key, undefined)` 之后组件仍在 `requestRender()`，面板重新出现。修法：按 key 记录 active 状态，移除时置 inactive 并调用 `invalidate?.()`，丢弃迟到的更新。
+- **`bash` 的 id 对齐**：RPC 用**命令信封 id** 作为 `executeBash` 的 id（出现在 `bash_execution_update` 事件里），而前端用自己生成的 `bash-<ts>` 关联流式块；服务端须把两者对齐。且 RPC **不发** `bash_result` 事件，需服务端合成。
+
 ### 15.3 架构分工
 
 ```text
@@ -832,7 +849,9 @@ pi-sdk-web 已实现并通过浏览器验收（本地提交，随本设计一起
 | `mode` 取值 | `types.ts:323`：`"tui" \| "rpc" \| "json" \| "print"` | 现状我们报 `"rpc"`（`server.ts:219`）→ **零语义回归** |
 | 扩展命令经 prompt 可达 | `agent-session.ts:2058-2063` | 文本以 `/` 开头时先尝试扩展命令 |
 | 会话控制可用 | `ExtensionCommandContext`：`newSession`/`fork`/`navigateTree`/`switchSession`/`reload`/`waitForIdle`；RPC 已绑定 `commandContextActions` | |
-| 事件瘦身 | `json-event.ts`：`toJsonEvent` 剥掉 delta 的 `partial` 字段（`toolcall_start` 保留 `id`/`toolName`） | ⚠️ 待核对前端是否依赖 `partial`；若依赖，桥接可用 `pi.on("message_update")` 从侧信道补发 |
+| 事件瘦身 | `json-event.ts`：`toJsonEvent` 剥掉 delta 的 `partial` 字段（`toolcall_start` 保留 `id`/`toolName`） | ✅ **已核对（2026-10）**：前端只用 `ev.partialResult`（`tool_execution_update` 的字段，不受影响）与 `assistantMessageEvent.delta`，**不依赖 `partial`** → 无需桥接补发 |
+| widget 生命周期 | TUI 负责组件 `invalidate()`；桥接接管后须自行处理，否则移除后会被 `requestRender()` 复活 | 原型实测发现（见 §15.2） |
+| `bash_result` | RPC 不发送该事件；前端靠它定稿 bash 块（`id` 关联） | 服务端合成（原型已验证） |
 | scoped models 来源 | `main.ts:813-817` + `agent-session.ts:489/1671` | 启动时解析，运行时仅 SDK 可改 |
 
 ### 15.6 已确认的设计决策
@@ -851,7 +870,7 @@ pi-sdk-web 已实现并通过浏览器验收（本地提交，随本设计一起
 |---|---|---|
 | 1 | 依赖未公开内部约定（共享可变 `ctx.ui`） | 1.2.0 实测成立；若上游 freeze 或改为 per-extension context 则失效 → 特性探测 + 降级 |
 | 2 | 对话框语义需自实现（`signal`/`timeout`/默认值/分档超时） | 现有 `ui-context.ts` 已实现该语义，迁移时平移 |
-| 3 | `toJsonEvent` 剥掉 `partial` | **开放问题**：核对前端依赖；必要时桥接补发 |
+| 3 | `toJsonEvent` 剥掉 `partial` | ✅ **已结案**：前端不依赖 `partial`（只用 `partialResult` 与 `delta`，见 §15.5），无需补发 |
 | 4 | 两进程 + 侧信道（鉴权、生命周期、子进程重启） | pi-vscode 有同构范式；本仓库 `server/`（Python RPC 时代）亦有可复用经验 |
 | 5 | 桥接扩展会出现在用户 Extensions 列表 | 需标注来源（如 `pi-web (bridge)`），并在文档说明用途 |
 | 6 | 启动期对话框死锁这一 RPC 缺陷 | 已由决策 3 覆盖；若将来上游修复 stdin 时序，可简化但不能依赖 |
@@ -880,11 +899,25 @@ pi-sdk-web 已实现并通过浏览器验收（本地提交，随本设计一起
 
 ### 15.10 原型与复现
 
-原型文件（临时目录，实施阶段 B 时移入仓库 `experiments/`）：
+**端到端原型（已入库，推荐从这里入手）：`experiments/rpc-bridge/`**
 
 | 文件 | 作用 |
 |---|---|
-| `/tmp/proto/bridge.mjs` | 桥接扩展：改写 `setWidget`(工厂)/`custom`/`setTheme`/对话框，注册命令，转发事件 |
+| `experiments/rpc-bridge/server.mjs` | HTTP 静态服务（复用仓库 `static/`）+ WS 协议 + RPC 客户端 + 侧信道服务端 |
+| `experiments/rpc-bridge/bridge.mjs` | 注入 pi 的桥接扩展：接管工厂 widget / `custom()` / 对话框 / `setTheme`，上报 cwd/scopedModels/commands/tools/extensions |
+| `experiments/rpc-bridge/README.md` | 运行方式、已验证结果、**已知缺口清单** |
+
+```bash
+node experiments/rpc-bridge/server.mjs --session install --port 4096   # 终端 1
+node tools/smoke.mjs http://127.0.0.1:4096                            # 终端 2（42 项，零 token）
+# 手工复验桥接能力：/pi-web:demo-widget、/pi-web:demo-clear、/pi-web:demo-dialog、/pi-web:reload
+```
+
+**机制验证原型（临时目录，价值在对照实验）**：
+
+| 文件 | 作用 |
+|---|---|
+| `/tmp/proto/bridge.mjs` | 桥接扩展（最小版）：改写 `setWidget`(工厂)/`custom`/`setTheme`/对话框 |
 | `/tmp/proto/fake-extension.mjs` | 复刻第三方扩展的调用形态（TodoOverlay 模式 + custom + confirm + setTheme） |
 | `/tmp/proto/harness.mjs` | 侧信道 server（token 鉴权）+ spawn 原生 pi + 断言 9 项 |
 | `/tmp/proto/deadlock-harness.mjs` | 启动期对话框死锁的对照实验（有/无桥接接管） |
