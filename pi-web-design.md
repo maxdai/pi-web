@@ -900,7 +900,7 @@ pi-sdk-web 已实现并通过浏览器验收（本地提交，随本设计一起
 | B | 实现 RPC 客户端（TS）+ 桥接扩展（把 `ui-context.ts` 语义搬入）+ 侧信道 server（复用现有 WS 协议） | §15.2 的 9 项在真实架构内复现 | **已完成**（`experiments/rpc-bridge/`） |
 | C | 逐项对齐：history 走 `get_entries`；会话列表/删除沿用文件操作；scoped models 走 settings+重启；theme / panels / usage / export 对齐 | 与现状功能清单逐条对齐 | **大部分完成**（§15.2 缺口补齐表；余 `.jsonl` 导出、面板按键交互、scoped models 重启、自定义 session 目录） |
 | D | 端到端冒烟：现有 42 项扩展为覆盖两种引擎，真实会话跑通 | 全绿后把 `native` 设为默认 | 部分：冒烟 **42/42 已在 native 上通过**，尚未扩为覆盖两引擎 |
-| E | **移除 SDK 引擎**：删除 `pi-coding-agent`/`pi-agent-core` 依赖与 SDK 宿主实现（含 `ui-context.ts`，语义已在阶段 B 移植进桥接扩展），更新发布说明 | 依赖树中不再有 pi-coding-agent；`native` 为唯一引擎 | 未做 |
+| E | **移除 SDK 引擎**：删除 `pi-coding-agent`/`pi-agent-core` 依赖与 SDK 宿主实现（含 `ui-context.ts`，语义已在阶段 B 移植进桥接扩展）；并按 §15.13 决策一并去掉整个 TypeScript 构建链、包改为 `@maxdai/pi-web@1.0.0` | 依赖树中不再有 pi-coding-agent；`native` 为唯一引擎；包内无 TS 产物 | **方案已定稿（§15.13），未实施** |
 
 ### 15.9 与 §14 路线的关系（终态：替换，而非并存）
 
@@ -1252,6 +1252,52 @@ pi-web-native <session-id> <cwd> --port <n>          # 对应 server.py <session
 **验证**：正常环境 1200px 视口 → 143 列、无折行；**模拟全角回退**（强制 `IPAGothic`）→ 缩至 8px 仍超宽 → 退横向滚动，视觉行 (26) = 内容行 (26) → 无折行；用户浏览器实测面板满宽、框图完整。
 
 **教训（要长期记住）**：*列数* 只有在"所有字符等宽"时才等价于像素宽度；制表符/框图/CJK/emoji 都可能触发字体回退而改变宽度。任何"按列数渲染"的适配都必须以**最宽字符类**为准，并对不可控的字体差异留兜底；同时诊断日志要能自证（带上中间量），否则只能靠猜。
+
+### 15.13 阶段 E 实施方案（2026-10-14 讨论定稿）
+
+#### 15.13.1 决策记录
+
+| # | 决策点 | 结论 | 理由 / 关键事实 |
+|---|---|---|---|
+| 1 | `pi-web` 命令去向 | **薄壳**：保留 `pi-web r <name> [--port]`，实现为"会话名解析 + 堆上限处理 + 转调原生引擎" | 不改用户肌肉记忆；`cli.ts` 里真正有价值的部分（堆重启、名字解析、usage 文本）保留，SDK 宿主整块删除 |
+| 2 | `usage-render` 归属 | **迁入 `native/usage-render.mjs`**（TS→JS） | 该模块**零 SDK 依赖**（只用 node:fs/path/os），迁走后原生引擎自包含、不再跨目录 import |
+| 3 | 是否连 TS 构建链一起去掉 | **是**：全部运行期代码改为 `native/*.mjs`，删 `src/`、`tsconfig.json`、`tsc`/`tsx` devDeps | 与决策 2 连带的必然结果；终态 `build` 只剩"拷资产"，依赖只剩 `ws`，漂移面最小 |
+| 4 | 包名与版本 | **`@maxdai/pi-web` + `1.0.0`** | ⚠️ **npm 上 `pi-web` 已被占用**（`ravshansbox/pi-web` 0.15.0，描述同为 "Web UI for the pi coding agent"，同赛道）；作用域包 `@maxdai/*` 必然可用。1.0.0 标记破坏性变更。**bin 名与包名无关**，用户的 `pi-web`/`pii`/`pi-web-native` 命令一律不变，只有安装/升级命令变为 `npm install -g @maxdai/pi-web` |
+| 5 | 宿主契约核对器 | **迁到 `tools/host-contract/` 并接入流程**：发版前 / Pi 升级后各跑一次 | E 之后无法再做 SDK↔native 的 A/B，核对器成为唯一的"Pi 升级体检"手段 |
+
+#### 15.13.2 目标文件布局
+
+| 项 | 现在 | E 之后 |
+|---|---|---|
+| 运行期代码 | `src/*.ts`（2100 行 SDK 宿主）+ `native/*.mjs` | 仅 `native/*.mjs`：`server.mjs`（引擎）、`bridge.mjs`（注入扩展）、`usage-render.mjs`、`cli.mjs`（`pi-web` 薄壳）、`pii-cli.mjs`（`pii` 的 Node 包装器） |
+| 构建 | `tsc` + 拷资产 | 仅 `node scripts/build-assets.mjs`（拷 `static/`、`pii/pii`、`native/*.mjs`，补执行位） |
+| 依赖 | `pi-agent-core`、`pi-coding-agent`、`ws` | **仅 `ws`** |
+| 包内产物 | `dist/{cli,server,session,ui-context,usage-render,log}.js`、`dist/pi-bin/server/*.py` | `dist/native/*.mjs`、`dist/static/*`、`dist/pi-bin/pii`、`dist/pi-bin/pii-cli.mjs` |
+| 遗产 Python RPC 服务 | 仓库 `server/*.py`，并拷进 `dist/pi-bin/server/` | **删除**（已无调用方） |
+| 包名 / 版本 | `pi-sdk-web` | `@maxdai/pi-web` @ **1.0.0** |
+| 目录名 | `pi-sdk-web/` | **保持不动**（避免大面积引用改动；单独一次重命名可后续做） |
+
+#### 15.13.3 迁移步骤（按序，每步可验证）
+
+1. **前置**：① 用户在原生引擎上日常用顺一段时间；② 补一次**有记录的两引擎 A/B**（同一会话分别起 SDK 与 native：命令菜单、`/ctx-status`、`/aft-status`、`/usage`、统计、Ctrl+C 退出）替代 §15.8 阶段 D 的"冒烟扩两引擎"；③ 核对器迁到 `tools/host-contract/` 并跑通（基线不变）。
+2. **搬迁（不删功能）**：`usage-render.ts → native/usage-render.mjs`；`cli.ts` 拆出 `native/cli.mjs`（薄壳）；`pii-cli.ts → native/pii-cli.mjs`；`native/server.mjs` 的 usage import 改为同目录 `./usage-render.mjs`；`build-assets.mjs` 改为拷贝 `native/*.mjs` 并补执行位。
+3. **包改造**：`name=@maxdai/pi-web`、`version=1.0.0`、`dependencies={ws}`、`bin={pi-web: dist/native/cli.mjs, pi-web-native: dist/native/server.mjs, pii: dist/pi-bin/pii-cli.mjs}`、`scripts.build=node scripts/build-assets.mjs`；移除 `dev`/`verify`（verify 是 SDK 专用）与 TS 相关 devDeps。
+4. **删除**：`src/`、`tsconfig.json`、`server/`（Python RPC）、build-assets 中的 server 拷贝、`dist/pi-bin/server/`。
+5. **`pii` 项目根探测更新**：现有实现用"`<parent>/server` 是否存在"判断仓库根，`server/` 删除后该启发式失效 → 改用 `native/`（或 `.git`）作为标记；同时更新 `_native_server_cmd` 的候选路径。
+6. **验证（全绿才算完成）**：`npm run build` 产物正确且无 TS 残留；三条入口都可用（`pi-web r <name>`、`pii r <name> --web`、`pi-web-native <id> <cwd> --port`）；冒烟 42/42；`/usage` 有数据；`/ctx-status`、`/aft-status` 面板不折行；Ctrl+C 字节流干净（pty 复现）；`npm ls --all` 无 `pi-coding-agent`/`pi-agent-core`；宿主契约核对器全绿。
+7. **文档与发版**：README 改单引擎表述 + 安装命令改 `@maxdai/pi-web` + 发布流程加"跑核对器"；AGENTS 更新引擎说明；设计文档 §14/§15.8/§15.9 状态收口；发布 `@maxdai/pi-web@1.0.0`，并 **`npm deprecate pi-sdk-web@'<1.0.0' "已迁移到 @maxdai/pi-web"`** 指向新包。
+8. **用户侧升级**：`npm uninstall -g pi-sdk-web && npm install -g @maxdai/pi-web`（先卸载再装，避免 bin 同名指向旧包）。
+
+#### 15.13.4 风险与回退
+
+| 风险 | 处置 |
+|---|---|
+| TS→JS 移植引入低级错误 | 步骤 6 的验证清单覆盖 usage 数据、面板、退出、冒烟；移植时逐个文件对照原实现 |
+| bin 同名冲突（`pi-web` 同时存在于新旧包） | 用户侧"先卸载旧包再装新包"；发版说明写清 |
+| 失去 SDK 引擎后无 A/B | 前置步骤 ② 留下 A/B 记录；回退靠 `git revert` + 不发布新版本 |
+| Pi 升级破坏桥接依赖的约定 | 核对器接入流程（决策 5），发版前/Pi 升级后必跑 |
+| 目录名 `pi-sdk-web/` 与实际不符 | 记录为不一致项；单独一次重命名处理（低优先） |
+
 
 ## 16. 宿主（Pi）依赖与兼容性核对清单
 
