@@ -1181,6 +1181,14 @@ pi-web-native <session-id> <cwd> --port <n>          # 对应 server.py <session
 | **同会话并发写保护** | 同一 `.jsonl` 已被另一个**原生 web 实例**占用时在界面提示：每个实例把 `PI_WEB_BRIDGE_SESSION=<会话文件>` 注入 pi 子进程环境，扫 `/proc/<pid>/environ` 可靠命中。**TUI 无法可靠检测**（2026-10 实测：pi 用 `process.title` 覆写 argv、会话文件写完即关、Pi 无任何锁机制）——为避免误报不对 TUI 做猜测，仅记录该边界 |
 | 端口/cwd 校验 | 与 Python 版一致（见 §17.2） |
 
+**Ctrl+C 的退出次序（2026-10-14 实测定位并修复）**：Ctrl+C 会把 SIGINT 送给**整个前台进程组**（pii + 服务端 + pi 子进程），服务端因此自行优雅关停（杀 pi 子进程、关 socket、打印收尾日志）。
+若 `pii` 收到 KeyboardInterrupt 就**立刻 `sys.exit`**，则 bash 会先打印提示符，而服务端仍在关停、它的收尾日志会**落到提示符之后**（现象：提示符后多一行/被顶掉，且带不确定性）。修法两条：
+
+- `pii` 的 `--web` 分支改为 `Popen` + `wait()`：首次 Ctrl+C 后**继续等子进程**收尾（上限 5s，超时或再次 Ctrl+C 才 `kill`），**不再自己 `print()` 空行**（服务端输出自带换行）；
+- 实测（pty 逐字节）：修复前 `…关停…\r\n\r\n bash提示符 [pi-web] pi子进程已退出…\r\n \r\n`，修复后连续 3 次均为 `…关停…\r\n[pi-web] pi子进程已退出…\r\n bash提示符`，干净且确定。
+
+**会话解析三种入口（语义不可混）**：位置参数 ` <session-id> [cwd]` 按 header `id` 匹配（pii 的调用契约）；`--session <name>` 按**显示名**匹配（含 `"(unnamed)"`）；`--session-file <path>` 直接指定。曾把位置参数与 `--session` 合并且都按 id 匹配 → `--session <name>` 静默失效（2026-10-14 修复）。
+
 ### 17.5 切换后仍存在的缺口（明确记录，不视为 bug）
 
 - **scoped models 改动需重启 pi 子进程**（实测 `ctx.reload()` 不重算；§15.11）
