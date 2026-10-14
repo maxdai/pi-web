@@ -103,6 +103,9 @@ pii r <name> --web <port>   # Web 服务，使用指定端口
 - **重要**：发版（`npm publish`）前必须先向用户确认「是否修改完成」——用户可能还在调整中，未经确认不得发版；本地 `git commit` 不受此限制。
 - 版本号由用户确认后提升；用户设备升级命令 `npm install -g pi-sdk-web@latest`。
 - **发版是一系列动作，一次全部完成，不得遗漏**：① `git push --follow-tags`（推送 GitHub）→ ② `npm publish`（发布 npm）→ ③ `npm install -g pi-sdk-web@<版本>`（更新本机全局安装）。三步按序执行并各自验证。
+  - **tag 必须用附注 tag**（`git tag -a vX.Y.Z -m "Release pi-sdk-web X.Y.Z"`）：`--follow-tags` **只推附注 tag**，
+    轻量 tag 会被静默跳过（2026-10 实测：`v0.7.0`~`v0.7.5` 六个 tag 因此都没上远端，后以 `git push origin --tags` 补推）。
+    推送后用 `git ls-remote --tags origin` 核对远端确实有该 tag。
 - **动作链执行前必须获得用户明确确认**（用户说出"发版 / 可以发版"等指令后才可执行）；用户仅说"修改完成"不算执行指令——需再确认是否执行发版动作链。
 
 ## 5. 目录结构（提议，以实际为准）
