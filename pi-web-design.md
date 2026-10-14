@@ -1015,7 +1015,7 @@ node deadlock-harness.mjs --bridge             # 桥接接管：resolve = true
 
 | 差异 | 说明 | 影响 |
 |---|---|---|
-| **scoped models 即时生效** | SDK 走 `session.setScopedModels()` 立即生效；原生只能写 `settings.json`。**实测 `ctx.reload()` 不会重算 scoped models**（改 `enabledModels` 后 reload，`ctx.scopedModels` 仍是旧值）→ 必须**重启 pi 子进程** | `/scoped-models` 改动与页脚模型列表要重启后才反映（未实现自动重启） |
+| **scoped models 即时生效** | SDK 走 `session.setScopedModels()` 立即生效；原生只能写 `settings.json`。**实测 `ctx.reload()` 不会重算 scoped models**（改 `enabledModels` 后 reload，`ctx.scopedModels` 仍是旧值）→ 必须**重启 pi 子进程**（原因见下「API 缺口」） | `/scoped-models` 改动与页脚模型列表要重启后才反映（未实现自动重启）。**注意：现 SDK 引擎是即时生效的，直接迁移会回退这个功能** |
 | **`.jsonl` 导出** | SDK 有 `session.exportToJsonl`；RPC 只有 `export_html` | 原生下 `.jsonl` 导出以降级提示代替 |
 | **非功能性** | SDK 宿主有 WS 背压与堆水位保护、`PI_SESSION_DIR`/自定义配置目录解析；原型无（原型服务端很薄，pi 子进程自带内存策略） | 极端流量/自定义目录场景下的健壮性与解析差异 |
 
@@ -1025,6 +1025,30 @@ node deadlock-harness.mjs --bridge             # 桥接接管：resolve = true
    - **附带好消息**：原生目录是 Pi 自己的目录，**包含** `deepinfra/zai-org/GLM-5.3-Flash` —— 正是 §14 时期 SDK 宿主看不到、需要 `modelRuntime.refresh()` 兜的那个模型。原生路由在**目录保真度上反而更强**（无 catalog swap 时序问题）。
 2. **生效机制（架构性差异，仍在）**：TUI/SDK 都在**进程内**，切换时直接 `session.setScopedModels(...)`（`interactive-mode.ts:5418`）→ 立即生效；只有显式保存才 `settingsManager.setEnabledModels()`（`:5456`）。原生路由**在进程外**：RPC 命令表没有 scoped-models 命令，ExtensionAPI 也没有对应方法，且**实测 `ctx.reload()` 不会重算 scopedModels**（改 `enabledModels` 后 reload，值不变）→ 唯一路径是**写 settings + 重启 pi 子进程**。
    - 因此原生侧当前语义：**勾选不生效也不落盘**（给提示），**保存才写 settings、重启后生效**。要做到 TUI 那样的即时生效，需要实现"保存后自动重启子进程"（未实现，见 §15.11 差异表）。
+
+**为什么扩展改不了 scoped models（API 缺口；2026-10 查证，含运行时实证）**
+
+结论：**不是架构上的不可能**（桥接扩展确实在进程内），而是 **Pi 没有向扩展暴露这个写操作**。
+
+| 证据 | 出处 / 实测 |
+|---|---|
+| 扩展运行时**只绑了读**：`getScopedModels: () => this._scopedModels`，无对应 setter | `agent-session.ts` 的 `bindCore` actions；`grep -rn setScopedModels core/extensions/` = **0** |
+| 运行时枚举扩展能摸到的对象，均无 setter | `ctx.setScopedModels === undefined`、`pi.setScopedModels === undefined`；`ctx` 全部键：`abort compact cwd fork getContextUsage getSystemPrompt getSystemPromptOptions hasPendingMessages hasUI isIdle isProjectTrusted mode model modelRegistry navigateTree newSession reload scopedModels sessionManager shutdown signal switchSession thinkingLevel ui waitForIdle`（注意 `setActiveTools`/`setModel`/`setThinkingLevel` 都有 setter，唯独 scoped models 没有） |
+| `sessionManager` 没有回到 AgentSession 的引用（键全是数据） | 运行时 `Object.keys(ctx.sessionManager)` = `byId cwd fileEntries flushed labelTimestampsById labelsById leafId persist sessionDir sessionFile sessionId` |
+| `modelRegistry` 是模型目录/Provider 注册表（有 `refresh()`），与 scoped models 无关 | 运行时 prototype 方法枚举（`getAvailable`/`refresh`/`registerVirtualModel`…，无 scoped） |
+| 全 Pi 只有 TUI 调 `.setScopedModels(` | `interactive-mode.ts:5418/5425`——**TUI 自己就是那个持有 AgentSession 的宿主**，所以它能做 |
+| 会话替换也不行：运行时工厂复用**启动时捕获**的 `sessionOptions.scopedModels` | `main.ts:847` → `createAgentSessionFromServices({ scopedModels: sessionOptions.scopedModels })`；这正是 reload 不重算的原因 |
+| 没有后门：无全局句柄、事件载荷不含 session | `globalThis.pi\|session\|agent` 未设置；`session_start` 载荷仅 `{reason, previousSessionFile?}` |
+
+**可选路线**：
+
+| 路线 | 内容 | 代价 |
+|---|---|---|
+| **A. 上游加 API（推荐）** | 请 Pi 作者在 `bindCore` 绑定 `setScopedModels` 并在 ExtensionContext 上暴露（约 10–15 行）。之后桥接就能像 TUI 一样：切换即时生效（仅内存）、保存才持久化。符合「不改 Pi 本体」——是**上游落地的 API**，不是本地打补丁。先例：作者已为外部宿主提供 pi-vscode 的桥接通道 | 取决于上游；当前 Pi 最新版 1.2.0 尚无此 API |
+| B. 保存后重启子进程（可立即做） | 写 settings → kill 并以同一会话重拉 pi 子进程 → 重发 state/history（浏览器无需刷新） | 几秒中断、会话重挂载；「勾选」仍无法仅内存生效 |
+| C. 维持现状 | scoped models 改动需重启 pi-web | **相对现 SDK 引擎是功能回退** |
+
+短期建议：**B 作为过渡 + A 作为正解**（A 落地后即可移除 B）。
 
 ## 16. 宿主（Pi）依赖与兼容性核对清单
 
