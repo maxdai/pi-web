@@ -13,7 +13,7 @@
 | `run.mjs` | 主流程：HTTP 收事件 + `script -q -c "pi --extension bridge.mjs --session /tmp/... " /dev/null` 起 pty；`node run.mjs 1` 只跑步骤 1，`node run.mjs all` 跑全部 |
 | `run-type.mjs` | 定向：空闲时往 pty 敲自定义命令（验证「替用户敲」） |
 | `run-builtin.mjs` | 定向：内置命令经 `sendUserMessage(expandPromptTemplates)` 的行为 |
-| `run-type2.mjs` | 定向：内置命令经 pty 敲键（`/model` 面板、`/export *.jsonl` 落盘）——**运行前需自行从上面的 `run-builtin.mjs` 复制改名**（留档时未包含该文件） |
+| `run-type2.mjs` | 定向：内置命令经 pty 敲键（`/model` 面板渲染、`/export *.jsonl` 落盘 58,503 字节） |
 
 ## 运行要点
 
