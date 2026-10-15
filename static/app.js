@@ -2586,7 +2586,17 @@ class PiWebClient {
     if (req.update && this.currentExtRequest && this.currentExtRequest.id === req.id) {
       const body = this.modalList.querySelector('.modal-panel-body');
       if (body) {
+        // 面板现在**一次性渲染全文**（设计文档 §19.6），滚动交给 #modal-list；
+        // 组件每秒自绘（倒计时/用量）会不断触发 update —— 必须保留滚动位置，
+        // 否则每秒把用户弹回顶部（贴底时则继续贴底）。
+        // 真正的滚动容器是 <pre class="modal-panel-body"> 自身（style.css 里它带 overflow-y:auto），
+        // 不是外层 #modal-list
+        const scroller = body;
+        const prevTop = scroller.scrollTop;
+        const wasAtBottom = scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 2;
         body.innerHTML = ansiToHtml(lines.join('\n'));
+        if (wasAtBottom) scroller.scrollTop = scroller.scrollHeight;
+        else scroller.scrollTop = Math.min(prevTop, scroller.scrollHeight);
         const f = this.fitPanelToWidth(body, lines);
         if (f?.overflow) body.classList.add('modal-panel-scrollx');
         else body.classList.remove('modal-panel-scrollx');

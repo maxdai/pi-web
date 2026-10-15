@@ -821,7 +821,7 @@ pi-sdk-web 已实现并通过浏览器验收（本地提交，随本设计一起
 | **`(unnamed)` 解析** | 无 `session_info` 名字的会话按 `(unnamed)` 匹配（与 `pii` 一致） | 合成未命名会话可被解析 |
 | **`reload`** | RPC 命令表无 reload；桥接注册 `pi-web:reload`，处理器调用 `ExtensionCommandContext.reload()`，并**自加忙时防护**（`ctx.isIdle()`，语义覆盖 agent run/compaction/retry/排队；拒绝时按 SDK 宿主口径报 `Wait for the current response to finish before reloading.`）——因为**扩展命令会被立即执行、即使正在流式输出**（`agent-session.ts:2060`） | 两条入口（`/reload` 前端内置 → `{type:'reload'}`，与直接输入 `/pi-web:reload`）实测走同一条 `prompt` 链路、行为一致；空闲时 `idleBeforeReload: true`、reload 后桥接重新安装补丁且 `get_state` 正常 |
 
-**仍存的缺口（明确记录，迁移时降级或补齐）**：`.jsonl` 导出（RPC 仅 `export_html`）、scoped models 需写 settings + 重启子进程、面板**按键交互**不支持（只读）、TUI-only 项（`setWorkingIndicator`/`setFooter`/`setHeader` 等，宿主与 RPC 下本就 no-op）、自定义 session 目录（`PI_SESSION_DIR` 等）未覆盖。
+**仍存的缺口（明确记录，迁移时降级或补齐）**：`.jsonl` 导出（RPC 仅 `export_html`）、scoped models 需写 settings + 重启子进程、面板改为**一次性渲染全文 + 浏览器滚动**（见 §19.6；组件内部的**选择类**交互仍不支持）、TUI-only 项（`setWorkingIndicator`/`setFooter`/`setHeader` 等，宿主与 RPC 下本就 no-op）、自定义 session 目录（`PI_SESSION_DIR` 等）未覆盖。
 
 ### 15.3 架构分工
 
@@ -1054,7 +1054,21 @@ node deadlock-harness.mjs --bridge             # 桥接接管：resolve = true
   `requestRender`/`requestLayout`/`invalidate` → 120ms 合并后重绘 → **内容变化时** POST `/side/panel-update`
   → 前端按 `update` 标记**就地替换**面板内容（不重开模态、不重置倒计时）。**早期把 requestRender 当空操作
   且只快照一次 → 用户永远停在 `Connecting…`**（实测修复后：0.1s 为 5 行占位，0.3s 收到 update 帧变成 32 行真实状态）。
-- 渲染是**只读快照**（内容会随组件自绘刷新，但按键交互仍不支持）：组件内的按键交互（滚动/翻页）不支持；组件自行 `done(value)` 则采用其结论，否则关闭面板视为取消。关闭**只用模态自带的 `Close (Esc)`**（在模态边框上、常驻可见）——早先额外加过一个面板内按钮，与它重复（两个 Close），且位于滚动区内、内容长时会被滚走。
+- **一次性渲染全文 + 浏览器滚动（2026-10-15 改，取代"只读快照"）**：组件**只在放不下时才裁剪** ——
+  `StatusDialogComponent.render()` 里 `if (this.maxScrollOffset === 0) return drawBorder(inner, …)`（全文），
+  否则才 `body.slice(scrollOffset, end)`；而 `maxScrollOffset` 由 `viewportHeight = tui.terminal.rows - 固定行`
+  推出，**`rows` 正是桥接喂进去的**。因此桥接给 stub TUI 一个**很大的 `rows`**（`PI_WEB_BRIDGE_CUSTOM_ROWS`，
+  默认 1000）→ 组件认为"屏幕足够高"→ 返回**全文** → 前端放进本来就可纵向滚动的 `#modal-list`
+  （`static/style.css`：`overflow-y:auto`）→ **滚轮/拖拽/滚动条天然可用**，无需按键通道 ✓。
+  · `cols` 仍取网页面板**真实宽度**（折行与框图才正确）；`rows` 给大值只是"善意的谎"，对排版无影响。
+  · 前端在**实时刷新**替换正文时保留 `scrollTop`（贴在底部则继续贴底）：组件每秒自绘（倒计时/用量），
+    否则会每秒把用户弹回顶部 ✗。
+  · 组件的 `1-20/57` 滚动提示不会再出现（那是它"需要自己滚动"时才画的）——不再误导。
+  · 组件自行 `done(value)` 则采用其结论，否则关闭面板视为取消。关闭**只用模态自带的 `Close (Esc)`**
+    （在模态边框上、常驻可见）——早先额外加过一个面板内按钮，与它重复（两个 Close），且位于滚动区内、
+    内容长时会被滚走。
+  · **仍未覆盖**：组件**内部的选择类交互**（如 ↑↓ 移动高亮项 + Enter 确认的自定义选择器）——那需要按键回传，
+    属独立的后续项。
 - 实测：`/ctx-status` 面板 33 行、含 `⚡ Magic Context Status` 边框内容——与 TUI 看到的对话框同源同内容。
 
 **SDK 宿主对「命令执行 / 对话框」的特化清单（2026-10 审计 + 对齐；除 ctx-status 外的同类改动）**

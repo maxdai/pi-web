@@ -60,6 +60,9 @@ export default function (pi) {
   const PANEL_ROWS = Number(process.env.PI_WEB_BRIDGE_PANEL_ROWS ?? 40);
   const PANEL_COLS = Number(process.env.PI_WEB_BRIDGE_PANEL_COLS ?? 100);
   let themes = null; // { dark, light }
+  /** custom() 面板喂给组件的**行数**：故意给大值 → 组件认为"屏幕足够高"→ 返回全文，
+   *  由浏览器滚动条承担翻页（设计文档 §19.6）。可用 PI_WEB_BRIDGE_CUSTOM_ROWS 覆盖。 */
+  const CUSTOM_PANEL_ROWS = Number(process.env.PI_WEB_BRIDGE_CUSTOM_ROWS ?? 1000);
   let themePoll = null;
   let pkgDirCache = null;
   let builtinNamesCache = null;
@@ -377,7 +380,9 @@ export default function (pi) {
       let hasDone = false;
       // 按**网页面板实际可用列/行数**渲染（组件在 TUI 下也是按终端宽度排版）；
       // 量不到则回退 PANEL_COLS/PANEL_ROWS，避免装不下而折行折断框图。
-      const { cols: panelCols, rows: panelRows } = await fetchPanelGeometry();
+      // 列用网页面板**真实宽度**（折行/框图正确）；行给大值以拿到全文（见 CUSTOM_PANEL_ROWS）
+      const { cols: panelCols } = await fetchPanelGeometry();
+      const panelRows = CUSTOM_PANEL_ROWS;
       const token = `panel-${randomUUID()}`;
       let closed = false;
       let updateTimer = null;
