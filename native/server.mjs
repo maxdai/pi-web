@@ -474,7 +474,7 @@ async function applyScopedInSession(patterns) {
     }, scopedApplyTimeoutMs);
   });
   try {
-    await rpc("prompt", { message: "/pi-web:set-scoped-models" });
+    await rpc("prompt", { message: "/pi-web:set-scoped-models" }, { timeoutMs: 0 });
   } catch (err) {
     return { ok: false, error: `rpc: ${err.message}` };
   }
@@ -832,7 +832,12 @@ async function handleClientMessage(ws, msg) {
   try {
     switch (type) {
       case "prompt":
-        await rpc("prompt", { message: msg.message });
+        // prompt 的响应只是"预检通过"的回执（rpc-mode.ts:394-413 的 preflightResult），turn 本身
+        // fire-and-forget。子进程忙于重活时（实测：大会话 get_entries 期间）回执可能被无限期延后 ✗，
+        // 30s 超时只会产生**误报**（用户实测 `command: rpc timeout: prompt`）。故不设超时：
+        // 真死由 child.on("exit") 统一失败挂起调用，且 WS 消息是逐条独立处理的（void handleClientMessage），
+        // 挂起一个 prompt 不会堵住其他消息。
+        await rpc("prompt", { message: msg.message }, { timeoutMs: 0 });
         break;
       case "abort":
         // 中止时撤销挂起的对话框（桥接的 handler 会拿到 cancelled）——否则网页模态残留
@@ -983,7 +988,8 @@ async function handleClientMessage(ws, msg) {
       case "resume":
         // 会话切换：旧会话上挂起的对话框必须撤销（与 SDK 宿主的 session-switch 一致）
         dismissDialogs("session-switch");
-        await rpc("switch_session", { sessionPath: msg.path });
+        // 切换会话要加载会话文件，可能被子进程重活延后（同 prompt 的理由）→ 用长超时而非默认 30s
+        await rpc("switch_session", { sessionPath: msg.path }, { timeoutMs: RPC_LONG_TIMEOUT_MS });
         await sendState();
         await sendHistory();
         break;
@@ -999,7 +1005,7 @@ async function handleClientMessage(ws, msg) {
         // 前端就按「/ 开头」把它渲染成模态（与 SDK 宿主的行为一致）。
         runningCommand = msg.name;
         try {
-          await rpc("prompt", { message: `/${msg.name}${msg.args ? " " + msg.args : ""}` });
+          await rpc("prompt", { message: `/${msg.name}${msg.args ? " " + msg.args : ""}` }, { timeoutMs: 0 });
         } finally {
           runningCommand = null;
         }
@@ -1008,7 +1014,7 @@ async function handleClientMessage(ws, msg) {
         // RPC 没有 reload 命令：走桥接扩展注册的命令（ExtensionCommandContext.reload）
         runningCommand = "pi-web:reload";
         try {
-          await rpc("prompt", { message: "/pi-web:reload" });
+          await rpc("prompt", { message: "/pi-web:reload" }, { timeoutMs: 0 });
         } finally {
           runningCommand = null;
         }

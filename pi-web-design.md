@@ -1935,7 +1935,8 @@ TUI 路线的收益是"能力面最全 + 不再追 RPC 缺口"，代价是 1200�
 |---|---|---|
 | 普通命令 | 30s（不变） | 正常都远低于此 |
 | **`bash`** | **不超时** | 命令可跑任意久；界面靠 `bash_execution_update` 流式输出保持活性；用户可中止 |
-| `compact` / `export_html` / 全量 `get_entries` | **10 分钟** | 大会话下可能远超 30s，但不该无限等 |
+| **`prompt`**（2026-10-15 追加） | **不超时** | 它的响应只是"预检通过"的回执（`rpc-mode.ts:394-413` 的 `preflightResult`，turn 本身 fire-and-forget）。**子进程忙于重活时回执会被无限期延后** —— 实测：大会话 `get_entries` 进行中并发发 prompt，**90s 都没有回执**；此时 30s 超时只会产生**误报**（用户实测 `command: rpc timeout: prompt`）。真死由 `child.on("exit")` 统一失败挂起调用；且 WS 消息逐条独立处理（`void handleClientMessage`），挂起一个 prompt 不会堵住其他消息 |
+| `compact` / `export_html` / 全量 `get_entries` / `switch_session` | **10 分钟** | 大会话下可能远超 30s，但不该无限等；`switch_session` 要加载会话文件，同样可能被重活延后（2026-10-15 加入） |
 
 **配套（关键）**：`child.on("exit")` 里**显式失败所有挂起的 RPC**（错误 `pi child exited`）——
 否则"不超时"的 bash 调用在 pi 子进程退出后会**永远挂着**（内存泄漏 + 该次操作永不返回）。
