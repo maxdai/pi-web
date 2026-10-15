@@ -335,19 +335,32 @@ const results = await page.evaluate(() => {
   out.confirmCancel = sent.some((m) => m.type === "extension_ui_response" && m.cancelled === true);
 
   // 滚动门控：底部时应判定为贴底；上滚后判定为不贴底；
-  // 且上滚状态下新事件不得把视图拽回底部（renderEvent 的 wasAtBottom 门控）
+  // 且上滚状态下新事件不得把视图拽回底部。
+  //
+  // 跟随语义见设计文档 §20.7d：是否跟随由**粘性标记** client.followBottom 决定，
+  // 该标记在滚动容器的 `scroll` 事件里更新（容差 60px）。所以这里在改 scrollTop 之后要
+  // **同步派发一次 scroll 事件**，模拟"用户滚动 → 事件到达 → 新内容出现"的真实序列；
+  // 否则标记还停留在旧值，测的是时序假象而不是真实行为。
   const scroller = document.getElementById("scroll-view");
   scroller.scrollTop = scroller.scrollHeight;
+  scroller.dispatchEvent(new Event("scroll"));
   const atBottom = client.wasAtBottom();
   scroller.scrollTop = 0;
+  scroller.dispatchEvent(new Event("scroll"));
   const notAtBottom = !client.wasAtBottom();
+  const followOff = client.followBottom === false;
   const topBefore = scroller.scrollTop;
   client.renderEvent({
     type: "entry_appended",
     entry: { type: "custom", customType: "smoke-scroll", data: { text: "scroll-probe" } },
   });
   const notYanked = scroller.scrollTop === topBefore;
-  out.scrollGate = { atBottomWhenBottom: atBottom, notAtBottomAfterScrollUp: notAtBottom, notYankedWhileScrolledUp: notYanked };
+  out.scrollGate = {
+    atBottomWhenBottom: atBottom,
+    notAtBottomAfterScrollUp: notAtBottom,
+    followOffAfterScrollUp: followOff,
+    notYankedWhileScrolledUp: notYanked,
+  };
 
   // ---- 键盘导航（判据是单选/多选，不是对话框类型；对齐 TUI select 语义）----
   const key = (k) =>
@@ -547,6 +560,7 @@ check(
   "滚动门控（底部判定 / 上滚判定 / 上滚不被拽下）",
   results.scrollGate.atBottomWhenBottom &&
     results.scrollGate.notAtBottomAfterScrollUp &&
+    results.scrollGate.followOffAfterScrollUp &&
     results.scrollGate.notYankedWhileScrolledUp,
   JSON.stringify(results.scrollGate),
 );

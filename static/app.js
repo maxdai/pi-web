@@ -203,6 +203,10 @@ class PiWebClient {
     this.historyLoader = null;   // 顶部「加载更早」控件
     this.historyLoading = false; // 分页请求进行中
     this.loadedEntryIds = new Set(); // 按 id 去重（防分页与实时帧重复）
+    // 是否"跟随底部"（设计文档 §20.7d）：粘性标记，取代原来每个事件当场算 2px 容差的判断 ——
+    // 后者一旦因布局变化（状态区/widget 变高、内容增长）出现缝隙就永久关掉，表现为"每次出现
+    // tool output 就脱离底部"（2026-10-15 用户报告）。
+    this.followBottom = true;
     this.statusEl = document.getElementById('conn-status');
     this.statusAreaEl = document.getElementById('status');
     this.pendingEl = document.getElementById('pending');
@@ -261,8 +265,38 @@ class PiWebClient {
       branch: false,
     };
 
+    this.watchBottomFollow(); // 滚动/尺寸变化 → 维护 followBottom（设计文档 §20.7d）
     this.connect();
     this.bindInput();
+  }
+
+  /** 跟随底部的容差（px）：轻微滚动仍视为"在底部"，明显上滚才算离开。 */
+  static get NEAR_BOTTOM_PX() {
+    return 60;
+  }
+
+  /** 监听滚动与尺寸变化，维护 followBottom 并在需要时重新贴底（设计文档 §20.7d）。 */
+  watchBottomFollow() {
+    const scroller = document.getElementById('scroll-view');
+    if (!scroller || this.bottomWatchBound) return;
+    this.bottomWatchBound = true;
+    scroller.addEventListener(
+      'scroll',
+      () => {
+        // 程序性贴底也会触发 scroll：此时仍在底部 → 保持 true，符合预期
+        this.followBottom = this.wasAtBottom(PiWebClient.NEAR_BOTTOM_PX);
+      },
+      { passive: true },
+    );
+    // 尺寸变化（状态区/widget 变高、内容增长、字体晚到）也要重新贴底 —— 这些情况未必伴随事件
+    if (typeof ResizeObserver === 'function') {
+      const ro = new ResizeObserver(() => {
+        if (this.followBottom) this.scrollToBottom();
+      });
+      ro.observe(scroller);
+      if (this.contentEl) ro.observe(this.contentEl);
+      this.bottomObserver = ro;
+    }
   }
 
   connect() {
@@ -994,7 +1028,7 @@ class PiWebClient {
     // grow content (message_update, tool deltas) increase scrollHeight, so
     // checking wasAtBottom() after the fact would miss "user was already at
     // the bottom" and stop following the stream.
-    const wasAtBottom = this.wasAtBottom();
+    const wasAtBottom = this.followBottom;
     switch (ev.type) {
       case 'agent_start':
         this.status.working++;
@@ -1201,7 +1235,7 @@ class PiWebClient {
     const widgetsEl = document.getElementById('widgets');
     if (!widgetsEl) return;
     const key = req.widgetKey || 'widget';
-    const wasAtBottom = this.wasAtBottom();
+    const wasAtBottom = this.followBottom;
 
     if (req.widgetLines === undefined || req.widgetLines === null) {
       // Clear this widget
@@ -1632,7 +1666,7 @@ class PiWebClient {
     if (bashPending && bashPending.contains(div)) {
       bashPending.scrollTop = bashPending.scrollHeight;
     }
-    if (this.wasAtBottom()) this.scrollToBottom();
+    if (this.followBottom) this.scrollToBottom();
   }
 
   renderBashResult(data) {
@@ -1659,7 +1693,8 @@ class PiWebClient {
       if (bashPending.children.length === 0) {
         bashPending.style.display = 'none';
       }
-      this.scrollToBottom();
+      // 跟随门控：用户明显上滚时不得被拽回（原先这里无条件贴底 ✗）
+      if (this.followBottom) this.scrollToBottom();
     }
     // Bash done: the running indicator and stop button are no longer
     // relevant.
@@ -1683,7 +1718,7 @@ class PiWebClient {
       meta.appendChild(warn);
     }
 
-    this.scrollToBottom();
+    if (this.followBottom) this.scrollToBottom();
     // Streaming done: drop the block from the live map (no more deltas).
     if (id) this.bashEls.delete(id);
     this.pendingBashId = null;
@@ -2220,7 +2255,7 @@ class PiWebClient {
   renderStatusItem(req) {
     const el = document.getElementById('ext-status');
     if (!el) return;
-    const wasAtBottom = this.wasAtBottom();
+    const wasAtBottom = this.followBottom;
     if (req.statusText === undefined || req.statusText === null) {
       delete this.extStatus[req.statusKey];
     } else {
@@ -2232,16 +2267,16 @@ class PiWebClient {
 
   applyExtStatusSnapshot(snapshot) {
     if (!snapshot) return;
-    const wasAtBottom = this.wasAtBottom();
+    const wasAtBottom = this.followBottom;
     this.extStatus = Object.assign({}, snapshot);
     this.updateExtStatusDisplay();
     if (wasAtBottom) this.scrollToBottom();
   }
 
   /** Whether the view is currently pinned to the bottom (before layout changes). */
-  wasAtBottom() {
+  wasAtBottom(tolerance = 2) {
     const scroller = document.getElementById('scroll-view');
-    return !!scroller && scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 2;
+    return !!scroller && scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - tolerance;
   }
 
   updateExtStatusDisplay() {
@@ -2591,7 +2626,7 @@ class PiWebClient {
     const last = this.contentEl.lastElementChild;
     if (last && last.classList.contains('notify-line') && last.dataset.notifyType === (type || '')) {
       last.innerHTML = ansiToHtml(String(message));
-      this.scrollToBottom();
+      if (this.followBottom) this.scrollToBottom();
       return;
     }
     const div = document.createElement('div');
@@ -2599,7 +2634,7 @@ class PiWebClient {
     div.dataset.notifyType = type || '';
     div.innerHTML = ansiToHtml(String(message));
     this.contentEl.appendChild(div);
-    this.scrollToBottom();
+    if (this.followBottom) this.scrollToBottom();
   }
 
   // ------------------------------------------------------------------
