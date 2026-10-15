@@ -262,9 +262,11 @@ if (baseline) {
   console.log(`\nUI 方法：${uiMethodsAfter.length} 个${added.length ? `（新增 ${added.join(", ")}）` : ""}${removed.length ? `（**移除 ${removed.join(", ")}**）` : ""}`);
   if (baseline.piVersion !== snapshot.piVersion) console.log(`Pi 版本变化：${baseline.piVersion} → ${snapshot.piVersion}`);
 
-  // 环境相关量：取决于**用户装了哪些 prompt / 扩展**，不属于宿主契约 → 只展示、不参与漂移判定。
-  // 教训（2026-10-14）：用户删/增 `~/.pi/agent/prompts/*.md` 会让 commandCount 26↔23，曾被误判为 DRIFT。
-  const ENV_DEPENDENT = ["probe.commandCount"];
+  // 环境相关量：取决于**用户自己的配置**（装了哪些 prompt/扩展、勾选了哪些 scoped models），
+  // 不属于宿主契约 → 只展示、不参与漂移判定。
+  // 教训（2026-10-14）：① 用户删/增 `~/.pi/agent/prompts/*.md` 让 commandCount 26↔23；
+  // ② 用户在页面上多勾一个模型让 scopedModelsCount 11→12 —— 两次都被误判为 DRIFT。
+  const ENV_DEPENDENT = ["probe.commandCount", "probe.scopedModelsCount"];
   for (const path of ENV_DEPENDENT) {
     const get = (o) => path.split(".").reduce((v, k) => (v == null ? v : v[k]), o);
     const before = get(baseline);

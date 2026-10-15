@@ -1,5 +1,5 @@
 {
- "checkedAt": "2026-10-15T00:55:10.483Z",
+ "checkedAt": "2026-10-15T01:07:18.677Z",
  "piVersion": "1.2.0",
  "node": "v24.18.0",
  "probe": {
@@ -60,7 +60,7 @@
    "model",
    "thinkingLevel"
   ],
-  "scopedModelsCount": 11,
+  "scopedModelsCount": 12,
   "sessionManager": {
    "getSessionFile": "function",
    "ownKeys": [
