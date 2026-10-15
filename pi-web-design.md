@@ -1911,3 +1911,33 @@ TUI 路线的收益是"能力面最全 + 不再追 RPC 缺口"，代价是 1200�
 
 **验证**：`!!sleep 35` → **35.1s 完成**（exit=0，输出 `DONE-LONG`）✓；流式命令（每秒一行 ×3）→ 3 次
 `bash_execution_update` + 正确最终输出 ✓；冒烟 42/42 ✓。
+
+## 22. `/resume` 列表排序与展示：向 TUI 看齐（2026-10-15）
+
+**问题（用户提问）**：`/resume` 列表的顺序是怎么排的？——实测答案是**没有排序** ✗：服务端
+`listSessionFiles()` 只是 `readdir(sessions根)` + `readdir(项目目录)`，即**文件系统原始顺序**；
+`get_sessions` 按该顺序 push，前端 `handleSessions` 按收到顺序渲染（`/resume` 相关的两处 `.sort()`
+是给 scoped-models 与 `/` 命令菜单用的，不涉及会话列表）。所以既非按名、也非按时间，看起来就是乱的。
+
+**TUI 参照（`modes/interactive/components/session-selector.ts` + `core/session-manager.ts`）**：
+
+| 维度 | TUI 行为 |
+|---|---|
+| 排序 | 按 **`modified` 倒序**（最近活动在前）：`session-manager.ts:756-757` 用 `statSync().mtimeMs` 排序；`sortSessionInfos()`（920-921）`b.modified - a.modified` |
+| 每行右侧 | `消息数 + 相对时间`（`formatSessionDate`：`now` / `Nm` / `Nh` / `Nd` / `Nw` / `Nmo` / `Ny`） |
+| 每行左侧 | 会话名（无名则首条消息），可带 cwd/路径 |
+| 结构 | 按 `parentSessionPath` 组织成**树**（fork 血缘），子树按 `latestActivity` 倒序；当前会话**在列表中高亮**（不排除） |
+
+**本次实施范围（只做排序与时间展示）**：
+
+1. 服务端 `get_sessions`：每项带上 `mtime`（`statSync(p).mtimeMs`），并 `sort((a,b) => b.mtime - a.mtime)`；
+2. 前端 `handleSessions`：行内新增右侧**相对时间**（照抄 TUI 的 `formatSessionDate` 口径）；
+3. 样式：`.modal-item-right` 右对齐（`margin-left:auto`），删除图标改为固定间距（原来靠 `margin-left:auto`，
+   两个 auto 会分摊空白）。
+
+**明确不做（留待讨论，避免擅自扩大范围）**：
+
+- **树形（fork 血缘）展示**：TUI 会按 `parentSessionPath` 折叠成树 ✗ 我们目前是平铺 ✓；
+- **显示当前会话**：TUI 在列表中高亮当前会话，而我们是**排除**当前会话（2026-08-25 用户明确要求"过滤当前" ✓）；
+- **消息数**：TUI 每行显示 `消息数 + 时间`，我们只显示时间（每条会话都统计消息数需要遍历文件，
+  大会话下开销明显，可后续用 `session-history.mjs` 的索引按需补上）。
