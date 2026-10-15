@@ -2171,6 +2171,7 @@ class PiWebClient {
           `<div class="modal-item" data-index="${i}">` +
           `<span class="modal-item-name">${this.escapeHtml(item.name || item.id || '')}</span>` +
           `<span class="modal-item-desc">${this.escapeHtml(item.desc || '')}</span>` +
+          (item.right ? `<span class="modal-item-right">${this.escapeHtml(item.right)}</span>` : '') +
           `</div>`,
       )
       .join('');
@@ -2927,6 +2928,23 @@ class PiWebClient {
     this.send({ type: 'get_sessions' });
   }
 
+  /** 相对时间，口径照抄 TUI 的 formatSessionDate（session-selector.ts:35）：
+   *  now / Nm / Nh / Nd / Nw / Nmo / Ny。 */
+  formatSessionAge(mtime) {
+    if (!Number.isFinite(mtime)) return '';
+    const diffMs = Date.now() - mtime;
+    const mins = Math.floor(diffMs / 60000);
+    if (mins < 1) return 'now';
+    if (mins < 60) return `${mins}m`;
+    const hours = Math.floor(diffMs / 3600000);
+    if (hours < 24) return `${hours}h`;
+    const days = Math.floor(diffMs / 86400000);
+    if (days < 7) return `${days}d`;
+    if (days < 30) return `${Math.floor(days / 7)}w`;
+    if (days < 365) return `${Math.floor(days / 30)}mo`;
+    return `${Math.floor(days / 365)}y`;
+  }
+
   handleSessions(data) {
     if (this.modalMode !== 'resume') return;
     const sessions = data || [];
@@ -2935,7 +2953,13 @@ class PiWebClient {
       return;
     }
     this.renderModalItems(
-      sessions.map((s) => ({ name: s.name || s.id, desc: s.cwd, value: s.path })),
+      // right = 相对最后活动时间（对齐 TUI 的 formatSessionDate 口径，见设计文档 §22）
+      sessions.map((s) => ({
+        name: s.name || s.id,
+        desc: s.cwd,
+        right: this.formatSessionAge(s.mtime),
+        value: s.path,
+      })),
       (item) => {
         this.send({ type: 'resume', path: item.value });
       },

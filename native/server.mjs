@@ -967,11 +967,16 @@ async function handleClientMessage(ws, msg) {
               id: header.id ?? p,
               name: sessionDisplayName(text) ?? "(unnamed)",
               cwd: header.cwd ?? "",
+              // 最后活动时间（TUI 用同一个口径排序：session-manager.ts:756 的 mtimeMs）
+              mtime: statSync(p).mtimeMs,
             });
           } catch {
             /* ignore */
           }
         }
+        // 与 TUI 对齐：最近活动的排在前面（TUI: sortSessionInfos → b.modified - a.modified）。
+        // 原先不排序，顺序就是 readdir 的原始顺序，看起来是乱的（见设计文档 §22）。
+        sessions.sort((a, b) => b.mtime - a.mtime);
         ws.send(JSON.stringify({ type: "sessions", data: sessions }));
         break;
       }

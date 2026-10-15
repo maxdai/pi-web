@@ -862,9 +862,18 @@ body {
   align-items: baseline;
 }
 
-.modal-item.resume-item .resume-delete {
+/* 相对时间右对齐（TUI 的右侧信息位）；删除图标紧随其后，用固定间距 */
+.modal-item-right {
   margin-left: auto;
-  padding-left: 16px;
+  padding-left: 12px;
+  opacity: 0.7;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.modal-item.resume-item .resume-delete {
+  margin-left: 10px;
+  padding-left: 6px;
   cursor: pointer;
   opacity: 0.6;
 }
