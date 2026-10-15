@@ -1488,3 +1488,116 @@ node tools/host-contract/check-host-contract.mjs --json
 | 对象改写（第 1–5 项） | 退回 RPC 原生行为：工厂 widget / 面板 / 启动期对话框 / 换肤丧失，会话仍可用 |
 | 共享可变 ui 根本不再成立 | 方案整体退回 **SDK 宿主**（§14），即 §15.9 记录的回退路径（代价：版本漂移） |
 | 数据文件格式（第 10–12 项） | 会话列表/`(unnamed)`/scoped models/`/usage` 局部失效，需按新格式适配 |
+
+## 18. 候选路线：TUI 模式 + 桥接（pi-vscode 式，2026-10-15 研究记录）
+
+> **状态：纯研究记录，未决策、未实施、本轮未改任何代码。**
+> 起因：用户注意到「pi-vscode 是让 pi 保持在 TUI 模式的」，要求研究其运作方式。
+> 本节的定位是**候选路线的事实底稿**——若后续采纳，它将取代 §15/§17 的 RPC 通道；若否，则作为对照留档。
+> 研究材料：`/root/research/pi-vscode`（v0.0.9，最后提交 2026-04-24，32 commits，TS 2499 行）
+> 与 Pi 源码 `/root/research/pi/packages/coding-agent/src`（1.2.0）。
+
+### 18.1 pi-vscode 的运作方式（源码实证）
+
+**一句话**：它**不替换 TUI**，而是给 TUI **加装一个 IDE 工具层**——pi 以**真 TUI** 跑在 VS Code 内置终端里，
+另注入一个桥接扩展，让**模型**能调用 VS Code 的 LSP/编辑器能力，并在 TUI 页脚显示状态行。
+
+| 界面 | 启动方式 | 用途 | 证据 |
+|---|---|---|---|
+| **主会话（核心）** | `vscode.window.createTerminal({ shellPath: piPath, shellArgs })`：**真终端里跑真 TUI** | 用户与 pi 的全部交互；**所有 TUI 能力天然可用** | `src/terminal.ts:20-40` |
+| **桥接扩展** | 参数 `--extension bridge/pi-vscode-bridge.js`；环境 `PI_VSCODE_BRIDGE_URL` / `_TOKEN` / `_TERMINAL_ID` | 给**模型**提供 ~25 个 `vscode_*` 工具 + TUI 页脚状态行 + 会话文件上报 | `src/pi.ts:80-103`、`bridge/pi-vscode-bridge.js` |
+| **VS Code Chat 面板** | `spawn(pi, ["--mode","rpc","--no-session", …])` | **仅一次性问答**：RPC 事件流式写入原生 Chat 面板；失败则回退开一个 TUI 终端 | `src/pi.ts:76-78`、`src/chat.ts:60-70` |
+
+> 注意：**RPC 模式只用于 Chat 面板的一次性请求**；主会话始终是 TUI——这正是用户观察到的现象。
+
+**主会话的确切启动形态**：
+
+```bash
+pi --extension <ext>/bridge/pi-vscode-bridge.js \
+   --append-system-prompt "You are running inside VS Code with a live IDE bridge. Prefer VS Code bridge tools …"
+# env: PI_VSCODE_BRIDGE_URL=http://127.0.0.1:<port>
+#      PI_VSCODE_BRIDGE_TOKEN=<uuid>   PI_VSCODE_TERMINAL_ID=<uuid>
+```
+
+`--append-system-prompt`（`src/constants.ts:5-9`）用于**告知模型「你在 VS Code 里，优先用桥接工具」**——值得借鉴的小设计。
+
+**桥接扩展（单文件，无构建）做了什么**：
+
+| 类别 | 内容 |
+|---|---|
+| **注册工具（主价值）** | ~25 个：`vscode_get_diagnostics`、`_get_definitions`、`_get_hover`、`_get_references`、`_get_code_actions`、`_execute_code_action`、`_apply_workspace_edit`、`_format_document/_range`、`_open_file`、`_save_document`、`_get_selection`、`_get_notifications` … 每个工具的实现就是一次 `POST {url}/rpc`（头 `x-pi-vscode-authorization: <token>`） |
+| **状态行** | `ctx.ui.setStatus("pi-vscode", "VS Code: <文件> • Ln/Col • E0 W1 …")`，每 **1.5s** 刷新；订阅 `session_start` / `input` / `agent_end` / `session_shutdown` 控制启停 |
+| **会话上报** | `reportTerminalSession({ terminalId, sessionFile })` → VS Code 重启后可恢复会话（配合 `src/sessions.ts`） |
+| **结果限流** | 50KB / 2000 行截断，超限返回结构化提示，让模型收窄查询 |
+
+**宿主侧**（`src/bridge/server.ts` + `handlers.ts` 529 行 + `serialize.ts`）：一个 `node:http` 服务——随机 UUID token 鉴权、
+`POST /rpc` 方法分发、以及**通知队列**（`selection_changed` / `diagnostics_changed` / `active_editor_changed` …，
+供模型用 `vscode_get_notifications` 轮询）。**零运行时依赖**（`package.json` 只有 devDependencies）。
+
+**它「不」做什么（易误解点，逐条核实）**：
+
+| 常见猜测 | 事实 |
+|---|---|
+| 解析 TUI 的 ANSI 输出 | **完全没有**（全仓库无 ansi/pty/terminal-parsing 代码）→ 终端由 VS Code 自己渲染 |
+| 使用 pty / node-pty | **没有**（VS Code 终端本身就是 pty） |
+| 改 pi 本体 / fork pi-coding-agent | **没有**，只用公开扩展 API：`pi.on(...)`、`pi.registerTool(...)`、`ctx.ui.setStatus`、`ctx.ui.theme.fg`、`ctx.sessionManager.getSessionFile()` |
+| 用 webview 渲染对话 | **没有**（对话在终端里） |
+
+### 18.2 为什么它「功能齐全」
+
+**因为 UI 就是 TUI 本身**：`/scoped-models`、`/export`、面板、对话框、自定义 session 目录、命令历史……
+全都是 interactive 模式自己的实现，pi-vscode 一行都没重写。桥接只是**附加**了 IDE 工具层与一行状态。
+
+这恰好与我们的处境互补：pi-web 是「用 RPC 事件在浏览器里**重画** TUI」，所以每缺一个 TUI-only 能力就要自己补一次
+（scoped models 刚补完 §15.11.1，仍余 `.jsonl` 导出、自定义 session 目录）。
+
+### 18.3 与 pi-web 现状对照
+
+| | **RPC + 桥接（现状，§15/§17）** | **TUI + 桥接 + pty（本候选路线）** |
+|---|---|---|
+| TUI-only 能力 | 需逐项追平 | **天然全部继承** |
+| 事件流来源 | RPC stdout 免费得到 | 需桥接**自己镜像**（旧 SDK 宿主代码可复用） |
+| 运行时依赖 | 只有 `ws` | 需 pty：`script -qc`（util-linux，免原生依赖）或 `node-pty`（原生模块） |
+| 额外开销 | 无 | TUI 仍向 pty 渲染（可忽略；甚至可白送一个「终端视图」标签页） |
+| 主要风险 | RPC 命令面缺口 | 命令注入路径、pty 生命周期、TUI 与 Web 争输入焦点 |
+| 与「不改 Pi 本体」 | 一致 | 一致（仍只用扩展 + 侧信道） |
+
+### 18.4 可行性核实（逐条证据，Pi 1.2.0）
+
+| 需求 | 是否具备 | 证据 |
+|---|---|---|
+| 浏览器需要的事件流 | **齐备**：`message_start/update/end`、`tool_execution_start/update/end`、`agent_start/end/settled`、`turn_start/end`、`session_compact`、`model_select`、`thinking_level_select`、`user_bash`、`input` … | `core/extensions/types.ts` 的 `on(event: "…")` 重载清单（共 32 个事件） |
+| 从浏览器发提示 | `pi.sendUserMessage(...)` **存在**（官方路径，会触发一轮 run） | `types.ts:448`、`:1741`、`:940` |
+| 中止 / 压缩 / 重载 / 关停 | `ctx.abort`、`ctx.compact`、`ctx.reload`、`ctx.shutdown` 均在扩展上下文 | 我们的宿主契约探针已实测（`ctx` keys 清单，§16） |
+| UI 接管（面板/对话框/widget/换肤） | 同现状：改写 `ctx.ui` 共享可变对象 | §15、§16；已实施 |
+| 让 TUI 跑起来 | **需要 pty**（interactive 模式要求 TTY） | pi interactive 模式前提；`script -qc "pi …" /dev/null` 可免原生依赖 |
+| 斜杠命令 | ⚠️ **唯一存疑点**：TUI 的斜杠命令由它的输入编辑器解析，`sendUserMessage("/cmd")` 是否按命令执行**需实测** | 待验证；兜底＝把命令文本写进 pty stdin（等价「替用户敲」） |
+
+### 18.5 若采纳，需要做的工程项（预估）
+
+1. **pty 层**：以 `script -qc`（或 node-pty）拉起 `pi --extension <bridge>`，处理尺寸（COLUMNS/LINES）、进程组与
+   Ctrl+C（沿用 §17.4 的关停握手经验）；
+2. **桥接侧会话镜像**：订阅 18.4 的事件 → 序列化消息/工具块/状态 → 经侧信道推给服务端（可移植我们旧 SDK 宿主
+   的 `session.ts`/`ui-context.ts` 语义，代码在 git 历史中）；
+3. **输入注入**：浏览器输入 → `pi.sendUserMessage`；中止 → `ctx.abort`；
+4. **命令路径**：先实测 `sendUserMessage("/cmd")`；不行则走「写 pty stdin」；
+5. **TUI 输出的处置**：默认丢弃；可选提供「终端视图」（把 pty 输出经 WS 转发到前端 xterm.js）作为逃生通道；
+6. **宿主契约**：新增探针项（`sendUserMessage` 存在、事件名齐全、pty 启动可行），纳入 §16 清单与核对器；
+7. **文档与入口**：入口命令保持零变化（`pii r <name> --web`），引擎内部切换。
+
+### 18.6 风险与未决问题
+
+- **命令注入路径未验证**（18.4 最后一行）——这是决定路线可行性的关键实验；
+- **输入焦点冲突**：TUI 自身仍在读 stdin；若有人在终端里敲字，会与 Web 输入竞争（可接受，但需说明）；
+- **pty 可用性**：`script` 依赖 util-linux（Linux/macOS 常见，Windows 需另方案）；
+- **重复渲染成本**：TUI 每帧渲染被丢弃，长会话下有无可观开销待测；
+- **迁移代价**：桥接要长大（镜像 + 输入 + 命令），而我们现有的 RPC 服务端逻辑（协议层）会大部分重写；
+  但前端与侧信道设计可原样复用。
+
+### 18.7 建议的最小验证原型（三步，待用户决定后再做）
+
+1. **起得来**：`script -qc "pi --extension <我们的 bridge>" /dev/null` 能进入 interactive 模式，且桥接能上报（`/side/ready`）；
+2. **送得进**：`pi.sendUserMessage("你好")` 能让会话跑一轮，且事件（`message_start/update/end`、`tool_execution_*`）可被桥接捕获并转发；
+3. **命令通**：`sendUserMessage("/usage")` 是否按命令执行；否则验证「写 pty stdin」方案。
+
+**决策状态：未决。** 需要用户拍板是否投入（对照 §17 现状：RPC 路线已发版可用，缺口只剩 2 项）。
