@@ -1350,7 +1350,7 @@ pi-web-native <session-id> <cwd> --port <n>          # 对应 server.py <session
 ### 17.5 切换后仍存在的缺口（明确记录，不视为 bug）
 
 - ~~scoped models 改动需重启 pi 子进程~~ → **已关闭**（2026-10-14 实现即时生效，见 §15.11.1）
-- **`.jsonl` 导出降级**为提示（RPC 仅 `export_html`）
+- **`.jsonl` 导出降级**为提示（RPC 仅 `export_html`）——**可在 RPC 内关闭**（方法见 §18.10.2，~15–20 行，未实施）
 - **命令产生的历史条目不复刻**（= 与 TUI 一致；SDK 版会多出 `[ctx-status] (click to expand)` 之类记录；§15.11 A3，2026-10 用户拍板）
 
 ### 17.6 验证计划
@@ -1702,3 +1702,53 @@ footer：
 
 现网实现补充：header 保持简洁（session 名与模型由 footer 展示）；点击 footer 的 model / thinking 打开对应选择面板；
 footer 的模型列表受 scoped models 影响（自 §15.11.1 起勾选即时生效，无需重启）。
+
+### 18.10 决策记录（2026-10-15）：暂不实施，研究存档
+
+**决策（用户拍板）**：**保持 RPC + 桥接为唯一引擎（即 1.1.0 现状）**；「TUI + pty + 桥接」记为
+**候选路线**，在今后合适的时机实施。本节把该路线的研究结论、实施准备与重新评估的触发条件存档。
+
+#### 18.10.1 决策依据（含事实更正）
+
+| 事实 | 结论 |
+|---|---|
+| **pi-vscode 是第三方集成，不是 Pi 作者的作品**（作者 Pooya Parsa / pi0，30/32 提交；`publisher: "pi0"`；Pi 作者是 Mario Zechner，3857 提交） | 不能用"pi-vscode 是作者路线"论证 TUI 路线更贴近上游演化 |
+| 上游 `docs/cli-integration.md`：**"TUI-only extension capabilities are unavailable or degraded outside interactive mode"** | **支持**「要能力面最全就必须留在 interactive 模式」——这是 TUI 路线最有力的依据 |
+| 同一文档：RPC = *"A process needs bidirectional control"*，并推荐 `RpcClient`、提供 RPC Extension UI 子协议与示例 | RPC **不是**将被淘汰的旧路，而是上游文档化的一等集成模式 |
+| pi-vscode 实际做法：在 VS Code 终端里**显示真 TUI**，桥接只做 IDE 工具（不解析终端、不镜像会话、不用 pty） | 我们设想的「headless 跑 TUI + 镜像到浏览器」是**上游没有的形态**（自创），其可靠性由扩展 API（文档化 ✓）与共享对象技巧（§16）共同承担 |
+| 两条路线的 UI 工作量相同：内置选择器（`/model`、`/scoped-models`）由 `InteractiveMode` 硬编码，TUI 模式下渲染进 pty，浏览器看不到（原型实测） | 切换**不**省 UI 实现；前端现有面板仍要保留 |
+
+**综合**：RPC 现状稳定（1.1.0 已发布、缺口只剩 2 项且可在 RPC 内关闭，见 §18.10.2）；
+TUI 路线的收益是"能力面最全 + 不再追 RPC 缺口"，代价是 1200–1800 行重写 + 自创形态风险 + pty 依赖。
+用户选择**先保持 RPC，把该路线存档待时机**。
+
+#### 18.10.2 顺带发现：两个剩余缺口可在 RPC 路线内关闭（未实施，记为待办）
+
+| 缺口（§17.5） | 关闭方法 | 量级 |
+|---|---|---|
+| `.jsonl` 导出降级 | Pi 的 TUI 导出链路是 `exportToJsonl → exportSessionToJsonl(sessionManager, path) → writeFileSync(path, serializeSessionBranch(...))`（`core/session-export.ts:32-44`），两个函数**未从包根导出**；但数据源我们已有：RPC 服务器在用 `get_entries`（`native/server.mjs:432/457`），桥接侧有 `ctx.sessionManager.getEntries()`（实测 `array(10)`）→ 自行序列化为 JSONL 即可 | ~15–20 行（保真度差异：分支选择/尾部补充条目可能与 TUI 导出略有出入，需注明） |
+| 自定义 session 目录 | Pi 支持 `settings.sessionDir`（`core/settings-manager.ts:689`），我们只扫 `<agentDir>/sessions` → 读该设置并按它扫描 | ~10 行 |
+
+> 用户决定**暂不实施**（保持 RPC 现状）；将来若要清零缺口，按上表做即可，无需切换引擎。
+
+#### 18.10.3 将来实施时的资产与已知要点
+
+- **原型脚本（9 个，已归档）**：`tools/tui-proto/`（含 README 与 9 条实测结论）；
+- **实测数据**：起得来 / 送得进 / 命令通（§18.8）；会话镜像可重画（§18.9 ①）；空闲 0 B/s、对话 5–7 KB/s、CPU 12.8% 单核（§18.9 ②）；
+- **实现要点（均已实测，务必吸收）**：
+  1. pty 用 `script -q -c … /dev/null`（零依赖；Windows 需另方案）；
+  2. 收尾**用信号**（SIGTERM 到包装进程或 pi 均可，不留孤儿），**不要**指望 Ctrl+C（raw 模式下是应用按键）或 `session_shutdown`（不会触发）；
+  3. pi 会**改写自身 argv/comm**（`comm=pi`）→ 识别子进程要靠进程树 / 记录 PID / 环境标记；
+  4. 命令两条路：扩展命令走 `sendUserMessage(cmd, {expandPromptTemplates:true})`；内置命令走 **pty 敲键**（须空闲时注入）；
+  5. `pi.on("input")` 只对"提交的文本"触发，命令派发不触发；
+  6. 桥接要长大（镜像 + 历史 + 输入 + 命令路由；生产版估 300–450 行），服务端协议层大部分重写，**前端与侧信道可原样复用**；
+  7. 宿主契约需新增探针项：事件面齐全、`sendUserMessage` 存在、`sessionManager.getEntries` 可用、pty 可启动。
+
+#### 18.10.4 重新评估的触发条件（满足任一即值得重启本议题）
+
+1. 再遇到 **TUI-only 能力被降级**、且无法在 RPC 侧绕开（scoped models 属已绕开，见 §15.11.1）；
+2. Pi 上游发布**只存在于 interactive 模式**的能力/语义，且用户需要它；
+3. "追 RPC 缺口"的长期维护成本开始显著（例如连续多个版本都要补 TUI 独有语义）；
+4. 需要把**主会话**与 Pi 的 TUI 完全对齐（例如要求浏览器与终端看到同一份实时状态）。
+
+**当前状态：RPC 路线为唯一引擎（1.1.0），本节路线暂缓、研究已存档。**
