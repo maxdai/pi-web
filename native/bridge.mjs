@@ -117,6 +117,52 @@ export default function (pi) {
     return themes;
   }
 
+  /** Pi 包的 scoped-model 解析助手（公开导出，实现与 TUI 同一函数）。惰性加载并缓存。
+   *  取用方式沿用既有 `argv[1] → pkgDir → dist/index.js` 技术（与主题加载一致）。 */
+  let scopedResolver;
+  async function loadScopedResolver() {
+    if (scopedResolver !== undefined) return scopedResolver;
+    try {
+      const mod = await import(pathToFileURL(join(resolvePkgDir(), "dist", "index.js")).href);
+      scopedResolver = typeof mod.resolveModelScopeWithDiagnostics === "function" ? mod.resolveModelScopeWithDiagnostics : null;
+    } catch {
+      scopedResolver = null;
+    }
+    return scopedResolver;
+  }
+
+  /** 把 scoped models **即时**应用到会话（设计见 pi-web-design.md §15.11.1）：
+   *  解析模式（glob / `:thinkingLevel` 后缀 / 模糊匹配，与 TUI 同实现）→
+   *  **就地改 `ctx.scopedModels`**（该 getter 返回 session 内部数组本身，splice 等价于
+   *  `session.setScopedModels()`）→ **回读校验**（id 集合一致才算成功）。
+   *  任一步失败即抛错，由调用方回报服务端 → 服务端退回"写 settings + 提示重启"。 */
+  async function applyScopedModels(patterns, ctx) {
+    const resolve = await loadScopedResolver();
+    if (!resolve) throw new Error("resolveModelScopeWithDiagnostics not exported by this Pi version");
+    const runtime = ctx.modelRegistry?.runtime;
+    if (!runtime || typeof runtime.getAvailableSnapshot !== "function") {
+      throw new Error("ctx.modelRegistry.runtime unavailable");
+    }
+    const res = await resolve(patterns, runtime);
+    const arr = ctx.scopedModels;
+    if (!Array.isArray(arr)) throw new Error("ctx.scopedModels is not an array");
+    const shape = (list) =>
+      list.map((s) => ({
+        provider: s.model?.provider,
+        id: s.model?.id,
+        name: s.model?.name,
+        thinkingLevel: s.thinkingLevel,
+      }));
+    const key = (list) => list.map((s) => `${s.provider}/${s.id}`).sort().join("|");
+    arr.splice(0, arr.length, ...(res.scopedModels ?? []));
+    const got = shape(ctx.scopedModels);
+    if (key(got) !== key(shape(res.scopedModels ?? []))) {
+      // 未来 Pi 若改成返回拷贝，这里会失败 → 服务端自动退回旧行为（不会静默失效）
+      throw new Error("in-place update not visible (Pi may now return a copy)");
+    }
+    return { scopedModels: got, diagnostics: (res.diagnostics ?? []).map((d) => d.code ?? "warning") };
+  }
+
   /** 面板可用列/行数：由网页按实际版面量出后经服务端中转（见 app.js sendPanelGeometry）。
    *  组件按这个宽度渲染才不会折行、也不需要横向滚动。取不到时回退到环境变量/默认值。 */
   async function fetchPanelGeometry() {
@@ -483,6 +529,34 @@ export default function (pi) {
       }
       await ctx.reload();
       await post("/side/event", { type: "reloaded", idleBeforeReload: idle });
+    },
+  });
+
+  /** scoped models 即时生效（服务端先经侧信道登记待应用的模式，再用 RPC prompt 触发本命令；
+   *  与 pi-web:reload 同一模式：命令做工作、结果经侧信道回传）。 */
+  pi.registerCommand("pi-web:set-scoped-models", {
+    description: "Apply scoped models immediately (pi-web bridge)",
+    handler: async (_args, ctx) => {
+      let patterns = null;
+      try {
+        const res = await fetch(`${url}/side/scoped-pending`, { headers: { "x-pi-web-token": token } });
+        if (res.status === 204) return;
+        const payload = await res.json().catch(() => undefined);
+        patterns = Array.isArray(payload?.patterns) ? payload.patterns : null;
+      } catch (err) {
+        await post("/side/scoped-applied", { ok: false, error: `pending fetch failed: ${err.message}` });
+        return;
+      }
+      if (!patterns) {
+        await post("/side/scoped-applied", { ok: false, error: "no pending patterns" });
+        return;
+      }
+      try {
+        const result = await applyScopedModels(patterns, ctx);
+        await post("/side/scoped-applied", { ok: true, ...result });
+      } catch (err) {
+        await post("/side/scoped-applied", { ok: false, error: String(err?.message ?? err) });
+      }
     },
   });
 

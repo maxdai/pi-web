@@ -105,6 +105,17 @@ export default function (pi) {
       };
       const mod = await import(pathToFileURL(join(pkgDir, "dist", "index.js")).href);
       report.themeExport = typeof mod.Theme;
+      // scoped models 即时生效（§15.11.1）所依赖的三处事实：
+      //  ① 包公开导出解析助手（语义与 TUI 同实现）；② ctx.modelRegistry.runtime 可达；
+      //  ③ ctx.scopedModels 是**同一个数组对象**（就地改才等价于 session.setScopedModels）
+      report.scopedResolverExport = typeof mod.resolveModelScopeWithDiagnostics === "function";
+      report.scopedRegistryRuntime = typeof ctx.modelRegistry?.runtime?.getAvailableSnapshot === "function";
+      try {
+        const arr = ctx.scopedModels;
+        report.scopedSharedArray = Array.isArray(arr) && ctx.scopedModels === arr;
+      } catch (err) {
+        report.scopedSharedArray = `ERR:${err.message}`;
+      }
       const json = JSON.parse(
         readFileSync(join(pkgDir, "dist", "modes", "interactive", "theme", "dark.json"), "utf8"),
       );

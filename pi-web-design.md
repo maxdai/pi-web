@@ -1020,7 +1020,7 @@ node deadlock-harness.mjs --bridge             # 桥接接管：resolve = true
 
 | 差异 | 说明 | 影响 |
 |---|---|---|
-| **scoped models 即时生效** | SDK 走 `session.setScopedModels()` 立即生效；原生只能写 `settings.json`。**实测 `ctx.reload()` 不会重算 scoped models**（改 `enabledModels` 后 reload，`ctx.scopedModels` 仍是旧值）→ 必须**重启 pi 子进程**（原因见下「API 缺口」） | `/scoped-models` 改动与页脚模型列表要重启后才反映（未实现自动重启）。**注意：现 SDK 引擎是即时生效的，直接迁移会回退这个功能** |
+| ~~**scoped models 即时生效**~~ → **已关闭（2026-10-14）** | 原状：SDK 走 `session.setScopedModels()` 立即生效，原生只能写 `settings.json` 且 `ctx.reload()` 不重算 → 需重启 pi 子进程。**现已实现即时生效**：见下方 §15.11.1（利用 `ctx.scopedModels` 是 session 内部数组这一事实就地改） | `/scoped-models` 勾选立即反映到会话与页脚，无需重启；失败时自动退回"写 settings + 提示重启" |
 | **`.jsonl` 导出** | SDK 有 `session.exportToJsonl`；RPC 只有 `export_html` | 原生下 `.jsonl` 导出以降级提示代替 |
 | **非功能性** | SDK 宿主有 WS 背压与堆水位保护、`PI_SESSION_DIR`/自定义配置目录解析；原型无（原型服务端很薄，pi 子进程自带内存策略） | 极端流量/自定义目录场景下的健壮性与解析差异 |
 
@@ -1141,99 +1141,39 @@ TUI（宿主，与 Pi 同进程、同代码库）
 
 **恢复这项工作的入口**（无需重新调研）：A = 上文 3 处改动（`types.ts` 白名单 + `bindCore` 绑定 + context 暴露）；B = 「写 settings → kill → 以同一会话重拉 → 重发 state/history」。
 
-## 17. 落地切换：`pii r <name> --web` 改为原生引擎（2026-10 决定）
+#### 15.11.1 scoped models 即时生效的实现（2026-10-14）
 
-### 17.1 决定
+**背景**：pi-vscode 的选择器能即时生效，因为它是**宿主**（直接持有 `AgentSession` 并调用
+`session.setScopedModels()`）。我们的原生引擎是「RPC 子进程的父进程 + 进程内注入扩展」：
+- 父进程侧：RPC 命令面**没有** scoped 相关命令（实测 `grep scoped modes/rpc/*` 为空）；
+- 扩展侧：上下文只有只读快照 `ctx.scopedModels` 与文件级 `ctx.sessionManager`，**够不到 session**
+  （探针遍历 `ctx`/`pi` 的对象图，未发现任何可调用 `setScopedModels` 的路径）。
 
-| 入口 | 现状 | 切换后 |
-|---|---|---|
-| `pii r <name>` | TUI（exec `pi`） | **不变** |
-| `pii r <name> --web [port]` | 打包的 **Python RPC 服务端**（`server/server.py`，内部 spawn `pi --mode rpc`） | **一步切换**为**独立原生服务端 bin**（RPC + 桥接扩展 + 现有 WS 协议/前端） |
-| `pi-web r <name>` | SDK 宿主 | **保持不动**（过渡期对照与回退；最终去留见 §15.8 阶段 E） |
+**等价路径（源码 + 实测）**：
 
-要点：**不新增用户可见命令/参数**——`--web` 的语义、默认端口 4080、端口越界与占用报错行为全部保持不变，换的只是背后的引擎。
-
-选择理由：① `--web` 本就是「RPC 式 web」的槽位，而桥接是对 RPC UI 通道缺陷的补丁，语义吻合；
-② 去掉版本漂移（驱动已安装的 `pi`，不再内嵌 SDK）；③ SDK 版原样保留，回退只需改 `pii` 一行。
-
-### 17.2 接口契约（与 `pii` / Python 服务端同形）
-
-```bash
-pi-web-native <session-id> <cwd> --port <n>          # 对应 server.py <session_id> <cwd> --port
+```ts
+// core/agent-session.ts:3463
+getScopedModels: () => this._scopedModels,        // 返回 session 内部数组本身（无拷贝）
+// core/agent-session.ts:1671
+setScopedModels(list) { this._scopedModels = list; }   // setter 也只是换引用
 ```
+扩展上下文的 `scopedModels` getter 返回的就是这个数组 → **就地 `splice` 等价于 `setScopedModels`**。
 
-- `pii`（Python）继续负责：按**会话名**扫描 `~/.pi/agent/sessions/**/*.jsonl`、重名取最近并警告、`chdir(cwd)`
-- 原生服务端新增按 **header `id`** 解析会话（并保留原型已有的 `--session <name>` / `--session-file <path>`）
-- 端口默认 **4080**、越界与非数字报错退出；`cwd` 不存在报错退出（与 Python 版一致，不自动换端口）
+**id/模式解析复用 Pi 的公开导出**（语义与 TUI 完全一致，不自己重写）：
+`resolveModelScopeWithDiagnostics(patterns, modelRuntime)` 是 `model-resolver.ts:364` 的公开导出，
+其实现即 `resolveModelScopeFromModels(patterns, await modelRuntime.getAvailable(...))`（TUI 用的同一函数）。
+取用方式沿用 §16 既有的 `argv[1] → pkgDir` 技术：`realpathSync(process.argv[1])` 后向上找 `package.json`，
+再 `import(<pkg>/dist/index.js)`。`ModelRuntime` 取自 `ctx.modelRegistry.runtime`
+（TS-private 字段，运行时仍是普通属性）。
 
-### 17.3 代码位置与打包
+**端到端实测（真实 pi 进程内探针）**：`pkgDir` 解析成功；`runtimeReachable=true`；`helperExported=true`；
+11 个 scoped 模式 → 解析出 11 个模型、0 诊断；就地改数组后 `sameArrayAfterMutate=true`、回读可见。
 
-| 项 | 位置 |
-|---|---|
-| 原生服务端源码 | 仓库根新增 `native/`（与既有 `pii/`、`server/` 同级，沿用「非 TS 运行期资产放根目录」的约定）：`server.mjs`（**单文件 bin**：参数/会话解析 + HTTP 静态 + WS 协议 + RPC 客户端 + 侧信道）、`bridge.mjs`（注入 `pi` 的桥接扩展）。不做无谓拆分——参数与会话解析只有几十行，单拆 `cli.mjs` 反而多一层间接 |
-| 打包 | `pi-sdk-web/scripts/build-assets.mjs` 增加一步：`native/ → dist/native/`（含执行位）；`package.json` 的 `bin` 增加 **`pi-web-native: ./dist/native/server.mjs`** |
-| 前端 | 复用现有 `static/`（`panelGeometry` 能力位已门控，SDK 引擎不受影响） |
-| `pii` 改动 | `--web` 分支改为 `_native_server_cmd()`：解析顺序 `PI_WEB_NATIVE_BIN` → PATH 上的 `pi-web-native` → 仓库内 `native/server.mjs`（用 `node` 执行） |
-
-原型（`experiments/rpc-bridge/`，2026-10 已提升为 `native/`）作为验证与回归对照的历史记录保留在设计文档中。
-
-### 17.4 切换前必须补齐（非功能性；只在日常使用中暴露）
-
-| 项 | 要求 |
-|---|---|
-| **pi 子进程生命周期** | 启动失败给出明确报错（不静默）；子进程异常退出时在界面提示；服务端退出（SIGINT/SIGTERM）时清理子进程；不遗留孤儿进程 |
-| **WS 背压** | 客户端落后时跳过流式增量、追上后恢复（对齐 SDK 宿主的做法与日志格式），避免长会话/大输出时内存飙升 |
-| **同会话并发写保护** | 同一 `.jsonl` 已被另一个**原生 web 实例**占用时在界面提示：每个实例把 `PI_WEB_BRIDGE_SESSION=<会话文件>` 注入 pi 子进程环境，扫 `/proc/<pid>/environ` 可靠命中。**TUI 无法可靠检测**（2026-10 实测：pi 用 `process.title` 覆写 argv、会话文件写完即关、Pi 无任何锁机制）——为避免误报不对 TUI 做猜测，仅记录该边界 |
-| 端口/cwd 校验 | 与 Python 版一致（见 §17.2） |
-
-**Ctrl+C 的退出次序（2026-10-14 实测定位并修复）**：Ctrl+C 会把 SIGINT 送给**整个前台进程组**（pii + 服务端 + pi 子进程），服务端因此自行优雅关停（杀 pi 子进程、关 socket、打印收尾日志）。
-若 `pii` 收到 KeyboardInterrupt 就**立刻 `sys.exit`**，则 bash 会先打印提示符，而服务端仍在关停、它的收尾日志会**落到提示符之后**（现象：提示符后多一行/被顶掉，且带不确定性）。修法两条：
-
-- **第 1 层 · Python 启动器 `pii`**：`--web` 分支改为 `Popen` + `wait()`：首次 Ctrl+C 后**继续等子进程**收尾（上限 5s，超时或再次 Ctrl+C 才 `kill`），**不再自己 `print()` 空行**（服务端输出自带换行）；
-- **第 2 层 · npm bin 包装器 `pii-cli.js`**（Node，`spawnSync` 调 Python 启动器）：必须**忽略 SIGINT/SIGTERM**，否则 Node 默认行为会立刻杀掉包装器——而包装器才是 bash 的直接子进程，bash 照样会先打印提示符、把后续日志挤到提示符之后；
-- 实测（pty 逐字节）：修复前 `…关停…\r\n\r\n bash提示符 [pi-web] pi子进程已退出…\r\n \r\n`；修复后经**真实 `pii` 命令**连测 3 次均为 `…关停…\r\n[pi-web] pi子进程已退出…\r\n bash提示符`，干净且确定。
-- 一般化教训：**前台进程组里每一层都要么自己收尾、要么耐心等下一层**；任何一层抢先退出，shell 的提示符就会插到别人的收尾输出中间。
-
-**会话解析三种入口（语义不可混）**：位置参数 ` <session-id> [cwd]` 按 header `id` 匹配（pii 的调用契约）；`--session <name>` 按**显示名**匹配（含 `"(unnamed)"`）；`--session-file <path>` 直接指定。曾把位置参数与 `--session` 合并且都按 id 匹配 → `--session <name>` 静默失效（2026-10-14 修复）。
-
-### 17.5 切换后仍存在的缺口（明确记录，不视为 bug）
-
-- **scoped models 改动需重启 pi 子进程**（实测 `ctx.reload()` 不重算；§15.11）
-- **`.jsonl` 导出降级**为提示（RPC 仅 `export_html`）
-- **命令产生的历史条目不复刻**（= 与 TUI 一致；SDK 版会多出 `[ctx-status] (click to expand)` 之类记录；§15.11 A3，2026-10 用户拍板）
-
-### 17.6 验证计划
-
-1. 冒烟 42 项全绿（原生实例）
-2. **`pii r <name> --web <port>` 端到端跑通**（真实会话；若该会话同时被 TUI 打开，先确认并发写提示生效）
-3. 与 SDK 版 A/B：三列表（Extensions/Tools/`/` 菜单）、命令输出呈现、对话框语义（timeout/无限等待/倒计时/中止）
-4. 宿主契约核对器全绿（Pi 1.2.0 基线，§16）
-5. **回退演练**：`pi-web r <name>` 仍可用，改回 `pii` 一行即可复原
-
-### 17.6.1 实施与验证结果（2026-10-14）
-
-| 项 | 结果 |
-|---|---|
-| `native/` 提升 | `git mv experiments/rpc-bridge/{server,bridge}.mjs → native/`；核对器与探针随后迁至 `tools/host-contract/`（`experiments/` 已清空） |
-| 打包 | `npm run build` 后 `dist/native/{server.mjs,bridge.mjs}` 就位（server 带执行位）；bin `pi-web-native` 可独立运行 |
-| **发布布局实测** | `node pi-sdk-web/dist/native/server.mjs <id> /root --port 4099`：**冒烟 42/42**（静态前端取自 `dist/static`、`ws` 从包内 node_modules 解析、桥接取自 `dist/native/bridge.mjs`） |
-| **`pii --web` 端到端** | `PI_WEB_DIR=/root/pi-web python3 pii/pii r install --web 4098` → 原生引擎启动、页面 200、**冒烟 42/42** |
-| 参数/错误路径 | 无参数→用法；非法端口→`Invalid port`；cwd 不存在→`Working directory not found`；会话 id 不存在→明确报错（均带时间戳） |
-| 子进程生命周期 | SIGTERM 关停：先 SIGTERM 子进程（实测 code=143），1.5s 未退则 SIGKILL；**无孤儿**；子进程意外退出会向界面提示原因（不静默） |
-| 并发写提示 | 同会话起第二个实例 → 实测命中 `警告：同一会话已被另一个原生 web 实例打开（PID …）` |
-| WS 背压 | 「连上即暂停读取」的客户端 + 4MB 输出实测：命中 `client is behind (0.3MB queued) - skipping stream deltas until it catches up`，服务端保持可用；阈值可经 `PI_WEB_BACKPRESSURE_HIGH/LOW` 调整（默认 8MB/2MB） |
-| 自身日志 | 服务端全部诊断行带本地时间戳（命令/扩展输出保持原样不加） |
-| 迁移引入的两个真问题 | ① `STATIC_DIR` 原以 `../..` 解析 → 迁移后指到仓库外，已改 `../static`（仓库与发布两种布局均成立）；② `ws` 原用硬编码绝对路径 `createRequire("/root/pi-web/pi-sdk-web/package.json")` → 发布后必然失效，已改为「按自身位置解析，失败回退同级 pi-sdk-web」 |
-
-
-### 17.7 风险
-
-| 风险 | 缓解 |
-|---|---|
-| 一步切换 ⇒ 缺口立刻暴露在日常使用中 | SDK 版原样保留；回退只需改 `pii` 一行；缺口清单见 §17.5 |
-| 进程模型变复杂（服务端 + pi 子进程，SDK 版是单进程） | §17.4 的生命周期/背压/并发保护作为切换前置条件 |
-| Pi 升级后宿主契约可能变 | 升级后跑 §16 核对器（已有基线与 14 项关键判定） |
-| 打包路径/执行位问题 | 沿用 `build-assets.mjs` 既有做法，并加自检（文件存在 + 执行位） |
+**实现**：桥接注册命令 `pi-web:set-scoped-models`（服务端经 RPC `prompt "/pi-web:set-scoped-models"`
+触发，与 `pi-web:reload` 同一模式）；桥接从侧信道取待应用的模式列表 → 解析 → **就地改数组** →
+**回读校验**（id 集合一致才算成功）→ 回报结果。服务端在成功后刷新缓存的 scoped 列表并广播 state；
+`persist===true` 仍照旧写 `settings.json`；**应用失败/超时则退回原行为**（写 settings + 提示需重启）。
+三层兜底：① 探针断言（数组身份、导出存在、runtime 可达，见 §16）；② 应用后回读校验；③ 失败自动降级。
 
 ### 15.12 面板几何与"横框折行"（2026-10，用户实测闭环）
 
@@ -1346,6 +1286,99 @@ pi-web-native <session-id> <cwd> --port <n>          # 对应 server.py <session
 → **教训与待办**：凡是"包内路径被用户配置引用"（软链/配置项）的地方，移动或重命名包都会静默破坏用户环境；
 发版说明里应提示检查 `~/.pi/agent/prompts/` 一类目录下的悬空软链（步骤 8 的用户侧升级提示已含此意）。
 
+## 17. 落地切换：`pii r <name> --web` 改为原生引擎（2026-10 决定）
+
+### 17.1 决定
+
+| 入口 | 现状 | 切换后 |
+|---|---|---|
+| `pii r <name>` | TUI（exec `pi`） | **不变** |
+| `pii r <name> --web [port]` | 打包的 **Python RPC 服务端**（`server/server.py`，内部 spawn `pi --mode rpc`） | **一步切换**为**独立原生服务端 bin**（RPC + 桥接扩展 + 现有 WS 协议/前端） |
+| `pi-web r <name>` | SDK 宿主 | **保持不动**（过渡期对照与回退；最终去留见 §15.8 阶段 E） |
+
+要点：**不新增用户可见命令/参数**——`--web` 的语义、默认端口 4080、端口越界与占用报错行为全部保持不变，换的只是背后的引擎。
+
+选择理由：① `--web` 本就是「RPC 式 web」的槽位，而桥接是对 RPC UI 通道缺陷的补丁，语义吻合；
+② 去掉版本漂移（驱动已安装的 `pi`，不再内嵌 SDK）；③ SDK 版原样保留，回退只需改 `pii` 一行。
+
+### 17.2 接口契约（与 `pii` / Python 服务端同形）
+
+```bash
+pi-web-native <session-id> <cwd> --port <n>          # 对应 server.py <session_id> <cwd> --port
+```
+
+- `pii`（Python）继续负责：按**会话名**扫描 `~/.pi/agent/sessions/**/*.jsonl`、重名取最近并警告、`chdir(cwd)`
+- 原生服务端新增按 **header `id`** 解析会话（并保留原型已有的 `--session <name>` / `--session-file <path>`）
+- 端口默认 **4080**、越界与非数字报错退出；`cwd` 不存在报错退出（与 Python 版一致，不自动换端口）
+
+### 17.3 代码位置与打包
+
+| 项 | 位置 |
+|---|---|
+| 原生服务端源码 | 仓库根新增 `native/`（与既有 `pii/`、`server/` 同级，沿用「非 TS 运行期资产放根目录」的约定）：`server.mjs`（**单文件 bin**：参数/会话解析 + HTTP 静态 + WS 协议 + RPC 客户端 + 侧信道）、`bridge.mjs`（注入 `pi` 的桥接扩展）。不做无谓拆分——参数与会话解析只有几十行，单拆 `cli.mjs` 反而多一层间接 |
+| 打包 | `pi-sdk-web/scripts/build-assets.mjs` 增加一步：`native/ → dist/native/`（含执行位）；`package.json` 的 `bin` 增加 **`pi-web-native: ./dist/native/server.mjs`** |
+| 前端 | 复用现有 `static/`（`panelGeometry` 能力位已门控，SDK 引擎不受影响） |
+| `pii` 改动 | `--web` 分支改为 `_native_server_cmd()`：解析顺序 `PI_WEB_NATIVE_BIN` → PATH 上的 `pi-web-native` → 仓库内 `native/server.mjs`（用 `node` 执行） |
+
+原型（`experiments/rpc-bridge/`，2026-10 已提升为 `native/`）作为验证与回归对照的历史记录保留在设计文档中。
+
+### 17.4 切换前必须补齐（非功能性；只在日常使用中暴露）
+
+| 项 | 要求 |
+|---|---|
+| **pi 子进程生命周期** | 启动失败给出明确报错（不静默）；子进程异常退出时在界面提示；服务端退出（SIGINT/SIGTERM）时清理子进程；不遗留孤儿进程 |
+| **WS 背压** | 客户端落后时跳过流式增量、追上后恢复（对齐 SDK 宿主的做法与日志格式），避免长会话/大输出时内存飙升 |
+| **同会话并发写保护** | 同一 `.jsonl` 已被另一个**原生 web 实例**占用时在界面提示：每个实例把 `PI_WEB_BRIDGE_SESSION=<会话文件>` 注入 pi 子进程环境，扫 `/proc/<pid>/environ` 可靠命中。**TUI 无法可靠检测**（2026-10 实测：pi 用 `process.title` 覆写 argv、会话文件写完即关、Pi 无任何锁机制）——为避免误报不对 TUI 做猜测，仅记录该边界 |
+| 端口/cwd 校验 | 与 Python 版一致（见 §17.2） |
+
+**Ctrl+C 的退出次序（2026-10-14 实测定位并修复）**：Ctrl+C 会把 SIGINT 送给**整个前台进程组**（pii + 服务端 + pi 子进程），服务端因此自行优雅关停（杀 pi 子进程、关 socket、打印收尾日志）。
+若 `pii` 收到 KeyboardInterrupt 就**立刻 `sys.exit`**，则 bash 会先打印提示符，而服务端仍在关停、它的收尾日志会**落到提示符之后**（现象：提示符后多一行/被顶掉，且带不确定性）。修法两条：
+
+- **第 1 层 · Python 启动器 `pii`**：`--web` 分支改为 `Popen` + `wait()`：首次 Ctrl+C 后**继续等子进程**收尾（上限 5s，超时或再次 Ctrl+C 才 `kill`），**不再自己 `print()` 空行**（服务端输出自带换行）；
+- **第 2 层 · npm bin 包装器 `pii-cli.js`**（Node，`spawnSync` 调 Python 启动器）：必须**忽略 SIGINT/SIGTERM**，否则 Node 默认行为会立刻杀掉包装器——而包装器才是 bash 的直接子进程，bash 照样会先打印提示符、把后续日志挤到提示符之后；
+- 实测（pty 逐字节）：修复前 `…关停…\r\n\r\n bash提示符 [pi-web] pi子进程已退出…\r\n \r\n`；修复后经**真实 `pii` 命令**连测 3 次均为 `…关停…\r\n[pi-web] pi子进程已退出…\r\n bash提示符`，干净且确定。
+- 一般化教训：**前台进程组里每一层都要么自己收尾、要么耐心等下一层**；任何一层抢先退出，shell 的提示符就会插到别人的收尾输出中间。
+
+**会话解析三种入口（语义不可混）**：位置参数 ` <session-id> [cwd]` 按 header `id` 匹配（pii 的调用契约）；`--session <name>` 按**显示名**匹配（含 `"(unnamed)"`）；`--session-file <path>` 直接指定。曾把位置参数与 `--session` 合并且都按 id 匹配 → `--session <name>` 静默失效（2026-10-14 修复）。
+
+### 17.5 切换后仍存在的缺口（明确记录，不视为 bug）
+
+- ~~scoped models 改动需重启 pi 子进程~~ → **已关闭**（2026-10-14 实现即时生效，见 §15.11.1）
+- **`.jsonl` 导出降级**为提示（RPC 仅 `export_html`）
+- **命令产生的历史条目不复刻**（= 与 TUI 一致；SDK 版会多出 `[ctx-status] (click to expand)` 之类记录；§15.11 A3，2026-10 用户拍板）
+
+### 17.6 验证计划
+
+1. 冒烟 42 项全绿（原生实例）
+2. **`pii r <name> --web <port>` 端到端跑通**（真实会话；若该会话同时被 TUI 打开，先确认并发写提示生效）
+3. 与 SDK 版 A/B：三列表（Extensions/Tools/`/` 菜单）、命令输出呈现、对话框语义（timeout/无限等待/倒计时/中止）
+4. 宿主契约核对器全绿（Pi 1.2.0 基线，§16）
+5. **回退演练**：`pi-web r <name>` 仍可用，改回 `pii` 一行即可复原
+
+### 17.6.1 实施与验证结果（2026-10-14）
+
+| 项 | 结果 |
+|---|---|
+| `native/` 提升 | `git mv experiments/rpc-bridge/{server,bridge}.mjs → native/`；核对器与探针随后迁至 `tools/host-contract/`（`experiments/` 已清空） |
+| 打包 | `npm run build` 后 `dist/native/{server.mjs,bridge.mjs}` 就位（server 带执行位）；bin `pi-web-native` 可独立运行 |
+| **发布布局实测** | `node pi-sdk-web/dist/native/server.mjs <id> /root --port 4099`：**冒烟 42/42**（静态前端取自 `dist/static`、`ws` 从包内 node_modules 解析、桥接取自 `dist/native/bridge.mjs`） |
+| **`pii --web` 端到端** | `PI_WEB_DIR=/root/pi-web python3 pii/pii r install --web 4098` → 原生引擎启动、页面 200、**冒烟 42/42** |
+| 参数/错误路径 | 无参数→用法；非法端口→`Invalid port`；cwd 不存在→`Working directory not found`；会话 id 不存在→明确报错（均带时间戳） |
+| 子进程生命周期 | SIGTERM 关停：先 SIGTERM 子进程（实测 code=143），1.5s 未退则 SIGKILL；**无孤儿**；子进程意外退出会向界面提示原因（不静默） |
+| 并发写提示 | 同会话起第二个实例 → 实测命中 `警告：同一会话已被另一个原生 web 实例打开（PID …）` |
+| WS 背压 | 「连上即暂停读取」的客户端 + 4MB 输出实测：命中 `client is behind (0.3MB queued) - skipping stream deltas until it catches up`，服务端保持可用；阈值可经 `PI_WEB_BACKPRESSURE_HIGH/LOW` 调整（默认 8MB/2MB） |
+| 自身日志 | 服务端全部诊断行带本地时间戳（命令/扩展输出保持原样不加） |
+| 迁移引入的两个真问题 | ① `STATIC_DIR` 原以 `../..` 解析 → 迁移后指到仓库外，已改 `../static`（仓库与发布两种布局均成立）；② `ws` 原用硬编码绝对路径 `createRequire("/root/pi-web/pi-sdk-web/package.json")` → 发布后必然失效，已改为「按自身位置解析，失败回退同级 pi-sdk-web」 |
+
+
+### 17.7 风险
+
+| 风险 | 缓解 |
+|---|---|
+| 一步切换 ⇒ 缺口立刻暴露在日常使用中 | SDK 版原样保留；回退只需改 `pii` 一行；缺口清单见 §17.5 |
+| 进程模型变复杂（服务端 + pi 子进程，SDK 版是单进程） | §17.4 的生命周期/背压/并发保护作为切换前置条件 |
+| Pi 升级后宿主契约可能变 | 升级后跑 §16 核对器（已有基线与 14 项关键判定） |
+| 打包路径/执行位问题 | 沿用 `build-assets.mjs` 既有做法，并加自检（文件存在 + 执行位） |
 
 ## 16. 宿主（Pi）依赖与兼容性核对清单
 
@@ -1432,6 +1465,14 @@ node tools/host-contract/check-host-contract.mjs --json
 - **判定**：`FAIL` = 立足点被破坏（须处理）；`DRIFT` = 与基线有差异（须人工判断，例如 UI 方法增删）
 - 补充验证：`node tools/smoke.mjs http://127.0.0.1:4096`（42 项）+ 桥接自带诊断命令 `/pi-web:demo-widget`、`/pi-web:demo-clear`、`/pi-web:demo-dialog`、`/pi-web:demo-panel`
 - 核对器自身可靠性已验证（2026-10）：篡改基线（移除一个 UI 方法、把 `theme` 改为不可配置 getter）后，核对器正确报出 4 处差异。
+
+**scoped models 即时生效的三处依赖（2026-10-14 新增，§15.11.1）**：
+
+| 依赖 | 事实 | 破坏后果 | 核对方式 |
+|---|---|---|---|
+| 包公开导出 `resolveModelScopeWithDiagnostics` | `model-resolver.ts:364` 导出，实现 = TUI 用的 `resolveModelScopeFromModels` | 取不到解析器 → 即时生效不可用（自动退回写 settings + 提示重启） | 探针 `scopedResolverExport` |
+| `ctx.modelRegistry.runtime` 可达 | TS-private 字段，运行时仍是普通属性；`getAvailableSnapshot()` 可用 | 同上 | 探针 `scopedRegistryRuntime` |
+| `ctx.scopedModels` 是 session 内部数组本身 | `agent-session.ts:3463 getScopedModels: () => this._scopedModels`（无拷贝） | 若改为返回拷贝，就地改无效 → 回读校验会失败 → 自动退回旧行为 | 探针 `scopedSharedArray` + 运行时回读校验 |
 
 ### 16.7 失效后的降级路径
 

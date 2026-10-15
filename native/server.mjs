@@ -260,6 +260,9 @@ async function rpcData(type, extra) {
 // ------------------------------------------------------------------ WS 广播
 const clients = new Set();
 let lastScopedNoticeAt = 0; // scoped-models 提示去抖（避免每次勾选都刷一行）
+let pendingScopedPatterns = null; // 待桥接即时应用的 scoped 模式（侧信道一次性交接）
+let scopedApplyResolve = null; // 等待桥接回传应用结果
+let scopedApplyTimeoutMs = 5000;
 /** 面板可用列/行数，由前端按实际版面量出后上报；桥接据此决定组件渲染宽度。
  *  默认值只在浏览器还没上报时兜底（例如扩展在页面连上之前就弹面板）。 */
 let panelGeometry = { cols: 100, rows: 40 };
@@ -393,6 +396,28 @@ async function buildState() {
     /* 统计失败不影响首屏 */
   }
   return state;
+}
+
+/** 让桥接扩展在会话内**即时**应用 scoped models（设计见 pi-web-design.md §15.11.1）。
+ *  流程：登记待应用模式 → 经 RPC prompt 触发桥接命令 → 等桥接经侧信道回传结果。
+ *  失败/超时返回 {ok:false}，调用方退回"写 settings + 提示需重启"的旧行为。 */
+async function applyScopedInSession(patterns) {
+  pendingScopedPatterns = patterns;
+  const done = new Promise((resolve) => {
+    scopedApplyResolve = resolve;
+    setTimeout(() => {
+      if (scopedApplyResolve === resolve) {
+        scopedApplyResolve = null;
+        resolve({ ok: false, error: "timeout" });
+      }
+    }, scopedApplyTimeoutMs);
+  });
+  try {
+    await rpc("prompt", { message: "/pi-web:set-scoped-models" });
+  } catch (err) {
+    return { ok: false, error: `rpc: ${err.message}` };
+  }
+  return done;
 }
 
 async function sendState(target) {
@@ -875,31 +900,38 @@ async function handleClientMessage(ws, msg) {
         const patterns = (msg.models ?? [])
           .filter((m) => m.provider && m.modelId)
           .map((m) => `${m.provider}/${m.modelId}`);
-        if (msg.persist !== true) {
-          // 原生引擎**无法**在会话内改 scoped models：RPC 无此命令、ExtensionAPI 无此方法，
-          // 且实测 ctx.reload() 不会重算 scopedModels —— 只能写 settings + 重启子进程。
-          // 所以这里明确不写 settings（避免勾一下就把用户的 settings.json 改掉），并给出提示。
-          const now = Date.now();
-          if (now - lastScopedNoticeAt > 30_000) {
-            lastScopedNoticeAt = now;
-            notify(
-              "scoped-models",
-              "原生引擎：勾选仅在保存后生效（保存会写 settings，需重启 pi 子进程；SDK 版可即时生效）",
-              "warning",
-            );
-          }
+        if (msg.persist === true) {
+          // 只有保存动作写 settings（与 TUI 的 Ctrl+S 对齐）；勾选仅内存生效
+          const settings = JSON.parse(readFileSync(SETTINGS_FILE, "utf8"));
+          if (patterns.length > 0) settings.enabledModels = patterns;
+          else delete settings.enabledModels;
+          writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2));
+          log(`[pi-web] enabledModels → ${JSON.stringify(patterns)}（已写入 settings）`);
+        }
+        // 会话内即时应用（§15.11.1）：改的是 session 内部数组本身，勾选即生效、无需重启
+        const applied = await applyScopedInSession(patterns);
+        if (applied.ok) {
+          bridgeInfo = { ...bridgeInfo, scopedModels: applied.scopedModels ?? [] };
+          log(
+            `[pi-web] scoped models 即时生效 → ${(applied.scopedModels ?? []).length} 个` +
+              (applied.diagnostics?.length ? `（诊断：${applied.diagnostics.join(",")}）` : ""),
+          );
+          sendState();
+          if (msg.persist === true) notify("scoped-models", `已保存 ${patterns.length} 个 scoped models，已即时生效`, "info");
           break;
         }
-        const settings = JSON.parse(readFileSync(SETTINGS_FILE, "utf8"));
-        if (patterns.length > 0) settings.enabledModels = patterns;
-        else delete settings.enabledModels;
-        writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2));
-        log(`[pi-web] enabledModels → ${JSON.stringify(patterns)}（重启本原型后生效）`);
-        notify(
-          "scoped-models",
-          `已保存 ${patterns.length} 个 scoped models；原生引擎需重启 pi 子进程后生效`,
-          "warning",
-        );
+        // 兜底：即时应用不可用（Pi 改了内部实现 / 超时）→ 退回旧行为并明确告知
+        const now = Date.now();
+        if (now - lastScopedNoticeAt > 30_000) {
+          lastScopedNoticeAt = now;
+          notify(
+            "scoped-models",
+            `未能即时生效（${applied.error}）：${
+              msg.persist === true ? "已写入 settings，需重启 pi 子进程后生效" : "保存后会写入 settings，需重启 pi 子进程生效"
+            }`,
+            "warning",
+          );
+        }
         break;
       }
       case "set_theme":
@@ -1092,6 +1124,23 @@ const server = createServer(async (req, res) => {
       if (route === "geometry") {
         // 桥接 render 前取用：按面板实际宽度渲染扩展组件，避免折行
         return reply(panelGeometry);
+      }
+      if (route === "scoped-pending") {
+        // 桥接取用待应用的 scoped 模式（一次性；无待办返回 204）
+        const payload = pendingScopedPatterns ? { patterns: pendingScopedPatterns } : null;
+        pendingScopedPatterns = null;
+        if (!payload) {
+          res.writeHead(204).end();
+          return;
+        }
+        return reply(payload);
+      }
+      if (route === "scoped-applied") {
+        // 桥接回报应用结果（成功/失败），唤醒等待中的 set_scoped_models
+        const resolve = scopedApplyResolve;
+        scopedApplyResolve = null;
+        if (resolve) resolve(data ?? { ok: false, error: "empty result" });
+        return reply({ ok: true });
       }
       if (route === "theme-ack") {
         log(`[pi-web] bridge set theme → ${data.name}`);
