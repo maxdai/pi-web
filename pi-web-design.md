@@ -1674,3 +1674,31 @@ send → input → agent.start → turn.start → msg(user, blocks=[text(83)])
 1. 引擎收尾**用信号**（SIGTERM 到包装进程或 pi），不要指望 Ctrl+C 或 `session_shutdown`；
 2. pi 会**改写自身 argv/comm**（`comm=pi`、cmdline 仅 `pi`）→ 识别子进程要靠**进程树 / 记录 PID / 环境标记**；
 3. 镜像 + 历史读取的 API 面已足够，无需任何 Pi 侧改动。
+
+## 19. Web UI 还原目标（TUI 对照，2026-10-15 归档）
+
+> 本节原为 `AGENTS.md` §8；AGENTS 瘦身为"只放规则"后移到这里留档。
+> 实现见 `static/{index.html,style.css,app.js}`；早期 MVP 交互描述见 §6.6（该节属已移除的 Python 方案，仅作历史对照）。
+
+从上到下布局（目标是与 TUI fullscreen 的消息流同等效果）：
+
+```text
+header (logo + keybinding hints)
+消息列表：
+  · 用户消息    → 有背景色块 (userMessageBg #343541)
+  · 助手消息    → 无背景，Markdown 渲染
+    - 文本      → 正常 markdown
+    - thinking  → 斜体灰色 (thinkingText #808080)
+    - toolCall  → 独立工具执行块
+  · 工具执行块  → 独立背景色块
+    - pending: #282832 / success: #283228 / error: #3c2828
+    - 工具名加粗 + 参数 JSON + 输出预览
+输入框
+footer：
+  · pwd + git branch · session name
+  · token stats (↑input ↓output Rcache Wcache cost 上下文%)
+  · model name · thinking level
+```
+
+现网实现补充：header 保持简洁（session 名与模型由 footer 展示）；点击 footer 的 model / thinking 打开对应选择面板；
+footer 的模型列表受 scoped models 影响（自 §15.11.1 起勾选即时生效，无需重启）。

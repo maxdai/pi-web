@@ -1,239 +1,100 @@
 # AGENTS.md
 
-本文件为 pi-web 项目的 AI 代理工作指引，供开发此项目的 AI 代理（如 Claude Code、Codex、Coding Agent 等）阅读并遵循。
+pi-web 项目的 AI 代理工作指引。**本文件只放"必须遵守的规则"**：设计/技术细节见 `pi-web-design.md`，
+操作流程（发版步骤、目录树、测试）见 `README.md`，历史事故与经验教训记在 memory（OpenViking）。
 
-## 1. 项目概述
+## 1. 项目与硬约束
 
-pi-web 是给 Pi（一款 AI coding agent 终端工具）提供浏览器 Web 访问方式的项目。核心目标：**不改 Pi 本体代码**，通过 `pii`（Python 启动脚本）编排，让用户在浏览器中访问 Pi，获得与 TUI 接近的使用体验。
+pi-web 给 Pi（AI coding agent 终端工具）提供浏览器 Web 访问，让用户在浏览器获得接近 TUI 的体验。
 
-### 核心设计（2026-10 阶段 E 后的唯一引擎）
+- **硬约束：不改 Pi 本体代码。** 一切控制逻辑都在本仓库（启动器 / Web 服务 / 注入扩展）内。
+- **唯一引擎**：原生 `pi --mode rpc` 子进程 + 注入桥接扩展（`native/bridge.mjs` 在 pi 进程内改写
+  `ctx.ui`，补回 RPC 丢掉的 UI 方法层）；运行时依赖只剩 `ws`。候选的「TUI 模式 + 桥接」路线见设计文档 §18（未决）。
+- **Web UI 目标**：尽量还原 TUI 的展示结构与配色，不做通用聊天界面。
 
-```text
-浏览器
-  |  HTTP / WebSocket（复用仓库 static/ 前端与既有 WS 协议）
-  v
-pi-web-native（Node 单进程，127.0.0.1:<port>：静态服务 + WS + RPC 客户端 + 侧信道）
-  |  JSON line 协议（stdin/stdout）+ 本机 HTTP 侧信道
-  v
-pi 子进程（pi --session <id> --mode rpc --extension native/bridge.mjs）
-  |  AgentSession / Agent 事件 / 桥接扩展接管的 ctx.ui 方法
-  v
-LLM / Provider
-```
+> 架构图、关键决策清单、与 SDK 时代的历史对照：设计文档 §4 / §15 / §17 / §18。
 
-### 关键技术决策
-
-- **不改 Pi 本体**：所有控制逻辑集中在 `pii` 脚本和 Web 服务。
-- **Pi RPC 模式**：Pi 已原生支持 `--mode rpc`（JSON line over stdin/stdout），引擎以子进程方式启动。
-- **桥接扩展**：RPC 模式丢掉的 UI 方法层（`custom()` 面板、工厂 widget、对话框、换肤）由注入的
-  `native/bridge.mjs` 在 pi 进程内改写 `ctx.ui` 实现（`ctx.ui` 是 runner 的共享可变对象）。
-- **Web 服务**：Node 实现（`native/server.mjs`，bin `pi-web-native`；内置 http + `ws`）。
-- **历史**：Python RPC 服务与 SDK 宿主（`pi-sdk-web`）已在阶段 E 移除，依赖只剩 `ws`。
-- **Web UI 目标**：尽量还原 TUI 的展示结构和配色，而非做成通用聊天界面。
-
-## 2. 命令行接口
+## 2. 命令行契约（用户可见行为，不得擅自变更）
 
 ```text
-pii r <name>                # 默认：进入 TUI（现有行为，不变）
-pii r <name> --web          # Web 服务，使用默认端口 4080
-pii r <name> --web <port>   # Web 服务，使用指定端口
+pii r <name>                # 默认：进入 TUI（原有行为，不变）
+pii r <name> --web          # Web 服务，默认端口 4080
+pii r <name> --web <port>   # Web 服务，指定端口
 ```
 
-- `--web` 不带值 → 默认端口 `4080`
-- `--web <port>` → 指定端口（1–65535）
-- 统一绑定 `127.0.0.1`
-- 端口非法或占用 → 报错退出（不做自动换端口）
+- `--web` 不带值 → `4080`；带值 → 指定端口（1–65535）；统一绑定 `127.0.0.1`。
+- 端口非法或已被占用 → **报错退出**，不做自动换端口。
+- 入口命令保持零变化：引擎换代只改内部实现，不新增用户可见命令。
 
-## 3. 开发流程（三阶段，重要）
+## 3. 开发流程（三阶段，顺序不可跳过）
 
-任何设计或修改都应遵循以下三阶段流程，**顺序不可跳过**：
+1. **讨论**：先把目标、方案、边界、不确定性谈清楚；**此阶段不动代码**。
+2. **设计文件**：结论写入 `pi-web-design.md`（本项目所有设计内容只放这里，不另建散落说明文件）；
+   任何设计的新增/变更/撤销都必须同步更新它。
+3. **开发**：依据讨论结果与设计文件动手。
 
-### 阶段 1：讨论
-- 通过讨论确定如何进行设计或修改。
-- **此阶段不进行代码的实际修改**。
-- 充分沟通目标、方案、边界、不确定性。
+> 没有讨论与设计铺垫，不要直接改代码。
 
-### 阶段 2：生成或更新设计文件
-- 根据讨论结果，**生成或更新设计文件**。
-- **本项目所有设计相关内容统一放在 `pi-web-design.md` 中**。
-- 任何涉及设计的修改（新增、变更、撤销设计决策）都必须**同步更新到 `pi-web-design.md`**，把讨论达成的结论以书面形式固化下来。
-- 不应在 `pi-web-design.md` 之外另建散落的设计说明文件。
+## 4. Git 与发版原则
 
-### 阶段 3：开发 / 修改
-- **根据讨论结果及设计文件**，进行相应的开发和修改。
+### 提交与推送
 
-> 注意：不要在没有讨论和设计文件的铺垫下直接动手改代码。
+- 默认分支 `master`；远程 `origin` = `https://github.com/maxdai/pi-web.git`。
+- **判断标准**：①**尝试性/结果不确定**的改动 → 只本地 `git commit`（便于回滚，不污染远端历史）；
+  ②**确定性且无后继操作**的改动 → 直接 `git push`，不要长期留在本地。
+- 避免频繁的 GitHub 操作；提交信息简洁、描述性，一个提交聚焦一个改动点。
 
-## 4. Git 使用原则（重要）
+### 发版（原则；完整步骤见 README「发布新版本（维护者）」）
 
-### 基本规则
+- **默认 dev-first**：先 `npm run build && npm install -g /root/pi-web/pi-sdk-web` 更新开发环境
+  （全局安装会成为指向仓库的**软链**，此后改 `native/`、`static/` 只需 `npm run build`，无需发版），
+  **等用户测满意**再发版。
+- **必须获得明确指令**：用户说出"发版 / 可以发版"才执行动作链；"修改完成"不算指令。
+  `npm publish` 前还要确认一次"是否修改完成"。
+- **一次做完，不得遗漏**：① `git push --follow-tags` → ② `npm publish` → ③
+  `npm install -g @maxdai/pi-web@<版本>`；每步各自验证。
+- **tag 必须用附注 tag**（`git tag -a vX.Y.Z -m …`）：`--follow-tags` 只推附注 tag，轻量 tag 会被静默跳过；
+  推送后用 `git ls-remote --tags origin` 核对远端确有该 tag。
+- **发版前必跑宿主契约核对器**：`node tools/host-contract/check-host-contract.mjs`（Pi 升级后与发版前各一次）。
+  FAIL = 方案立足点被破坏（按设计文档 §16.7 降级）；DRIFT 需人工判断。
+- 版本号由用户确认后提升；用户侧升级命令 `npm update -g @maxdai/pi-web`。
+- 更新开发环境会重写 `dist/`：**必须在用户 4080 实例停止时做**（见 §7）。
 
-- **默认分支**：`master`
-- **远程仓库**：`https://github.com/maxdai/pi-web.git`（origin）
-
-### 提交流程
-
-- **小的、细碎修改** → 只进行**本地 `git commit`**，不推送。
-- **相对阶段性的更新**（如完成一个模块、一个可运行的功能、一次有意义的设计变更）→ 推送到 GitHub（`git push`）。
-- **避免频繁的 GitHub 操作**，不要把每笔小 commit 都 push。
-
-> **判断标准（重要）**：决定某个修改是只本地提交还是推送 GitHub，看两个维度：
->
-> 1. **是否具有不确定性 / 尝试性**：如果这个修改是**尝试性的、结果不确定**（"试试看行不行"，可能走不通、后面要反复调整或回滚），→ 只做**本地 `git commit`**，不推送。留在本地方便版本回滚，也不会污染 GitHub 历史、造成频繁更新。
-> 2. **是否还有明显的后继操作**：如果这个修改是**确定性的**，且改完就结束、**没有明显的后继操作** → 应当直接 `push` 到 GitHub，不要长期留在本地（下一次提交可能遥遥无期，久了有丢失风险）。
->
-> 例如：像"删掉一个死代码笔误"这种确定无疑、无后继操作的修改，改完即可推送到 GitHub；而一个不确定能否跑通的探索性改动，则先本地提交，验证稳定后再推送。
-
-### 提交规范
-
-- 提交信息应**简洁、描述性**，说明改动内容。
-- 一个提交尽量聚焦一个改动点。
-
-### npm 发版流程（pi-sdk-web）
-
-- 发版流程定义于 `README.md`「发布新版本（维护者）」节（npm version → commit+tag → npm publish → git push --follow-tags）。
-- **默认流程（2026-10-14 用户指定）：先更新本机开发环境，用户测满意后再发版。**
-  ```bash
-  # ① 更新本机开发环境（不发布）：build + 全局指向仓库源码
-  cd /root/pi-web/pi-sdk-web && npm run build && npm install -g /root/pi-web/pi-sdk-web
-  # ② 用户在 4080 自测（pii r <会话名> --web）
-  # ③ 用户确认满意后，才走下面的发版动作链
-  ```
-  - `npm install -g <仓库内包目录>` 会在全局 node_modules 建立**软链**指向仓库，因此之后改 `native/`、`static/`
-    只需 `npm run build`（纯拷贝，无 tsc）即可被 `pi-web` / `pii` / `pi-web-native` 用上，**无需发版**。
-  - 更新开发环境（build + 安装）同样会重写 `dist/`，**需在用户 4080 实例停止时做**（见第 10 节规则 8）。
-  - 未经用户明确说「发版 / 可以发版」，**只更新开发环境、不 npm publish**。
-- **重要**：发版（`npm publish`）前必须先向用户确认「是否修改完成」——用户可能还在调整中，未经确认不得发版；本地 `git commit` 不受此限制。
-- 版本号由用户确认后提升；用户设备升级命令 `npm update -g @maxdai/pi-web`。
-- **发版是一系列动作，一次全部完成，不得遗漏**：① `git push --follow-tags`（推送 GitHub）→ ② `npm publish`（发布 npm）→ ③ `npm install -g @maxdai/pi-web@<版本>`（更新本机全局安装；包名已于阶段 E 改为作用域包）。三步按序执行并各自验证。
-  - **tag 必须用附注 tag**（`git tag -a vX.Y.Z -m "Release pi-sdk-web X.Y.Z"`）：`--follow-tags` **只推附注 tag**，
-    轻量 tag 会被静默跳过（2026-10 实测：`v0.7.0`~`v0.7.5` 六个 tag 因此都没上远端，后以 `git push origin --tags` 补推）。
-    推送后用 `git ls-remote --tags origin` 核对远端确实有该 tag。
-- **发版前必跑宿主契约核对器**（§15.13 决策 5）：`node tools/host-contract/check-host-contract.mjs`——Pi 升级后与发版前各跑一次；FAIL 表示方案立足点被破坏（按 §16.7 降级），DRIFT 需人工判断。
-- **动作链执行前必须获得用户明确确认**（用户说出"发版 / 可以发版"等指令后才可执行）；用户仅说"修改完成"不算执行指令——需再确认是否执行发版动作链。
-
-## 5. 目录结构（以实际为准）
+## 5. 目录与源码位置
 
 ```text
 ~/pi-web/
-├── AGENTS.md
-├── pi-web-design.md
-├── native/          # 引擎运行时（纯 JS，无 TS 构建）：server.mjs / bridge.mjs /
-│                    #   usage-render.mjs / cli.mjs（pi-web 薄壳）/ pii-cli.mjs
-├── pii/pii          # Python 启动器（会话名解析、TUI 入口、--web 转调引擎）
-├── static/          # 浏览器前端（唯一一份）
-├── tools/           # smoke.mjs、ab-compare.mjs、host-contract/（宿主契约核对器）
-└── pi-sdk-web/      # npm 包源码目录（包名 @maxdai/pi-web）
-    ├── package.json
-    ├── scripts/build-assets.mjs   # 装配 dist/（只拷贝，无 tsc）
-    └── dist/                      # 发布产物（files: ["dist"]）
+├── native/        # 引擎运行时（纯 JS，无 TS 构建）：server / bridge / usage-render / cli / pii-cli
+├── pii/pii        # Python 启动器（会话名解析、TUI 入口、--web 转调引擎）
+├── static/        # 浏览器前端（唯一一份）
+├── tools/         # smoke.mjs、ab-compare.mjs、host-contract/（宿主契约核对器）、tui-proto/（原型留档）
+└── pi-sdk-web/    # npm 包源码目录（包名 @maxdai/pi-web）：build-assets.mjs + dist/
 ```
 
-## 6. 相关源码位置
+> 完整目录树与各文件职责见 README「项目结构」。
 
-- **Pi 源码**：`~/research/pi/`
-- **Pi RPC 模式**：`~/research/pi/packages/coding-agent/src/modes/rpc/`
-  - `rpc-mode.ts`：RPC 服务端实现（stdin 命令分发、stdout 事件输出）
-  - `rpc-client.ts`：TypeScript 版 RPC 客户端（参考用）
-  - `rpc-types.ts`：RPC 协议类型定义
-  - `jsonl.ts`：JSON line 读写工具
-- **Pi TUI 组件**（Web UI 设计参考）：
-  - `~/research/pi/packages/coding-agent/src/modes/interactive/components/`
-  - 深色主题：`~/research/pi/packages/coding-agent/src/modes/interactive/theme/dark.json`
+- **Pi 源码**：`~/research/pi/`；RPC 模式：`packages/coding-agent/src/modes/rpc/`（`rpc-mode.ts` / `rpc-types.ts`）。
+- **Pi TUI 组件与主题**（UI 还原参考）：`packages/coding-agent/src/modes/interactive/{components,theme}/`。
+- **RPC 协议细节**：设计文档 §16.4 与 `modes/rpc/rpc-types.ts`；**TUI 展示结构（UI 还原目标）**：设计文档 §19。
 
-## 7. RPC 协议速查
+## 6. 编码注意事项
 
-- **发送命令（stdin）**：JSON line，`{"id": "...", "type": "prompt", "message": "..."}`
-- **接收响应（stdout）**：`{"id": "...", "type": "response", "command": "prompt", "success": true, "data": {...}}`
-- **接收事件（stdout）**：`{"type": "message_start", ...}` 等
-- **接收扩展 UI 请求**：`{"type": "extension_ui_request", ...}`
+- `pii` 只用 **Python 标准库**（当前零第三方依赖，尽量保持）。
+- 引擎为纯 JS（`native/*.mjs`）；包内没有 TypeScript，`build` 只做拷贝。
+- 前端优先还原 TUI 深色主题与结构，不做花哨样式。
 
-### 常用命令
+## 7. 本地实例与端口管理（务必遵守）
 
-| 命令 | 说明 |
-|------|------|
-| `prompt` | 发送用户消息，异步，事件跟随 |
-| `abort` | 中止当前操作 |
-| `get_state` | 获取 session 状态（模型、thinking、消息数等） |
-| `get_messages` | 获取所有消息历史 |
-| `get_entries` | 获取 session 条目（含消息、模型变更、compaction 等），支持 `since` |
-| `get_tree` | 获取会话树 |
-| `set_model` / `cycle_model` | 模型操作 |
-| `set_thinking_level` / `cycle_thinking_level` | thinking 级别 |
-| `compact` | 手动压缩上下文 |
-| `switch_session` | 切换 session |
-| `fork` / `clone` | 分支 / 克隆 |
+- **禁止用 `pkill -f` 清理本会话启动的实例**：pattern 会匹配到执行它的 shell 自身（同一根因重复踩过 3 次；
+  「括号技巧」只是延迟症状，不是解法）。
+- **按端口清理（推荐）**：`lsof -ti:4096 | xargs -r kill`；或启动时记录 PID 再按 PID 清理
+  （`$!` 可能是包装进程的 PID，故仅作备份手段）。
+- 只做审计时可用 `pgrep -af <pattern>`，但**不要把输出直接管道给 `kill`**。
+- **启动实例前先确认端口空闲**：`lsof -ti:4096 || echo free`；连到旧实例会伪装成"改了没生效"。
+- 每个长驻实例，都要在当次回复里说明**它占用的端口**与**停止方式**。
+- **端口约定**：测试统一用 `4096`（共享前必须先清理旧实例；可长期运行，但每次重启要说明状态）；
+  **`4080` 是用户实例端口，任何情况下不得占用**。
+- **升级全局安装前**先确认用户实例没在运行（看 4080 与 `tmux ls`），在跑就先告知用户、由其决定何时停。
+- 用户实例启动命令：`pi-web r <会话名>` 或 `pii r <会话名> --web`（两者都启动同一原生引擎并占用 4080）。
 
-## 8. TUI 展示结构参考（Web UI 还原目标）
-
-从上到下布局：
-
-```
-header (logo + keybinding hints)
-消息列表：
-  · 用户消息    → 有背景色块 (userMessageBg #343541)
-  · 助手消息    → 无背景，Markdown 渲染
-    - 文本      → 正常 markdown
-    - thinking  → 斜体灰色 (thinkingText #808080)
-    - toolCall  → 独立工具执行块
-  · 工具执行块  → 独立背景色块
-    - pending: #282832 / success: #283228 / error: #3c2828
-    - 工具名加粗 + 参数 JSON + 输出预览
-输入框
-footer：
-  · pwd + git branch · session name
-  · token stats (↑input ↓output Rcache Wcache cost 上下文%)
-  · model name · thinking level
-```
-
-## 9. 编码注意事项
-
-- `pii` 使用 **Python 标准库**（当前实现零第三方依赖，尽量保持）。
-- 引擎为纯 JS（`native/*.mjs`）；包内不再有 TypeScript，`build` 只做拷贝。
-- 前端优先还原 TUI 的深色主题和结构，不做花哨样式。
-
-## 10. 本地实例与后台进程管理（经验教训，务必遵守）
-
-**教训（2026-10，同一错误在会话中重复 3 次）**：用 `pkill -f <pattern>` 清理自己启动的实例时，
-**执行这条命令的 shell 自身也会被匹配并杀掉**——因为 pattern 字符串就写在这条命令行里。
-改用「括号技巧」（`pkill -f "foo.mj[s]"`）**只**能避免 `pkill` 自己的参数被匹配，
-**挡不住同一条命令里后续的启动/其它语句**，所以它不是解法，只是让症状晚一步出现。
-
-**规则**：
-
-1. **禁止用 `pkill -f` 清理本会话启动的实例。**
-2. **按端口清理**（推荐，零误伤）：
-   ```bash
-   lsof -ti:4096 | xargs -r kill
-   ```
-3. **或启动时记录 PID**，清理时按 PID：
-   ```bash
-   node native/server.mjs --port 4096 > /tmp/x.log 2>&1 &
-   echo $! > /tmp/x.pid          # 记下来
-   kill "$(cat /tmp/x.pid)"      # 清理
-   ```
-   > 实测（2026-10）：`$!` 可能是**包装进程**的 PID——本次记录 `4101838`，而实际监听者是
-   > `4101840`。所以**优先用第 2 条按端口清理**，PID 只作为备份手段。
-4. 只做**审计**时可以用 `pgrep -af <pattern>`（`pgrep` 不会匹配自身），但**不要把输出直接管道给 `kill`**：
-   父 shell 的命令行含该 pattern，会被一并杀掉。先看清 PID 再决定。
-5. **启动实例前先确认端口空闲**：
-   ```bash
-   lsof -ti:4096 || echo free
-   ```
-   端口被占时连上去会看到**旧实例/旧代码**，与「改了没生效」的假象极易混淆
-   （`tools/smoke.mjs` 的部署漂移检查正是为这类问题准备的）。
-6. 启动的每个长驻实例，都要在当次回复里说明**它占用的端口**与**停止方式**，避免留下无主进程。
-7. **测试端口约定（用户指定，2026-10）**：测试实例**统一用 `4096`**，不必每次另找端口。
-   - `4080` 是用户实际使用的 pi-web/pii 服务端口，**任何情况下不得占用**（2026-08 已确立）。
-   - 因端口固定，**共享 `4096` 前必须先按第 2 条清理旧实例**，否则会连到旧代码并掩盖改动。
-   - 该端口上的实例是「常驻测试实例」，允许长期运行；但每次重启后要在回复里说明其状态。
-
-8. **升级全局安装前，先确认用户实例没在运行**（2026-10-14 发版 0.7.0 时的预防性规则）：
-   `npm install -g @maxdai/pi-web@x.y.z`（或旧的 `pi-sdk-web`）会**替换包目录**；若老进程仍从该目录懒加载代码/静态资源，
-   替换的瞬间可能触发模块加载失败。因此发版/更新全局安装**之前**先看 4080 与 `tmux ls`，
-   发现实例在跑就先告知用户，由其决定何时停。
-   - 事实澄清（同次发版，勿误记为"升级搞崩了实例"）：用户 4080 实例是在 **20:30:12 收到 SIGINT
-     正常关停**（tmux pane 里可见 `^C`），而全局安装发生在 **20:33:42** —— 时间上不是升级导致；
-     该规则是**预防**，不是本次事故的复盘。
-   - 用户实例启动命令：`pi-web r pi`（或 `pi-web r <会话名>`）/ `pii r <会话名> --web`，两者都启动同一原生引擎并占用 4080；
-   - 需要原生引擎时：`pii r <会话名> --web 4080`（详见 pi-web-design.md §17）。
+> 相关事故细节与时间线（0.7.0 发版那次、`$!` 包装进程实测等）见 memory 与设计文档 §17.4。
