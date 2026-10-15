@@ -1858,6 +1858,11 @@ TUI 路线的收益是"能力面最全 + 不再追 RPC 缺口"，代价是 1200�
 
 - 新增 `applySessionFile(file)`：更新 `session.path`，清空 `session.name`（重新解析）、
   从会话文件头部（只读前 8KB）刷新 `session.cwd`，并**作废 `historyIndex`**（索引属于旧文件）；
+
+> **澄清（2026-10-15 实测）**：**cwd 从来不是 bug**。footer 的 cwd 走 `bridgeInfo.cwd`，而 bridge 在会话切换时
+> 会重新 `POST /side/ready` 上报 `ctx.cwd`（实测序列 `cwd=/root → cwd=/root/research/pi`，`state.cwd` 同步从 `~`
+> 变为 `~/research/pi`）。上面刷新 `session.cwd` 只是把**兜底值**（`bridgeInfo.cwd ?? session.cwd`）也对齐，
+> 属于完整性改进；本次真正修的是 `session.path`（列表丢会话 + 历史读错文件）。
 - `buildState()` 顺带调用它（覆盖 `/resume`：`resume` 分支先 `sendState()` 再 `sendHistory()` ✓）；
 - `get_sessions` 前额外调用 `syncSessionFile()`（该路径不走 `buildState`），保证列表里的"当前会话"是最新的；
 - 顺带修好 `delete` 的当前会话保护（此前会误判"当前"是旧会话）。
