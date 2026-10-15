@@ -1080,7 +1080,7 @@ node deadlock-harness.mjs --bridge             # 桥接接管：resolve = true
 | B4 | `opts.signal` 中止 → 用默认值结算 + `dialog_dismissed(aborted)` | ✅ **已对齐**：桥接带 `token` 开对话框，signal 中止时 POST `/side/cancel-dialog`，服务端按默认值结算并广播 `dialog_dismissed(aborted)` | 已消除 | ✅ 已实施（代码路径；未单独造中止场景实测） |
 
 **C. 复核结论（此前已对齐全绿）**：`/session` 模态、`dialog_dismissed`、reload 忙时防护、tools/extensions 名单、`get_scoped_models`、`get_stats`、state 字段面。
-**D. 已知缺口（另有记录）**：`.jsonl` 导出降级、scoped models 需重启、WS 背压/堆水位、自定义 session 目录。
+**D. 已知缺口（另有记录）**：`.jsonl` 导出降级、WS 背压/堆水位、自定义 session 目录。（scoped models 需重启已于 2026-10-14 关闭，见 §15.11.1）
 **E. 原生独有**：`state.panelGeometry` 能力位；能渲染 `custom()` 组件（SDK 显示不了，只能走文本兜底）。
 
 **为什么扩展改不了 scoped models（API 缺口；2026-10 查证，含运行时实证）**
@@ -1126,8 +1126,14 @@ TUI（宿主，与 Pi 同进程、同代码库）
 | **A. 上游加 API（推荐）** | 请 Pi 作者在 `bindCore` 绑定 `setScopedModels` 并在 ExtensionContext 上暴露（约 10–15 行）。之后桥接就能像 TUI 一样：切换即时生效（仅内存）、保存才持久化。符合「不改 Pi 本体」——是**上游落地的 API**，不是本地打补丁。先例：作者已为外部宿主提供 pi-vscode 的桥接通道 | 取决于上游；当前 Pi 最新版 1.2.0 尚无此 API |
 | B. 保存后重启子进程（可立即做） | 写 settings → kill 并以同一会话重拉 pi 子进程 → 重发 state/history（浏览器无需刷新） | 几秒中断、会话重挂载；「勾选」仍无法仅内存生效 |
 | C. 维持现状 | scoped models 改动需重启 pi-web | **相对现 SDK 引擎是功能回退** |
+| **D. 就地改共享数组（✅ 已实施，2026-10-14）** | 扩展上下文 `ctx.scopedModels` 返回的**就是 session 内部数组**（`agent-session.ts:3463`，无拷贝）→ 就地 `splice` 等价于 `session.setScopedModels()`；配合 Pi 公开导出 `resolveModelScopeWithDiagnostics` 解析模式 | 依赖两处未公开约定（数组身份、`modelRegistry.runtime` 私有字段）→ 由探针断言 + 回读校验 + 失败降级三层兜底 |
 
 **决定（2026-10，用户拍板）：暂不采用 B，先冻结现状**。理由：重启 pi 子进程会**打断正在运行的会话**，代价大于收益；scoped models 的即时生效能力**搁置**，等 A（上游 API）落地再补。
+
+> **更新（2026-10-14）**：上述"冻结现状"已被**路线 D** 取代并落地实施——用户从 pi-vscode 的源码分析出发提出疑问，
+> 复查后确认扩展虽够不到 session 对象，但**够得到 session 的 scoped models 数组本身**（共享可变对象，与 `ctx.ui` 同一性质）。
+> 已实施：勾选即时生效、保存才持久化，**无需上游改动、无需重启**；详见 §15.11.1。路线 A（上游 API）仍是更"正规"的长期形态，
+> 若将来 Pi 提供 `ctx.setScopedModels`，可平滑切换过去。
 
 **冻结后的 scoped models 语义（当前实现，勿再改动）**：
 
@@ -1410,7 +1416,7 @@ pi-web-native <session-id> <cwd> --port <n>          # 对应 server.py <session
 | # | 依赖 | 假设 | 失效后果 |
 |---|---|---|---|
 | 10 | `~/.pi/agent/sessions/**/*.jsonl` | 首行 header 含 `cwd`（与 `id`）；展示名存于 `{"type":"session_info",…,"name":…}`；**无名字视为 `(unnamed)`** | 会话名解析、`(unnamed)` 入口、`get_sessions` 列表、`delete_session` 校验异常 |
-| 11 | `~/.pi/agent/settings.json` 的 `enabledModels` | scoped models 的持久化键；**启动时读取**（运行时改动需重启进程） | scoped models 点选/持久化异常 |
+| 11 | `~/.pi/agent/settings.json` 的 `enabledModels` | scoped models 的持久化键；**启动时读取**。运行时改动不再需要重启：桥接就地改 `ctx.scopedModels`（§15.11.1） | scoped models 点选/持久化异常 |
 | 12 | usage 统计字段（`usage-render.ts`） | session 条目里 message/usage 的形状 | `/usage` 面板数据缺失或错算 |
 
 ### 16.4 RPC 协议与 CLI 细节
