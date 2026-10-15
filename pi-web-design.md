@@ -1593,7 +1593,12 @@ pi --extension <ext>/bridge/pi-vscode-bridge.js \
 - **`input` 事件语义**：`pi.on("input")` 只对「提交的文本」触发，**命令派发不触发**（原型实测）——桥接镜像输入历史时要按此区分；
 - **输入焦点冲突**：TUI 自身仍在读 stdin；若有人在终端里敲字，会与 Web 输入竞争（可接受，但需说明）；
 - **pty 可用性**：`script` 依赖 util-linux（Linux/macOS 常见，Windows 需另方案）；
-- **重复渲染成本**：TUI 每帧渲染被丢弃，长会话下有无可观开销待测；
+- ~~**重复渲染成本**~~ → **已实测：可忽略**（空闲 0 B/s、CPU≈0；一轮 5.3–7.2 KB/s、pi CPU 12.8% 单核，见 §18.9）；
+- **关停必须走信号**：TUI 的 Ctrl+C 是**应用按键**（raw 模式，不是 SIGINT）——实测单次不退出、两次（间隔 2s）也不退出；
+  `SIGTERM` 直达 pi 0.6s 退出，`SIGTERM` 打 `script` 包装进程也能带走 pi（不留孤儿）。但**两种方式都不会触发 `session_shutdown`**
+  → 引擎不能依赖该事件做收尾（会话数据是增量落盘的，可接受）；
+- **子进程识别**：pi 会**改写自身 argv/comm**（实测 `comm=pi`、cmdline 只剩 `pi`）→ 不能按命令行找它，
+  要用进程树 / 记录 PID / 环境变量标记（也影响"实例是否在跑"的判断）；
 - **迁移代价**：桥接要长大（镜像 + 输入 + 命令），而我们现有的 RPC 服务端逻辑（协议层）会大部分重写；
   但前端与侧信道设计可原样复用。
 
@@ -1605,7 +1610,7 @@ pi --extension <ext>/bridge/pi-vscode-bridge.js \
 
 **决策状态：未决。** 需要用户拍板是否投入（对照 §17 现状：RPC 路线已发版可用，缺口只剩 2 项）。
 
-> **执行记录（2026-10-15，用户批准后完成）**：三步原型已跑通，结果见 §18.8；原型脚本留档于
+> **执行记录（2026-10-15，用户批准后完成）**：三步原型已跑通（§18.8），并补充验证了会话镜像与 pty 开销/关停（§18.9）；原型脚本留档于
 > `tools/tui-proto/`（不进入发布产物——npm 包只含 `dist/`）。
 
 ### 18.8 最小验证原型结果（2026-10-15，全部实测）
@@ -1620,12 +1625,52 @@ pi --extension <ext>/bridge/pi-vscode-bridge.js \
 | **2 送得进** | 能否从外部把用户消息送进会话并拿到事件流 | ✅ | `pi.sendUserMessage("Reply with exactly: PONG")` → 事件序列 `send → input → agent_start → turn_start → message_start/end … → turn_end → agent_end`；模型执行工具时另有 `tool_execution_start/end` |
 | **3a 扩展命令** | 扩展命令能否经 API 派发 | ✅ | `/pi-web-proto:ping` + `{expandPromptTemplates:true}` → 命令处理器运行（`command-ran`），**未触发模型** |
 | **3b 内置命令（API）** | 内置命令能否同样派发 | ❌（已定性） | `/thinking`、`/model`、`/export <path>.jsonl` → **不触发模型、但也不执行**（无事件、无文件）→ `expandPromptTemplates` 只覆盖扩展/skill/prompt，不含内置命令 |
-| **3c 内置命令（pty 敲键）** | 替代路径是否可行 | ✅✅ | 空闲时敲 `/model` → TUI 选择器面板渲染到 pty（无模型调用）；敲 `/export /tmp/tui-proto/exp2.jsonl` → **文件生成 58,503 字节** |
+| **3c 内置命令（pty 敲键）** | 替代路径是否可行 | ✅✅ | 空闲时敲 `/model
+` → TUI 选择器面板渲染到 pty（无模型调用）；敲 `/export /tmp/tui-proto/exp2.jsonl
+` → **文件生成 58,503 字节** |
 
 **结论**：
 1. 「TUI 模式 + 桥接 + pty」在 Pi 1.2.0 上**可行**，且不需要改 Pi 本体；
 2. **命令注入有明确的两条路**：扩展命令走 `sendUserMessage(..., {expandPromptTemplates:true})`；内置命令走 pty 敲键
    （须空闲时注入）；
 3. **额外收获**：TUI 模式下 `/export x.jsonl` 直接可用 → §17.5 的「`.jsonl` 导出降级」缺口在本路线下**自然消失**；
-4. **待测/未覆盖**：`/scoped-models` 面板在本路线下的即时生效（我们已用共享数组方案解决，二者可叠加）、
-   长会话下丢弃 TUI 渲染的开销、Ctrl+C/关停握手在 pty 下的表现（§17.4 经验可迁移）。
+4. **待测/未覆盖**：`/scoped-models` 面板在本路线下的即时生效（我们已用共享数组方案解决，二者可叠加）。
+
+### 18.9 补充验证：会话镜像与 pty 开销/关停（2026-10-15，实测）
+
+**① 桥接侧会话镜像（浏览器能否完整重画一轮）** —— ✅ 成立
+
+原型做法：桥接订阅事件并归一化成帧（消息块 / 工具块 / 流式增量），经侧信道送出；驱动脚本发一轮**会用到 bash 工具**的对话。
+
+实测帧序列（可完整重画一轮）：
+
+```
+send → input → agent.start → turn.start → msg(user, blocks=[text(83)])
+     → msg(assistant, update×n, blocks=[thinking… toolCall:bash]) → msg.end(assistant)
+     → tool.start(bash, args={"command":"echo MIRROR-TEST-123"})
+     → tool.end(bash, result 含 MIRROR-TEST-123, isError=false, durationMs=9) → msg(toolResult)
+     → turn.end → turn.start → msg(assistant, update×n, text) → msg.end → turn.end → agent.end
+```
+
+判定：用户消息 ✓ 助手文本 ✓ 工具块 ✓ 工具输出含标记 ✓ 流式增量帧 ✓（5/5）。
+
+关键事实：
+- `message_start/update/end` 事件**直接携带完整 `AgentMessage`**，`tool_execution_*` 携带 args / partialResult / result / isError / durationMs
+  → 镜像**不需要猜测或重建**，序列化即可（`types.ts:1058-1122`）；
+- **首屏历史**可由桥接直接读取：`ctx.sessionManager.getEntries()` 实测返回 `array(10)`（另有 `getTree()` → `array(1)`）
+  → 新开浏览器标签页也能重画既有会话，无需 RPC 的 `get_entries`。
+
+**② pty 开销与关停** —— ✅ 开销可忽略；关停须走信号
+
+| 项 | 实测 |
+|---|---|
+| 空闲 5s | pty 输出 **0 字节**（TUI 无变化不重绘）、pi CPU **≈0%** |
+| 一轮对话（4–7s） | pty 输出 **5.3–7.2 KB/s**、pi CPU **12.8%（单核）**（含模型流式本身的开销） |
+| Ctrl+C 写入 pty（空闲） | **不退出**（raw 模式下是应用按键：单次＝中断/清行；间隔 2s 按两次也未退出） |
+| `SIGTERM` → pi | **0.6s 退出**，但**不触发 `session_shutdown`** |
+| `SIGTERM` → `script` 包装进程 | pi **随之退出**（不留孤儿），同样无 `session_shutdown` |
+
+实现要点（写入 §18.5 时应吸收）：
+1. 引擎收尾**用信号**（SIGTERM 到包装进程或 pi），不要指望 Ctrl+C 或 `session_shutdown`；
+2. pi 会**改写自身 argv/comm**（`comm=pi`、cmdline 仅 `pi`）→ 识别子进程要靠**进程树 / 记录 PID / 环境标记**；
+3. 镜像 + 历史读取的 API 面已足够，无需任何 Pi 侧改动。
