@@ -16,6 +16,8 @@
 > 因 SDK 的**版本漂移**问题，2026-10 按 pi-web-design.md §15/§17 迁移到当前引擎；
 > 阶段 E（§15.13）已移除 SDK 宿主与 Python RPC 服务，依赖只剩 `ws`。
 
+> 维护者：开发环境、验证与发版流程见 [`MAINTAINING.md`](MAINTAINING.md)。
+
 ## 特性
 
 - 通过浏览器访问 Pi，获得与 TUI 接近的使用体验
@@ -39,8 +41,6 @@
   - `/resume` 会话切换
 - 事件驱动刷新，与 TUI 行为一致
 - 扩展输出渲染 ANSI 颜色（状态栏 / widget / 通知 / 工具输出）
-
-## 架构
 
 ## 架构
 
@@ -112,59 +112,6 @@ npm install -g @maxdai/pi-web        # 三个 bin（pi-web / pii / pi-web-native
 > cd pi-sdk-web && npm run build && npm install -g .
 > ```
 > 这样全局命令会**软链到仓库**，之后改 `native/`、`static/` 只需 `npm run build` 即生效（无需发版）。
-
-## 发布新版本（维护者）
-
-已发布到 npm（`@maxdai/pi-web`，作者 maxdai）。发布新版本流程：
-
-```bash
-# 0. 发布前两项检查
-# 0a. 宿主契约核对（Pi 升级后尤其必须；见 tools/host-contract/README.md）
-node tools/host-contract/check-host-contract.mjs
-# 0b. 冒烟测试——需先起着服务，见下节
-node tools/smoke.mjs
-
-# 1. 修改代码后，在仓库根提升版本
-#    （pi-sdk-web 子目录执行 npm version 只改 package.json，不会自动 git commit）
-npm version patch                          # 或 minor / major（改 pi-sdk-web/package.json）
-
-# 2. 提交 + 打 tag（必须是**附注 tag**，见下方说明）
-git add pi-sdk-web/package.json pi-sdk-web/package-lock.json
-git commit -m "Release @maxdai/pi-web x.y.z"
-git tag -a vX.Y.Z -m "Release @maxdai/pi-web x.y.z"
-
-# 3. 发布（prepublishOnly 自动构建；自动化 token 无需交互式认证）
-cd pi-sdk-web && npm publish
-
-# 4. 推送 git（含 tag）
-cd .. && git push --follow-tags
-
-# 5. 更新本机全局安装（用户侧升级：npm update -g @maxdai/pi-web）
-npm install -g @maxdai/pi-web@x.y.z
-```
-
-> 认证：本机 `~/.npmrc` 配置 npm 的 **Automation/Granular token**（npmjs.org → Access Tokens 创建）后发布零交互；用户升级命令：`npm update -g @maxdai/pi-web`。
-
-> **tag 必须用 `-a`（附注 tag）**：`git push --follow-tags` **只推附注 tag**，轻量 tag（`git tag vX.Y.Z`）不会被推送——2026-10 实测发现 `v0.7.0`~`v0.7.5` 六个 tag 因此都没上远端（后已用 `git push origin --tags` 补推）。若还是漏了，用 `git ls-remote --tags origin` 核对。
-
-## 冒烟测试（维护者）
-
-`tools/smoke.mjs` 对**已在运行的** pi-web 实例做只读回归检查（28 项）：部署一致性、页面加载、WS 协议快照、渲染路径（markdown／代码块折行／widget／ANSI／扩展消息 display 判据）、交互（dialog 倒计时、confirm 回传、滚动门控）。
-
-```bash
-pi-web r <session>            # 另开一个终端先起服务（默认 4080）
-node tools/smoke.mjs          # 也可：node tools/smoke.mjs http://127.0.0.1:4090
-node tools/smoke.mjs --headed # 需要肉眼观察时
-```
-
-- **只读**：不发送 prompt／命令，不改动被测会话；测试页面是脚本自开的无头实例，与你的浏览器互不影响。
-- **零 token**：全部为确定性 DOM/协议断言，不调用 LLM。
-- **不污染视图**：注入的测试节点按 `smoke` 标签精确清理。
-- **运行时机**：不要在 `npm install -g pi-web`（重装/替换 dist）的**同时**跑——部署一致性检查会读到替换中的文件而误报（实测踩过一次：3 项瞬时失败，随后连跑两次 37/37 通过）。
-- **部署漂移检测**：比对服务端提供的 `app.js`/`style.css` 与仓库源文件哈希——「改了没生效／忘了重启／全局装的是旧版」会直接 FAIL 并打印两侧哈希。
-- 退出码：`0` 全部通过，`1` 有失败，`2` 依赖缺失或服务不可达。
-- 依赖：`playwright-core`（pi-sdk-web 的 devDependency，`npm install` 即得）与一个 Chromium（自动用 `~/.cache/ms-playwright` 下的缓存，可用 `PI_WEB_CHROMIUM` 覆盖）。
-
 
 ## 使用
 
@@ -282,7 +229,8 @@ systemctl --user status pi-web-tunnel   # 查看状态/日志
 
 ```text
 pi-web/
-├── AGENTS.md            # AI 代理工作指引
+├── AGENTS.md            # AI 代理工作指引（规则）
+├── MAINTAINING.md       # 维护者操作流程（开发环境/验证/发版）
 ├── pi-web-design.md     # 设计文档（§15 原生引擎 / §15.13 阶段 E / §16 宿主契约 / §17 切换）
 ├── README.md
 ├── native/              # 引擎运行时（全部为纯 JS，无 TypeScript 构建）

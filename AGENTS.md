@@ -1,7 +1,7 @@
 # AGENTS.md
 
 pi-web 项目的 AI 代理工作指引。**本文件只放"必须遵守的规则"**：设计/技术细节见 `pi-web-design.md`，
-操作流程（发版步骤、目录树、测试）见 `README.md`，历史事故与经验教训记在 memory（OpenViking）。
+操作流程（开发环境、验证、发版）见 `MAINTAINING.md`，使用说明与目录树见 `README.md`，历史事故与经验教训记在 memory（OpenViking）。
 
 ## 1. 项目与硬约束
 
@@ -44,7 +44,7 @@ pii r <name> --web <port>   # Web 服务，指定端口
   ②**确定性且无后继操作**的改动 → 直接 `git push`，不要长期留在本地。
 - 避免频繁的 GitHub 操作；提交信息简洁、描述性，一个提交聚焦一个改动点。
 
-### 发版（原则；完整步骤见 README「发布新版本（维护者）」）
+### 发版（原则；完整步骤见 `MAINTAINING.md` §3）
 
 - **默认 dev-first**：先 `npm run build && npm install -g /root/pi-web/pi-sdk-web` 更新开发环境
   （全局安装会成为指向仓库的**软链**，此后改 `native/`、`static/` 只需 `npm run build`，无需发版），
@@ -64,6 +64,7 @@ pii r <name> --web <port>   # Web 服务，指定端口
 
 ```text
 ~/pi-web/
+├── AGENTS.md / MAINTAINING.md / pi-web-design.md   # 规则 / 维护者流程 / 设计文档
 ├── native/        # 引擎运行时（纯 JS，无 TS 构建）：server / bridge / usage-render / cli / pii-cli
 ├── pii/pii        # Python 启动器（会话名解析、TUI 入口、--web 转调引擎）
 ├── static/        # 浏览器前端（唯一一份）
