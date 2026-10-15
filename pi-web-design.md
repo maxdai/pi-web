@@ -1571,7 +1571,8 @@ pi --extension <ext>/bridge/pi-vscode-bridge.js \
 | 中止 / 压缩 / 重载 / 关停 | `ctx.abort`、`ctx.compact`、`ctx.reload`、`ctx.shutdown` 均在扩展上下文 | 我们的宿主契约探针已实测（`ctx` keys 清单，§16） |
 | UI 接管（面板/对话框/widget/换肤） | 同现状：改写 `ctx.ui` 共享可变对象 | §15、§16；已实施 |
 | 让 TUI 跑起来 | **需要 pty**（interactive 模式要求 TTY） | pi interactive 模式前提；`script -qc "pi …" /dev/null` 可免原生依赖 |
-| 斜杠命令 | ⚠️ **唯一存疑点**：TUI 的斜杠命令由它的输入编辑器解析，`sendUserMessage("/cmd")` 是否按命令执行**需实测** | 待验证；兜底＝把命令文本写进 pty stdin（等价「替用户敲」） |
+| 斜杠命令（扩展命令） | ✅ **已实测可行**：`pi.sendUserMessage("/<cmd>", { expandPromptTemplates: true })` 会派发**扩展命令**（文档原文：dispatch extension commands / expand skill commands and prompt templates），且**不触发模型** | 原型 §18.8 步骤 3a |
+| 斜杠命令（内置命令） | ✅ **已实测可行（另一条路）**：`model`/`thinking`/`scoped-models`/`export`/`new`/`compact`/`reload`/`quit` 等**内置命令不经 `sendUserMessage` 执行**（会被识别但不执行）；改为**把命令文本写进 pty stdin**（＝替用户敲），由 TUI 自己的命令 runner 处理 | 原型 §18.8 步骤 3b/3c；命令清单见 `core/slash-commands.ts` |
 
 ### 18.5 若采纳，需要做的工程项（预估）
 
@@ -1587,7 +1588,9 @@ pi --extension <ext>/bridge/pi-vscode-bridge.js \
 
 ### 18.6 风险与未决问题
 
-- **命令注入路径未验证**（18.4 最后一行）——这是决定路线可行性的关键实验；
+- ~~**命令注入路径未验证**~~ → **已解决**（§18.8）：扩展命令走 `sendUserMessage`+`expandPromptTemplates`，内置命令走 pty 敲键；
+- **敲键需挑时机**：忙碌（模型流式中）时写入 pty 的文字会被当作 steering/排队输入，内置命令应在空闲时注入（原型步骤 3c 首次失败即因在流式中敲入）；
+- **`input` 事件语义**：`pi.on("input")` 只对「提交的文本」触发，**命令派发不触发**（原型实测）——桥接镜像输入历史时要按此区分；
 - **输入焦点冲突**：TUI 自身仍在读 stdin；若有人在终端里敲字，会与 Web 输入竞争（可接受，但需说明）；
 - **pty 可用性**：`script` 依赖 util-linux（Linux/macOS 常见，Windows 需另方案）；
 - **重复渲染成本**：TUI 每帧渲染被丢弃，长会话下有无可观开销待测；
@@ -1601,3 +1604,28 @@ pi --extension <ext>/bridge/pi-vscode-bridge.js \
 3. **命令通**：`sendUserMessage("/usage")` 是否按命令执行；否则验证「写 pty stdin」方案。
 
 **决策状态：未决。** 需要用户拍板是否投入（对照 §17 现状：RPC 路线已发版可用，缺口只剩 2 项）。
+
+> **执行记录（2026-10-15，用户批准后完成）**：三步原型已跑通，结果见 §18.8；原型脚本留档于
+> `tools/tui-proto/`（不进入发布产物——npm 包只含 `dist/`）。
+
+### 18.8 最小验证原型结果（2026-10-15，全部实测）
+
+**做法**：临时原型（`tools/tui-proto/`，另在 `/tmp/tui-proto/` 运行）——一个最小桥接（上报就绪 / 轮询待发消息 /
+转发事件 / 注册一个测试命令）+ 一个驱动脚本：本机 HTTP 收事件、`script -q -c "pi --extension <bridge> --session <tmp>"
+/dev/null` 起 pty、按时间线注入消息与按键。
+
+| 步骤 | 问题 | 结果 | 关键证据 |
+|---|---|---|---|
+| **1 起得来** | pty + interactive 模式 + 注入桥接能否工作 | ✅ | 桥接上报 `mode:"tui"`、`hasUI:true`、`cwd:"/root"`、`stdoutIsTTY/stdinIsTTY=true`、`scoped:12`；pty 里能看到真 TUI 渲染（`Model scope: …`） |
+| **2 送得进** | 能否从外部把用户消息送进会话并拿到事件流 | ✅ | `pi.sendUserMessage("Reply with exactly: PONG")` → 事件序列 `send → input → agent_start → turn_start → message_start/end … → turn_end → agent_end`；模型执行工具时另有 `tool_execution_start/end` |
+| **3a 扩展命令** | 扩展命令能否经 API 派发 | ✅ | `/pi-web-proto:ping` + `{expandPromptTemplates:true}` → 命令处理器运行（`command-ran`），**未触发模型** |
+| **3b 内置命令（API）** | 内置命令能否同样派发 | ❌（已定性） | `/thinking`、`/model`、`/export <path>.jsonl` → **不触发模型、但也不执行**（无事件、无文件）→ `expandPromptTemplates` 只覆盖扩展/skill/prompt，不含内置命令 |
+| **3c 内置命令（pty 敲键）** | 替代路径是否可行 | ✅✅ | 空闲时敲 `/model` → TUI 选择器面板渲染到 pty（无模型调用）；敲 `/export /tmp/tui-proto/exp2.jsonl` → **文件生成 58,503 字节** |
+
+**结论**：
+1. 「TUI 模式 + 桥接 + pty」在 Pi 1.2.0 上**可行**，且不需要改 Pi 本体；
+2. **命令注入有明确的两条路**：扩展命令走 `sendUserMessage(..., {expandPromptTemplates:true})`；内置命令走 pty 敲键
+   （须空闲时注入）；
+3. **额外收获**：TUI 模式下 `/export x.jsonl` 直接可用 → §17.5 的「`.jsonl` 导出降级」缺口在本路线下**自然消失**；
+4. **待测/未覆盖**：`/scoped-models` 面板在本路线下的即时生效（我们已用共享数组方案解决，二者可叠加）、
+   长会话下丢弃 TUI 渲染的开销、Ctrl+C/关停握手在 pty 下的表现（§17.4 经验可迁移）。
