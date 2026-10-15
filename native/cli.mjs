@@ -10,6 +10,7 @@
  * 因此启动引擎前按需给**引擎子进程**加 `--max-old-space-size`（`PI_WEB_MAX_OLD_SPACE_MB` 可覆盖）。
  */
 import { spawn } from "node:child_process";
+import { sessionDisplayName } from "./session-name.mjs";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir, totalmem } from "node:os";
 import { dirname, join } from "node:path";
@@ -67,7 +68,7 @@ function listSessions() {
       } catch {
         continue;
       }
-      const nameMatch = text.match(/"type":"session_info"[^}]*"name":"([^"]+)"/);
+      const displayName = sessionDisplayName(text);
       let mtime = 0;
       try {
         mtime = statSync(path).mtimeMs;
@@ -75,7 +76,7 @@ function listSessions() {
         /* ignore */
       }
       rows.push({
-        name: nameMatch?.[1] ?? "(unnamed)",
+        name: displayName ?? "(unnamed)",
         id: header.id ?? "",
         cwd: header.cwd ?? "",
         mtime,

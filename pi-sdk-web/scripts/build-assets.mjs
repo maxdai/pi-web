@@ -41,6 +41,7 @@ const required = [
   "native/server.mjs",
   "native/bridge.mjs",
   "native/usage-render.mjs",
+  "native/session-name.mjs",
   "native/cli.mjs",
   "native/pii-cli.mjs",
   "native/pii",

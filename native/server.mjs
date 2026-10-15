@@ -17,6 +17,7 @@
  * 设计依据：pi-web-design.md §15。本文件是原型，不是发布路径。
  */
 import { createServer } from "node:http";
+import { sessionDisplayName } from "./session-name.mjs";
 import { createRequire } from "node:module";
 import { spawn, execFileSync } from "node:child_process";
 import { readdir, readFile, stat } from "node:fs/promises";
@@ -179,9 +180,8 @@ async function resolveSession() {
     } catch {
       continue;
     }
-    const nameMatch = text.match(/"type":"session_info"[^}]*"name":"([^"]+)"/);
     // "(unnamed)" 是 pi-web 对未命名会话的展示名（与 pii 一致），匹配没有 name 的会话
-    const sessionName = nameMatch?.[1] ?? "(unnamed)";
+    const sessionName = sessionDisplayName(text) ?? "(unnamed)";
     const header = JSON.parse(text.split("\n")[0]);
     const matched = SESSION_NAME ? sessionName === SESSION_NAME : header.id === POS_SESSION_ID;
     if (!matched) continue;
@@ -839,12 +839,11 @@ async function handleClientMessage(ws, msg) {
           if (p === session.path) continue;
           try {
             const text = await readFile(p, "utf8");
-            const nameMatch = text.match(/"type":"session_info"[^}]*"name":"([^"]+)"/);
             const header = JSON.parse(text.split("\n")[0]);
             sessions.push({
               path: p,
               id: header.id ?? p,
-              name: nameMatch?.[1] ?? "(unnamed)",
+              name: sessionDisplayName(text) ?? "(unnamed)",
               cwd: header.cwd ?? "",
             });
           } catch {
