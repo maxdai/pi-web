@@ -1935,8 +1935,21 @@ TUI 路线的收益是"能力面最全 + 不再追 RPC 缺口"，代价是 1200�
 |---|---|---|
 | 普通命令 | 30s（不变） | 正常都远低于此 |
 | **`bash`** | **不超时** | 命令可跑任意久；界面靠 `bash_execution_update` 流式输出保持活性；用户可中止 |
-| **`prompt`**（2026-10-15 追加） | **不超时** | 它的响应只是"预检通过"的回执（`rpc-mode.ts:394-413` 的 `preflightResult`，turn 本身 fire-and-forget）。**子进程忙于重活时回执会被无限期延后** —— 实测：大会话 `get_entries` 进行中并发发 prompt，**90s 都没有回执**；此时 30s 超时只会产生**误报**（用户实测 `command: rpc timeout: prompt`）。真死由 `child.on("exit")` 统一失败挂起调用；且 WS 消息逐条独立处理（`void handleClientMessage`），挂起一个 prompt 不会堵住其他消息 |
-| `compact` / `export_html` / 全量 `get_entries` / `switch_session` | **10 分钟** | 大会话下可能远超 30s，但不该无限等；`switch_session` 要加载会话文件，同样可能被重活延后（2026-10-15 加入） |
+| `compact` / `export_html` / 全量 `get_entries` | **10 分钟** | 大会话下可能远超 30s，但不该无限等 |
+
+**`prompt` 的 30s 超时：保留不动，但原因已查清（2026-10-15）**
+
+用户实测过一次 `command: rpc timeout: prompt`。根因（已隔离复现）：
+
+- Pi 的 RPC `prompt` **只在"预检通过"时回执** —— `rpc-mode.ts:394-413` 在 `preflightResult` 回调里
+  `output(success(id, "prompt", { disposition }))`，turn 本身 fire-and-forget；
+- 但**子进程忙于重活时，这个回执会被排到后面**：实测对 40MB 会话先发 `get_entries`（重活）、
+  1s 后并发发 prompt → **90s 内既无重活回执也无 prompt 回执**（子进程事件循环被占住）；
+- 所以这条 30s 超时**只可能产生误报** ✗（命令本身仍在正常执行，等 pi 空闲即恢复）。
+
+**决定：不去掉这个超时**（用户 2026-10-15："不需要去掉超时，只要了解原因就可以了"）——超时作为兜底保留。
+**遇到该报错时的正确解读**：多为**误报**，命令仍在执行、无需重试；真死由 `child.on("exit")` 统一失败挂起调用
+（且 WS 消息是逐条独立处理的 `void handleClientMessage`，挂起一个 prompt 不会堵住其他消息）。
 
 **配套（关键）**：`child.on("exit")` 里**显式失败所有挂起的 RPC**（错误 `pi child exited`）——
 否则"不超时"的 bash 调用在 pi 子进程退出后会**永远挂着**（内存泄漏 + 该次操作永不返回）。
