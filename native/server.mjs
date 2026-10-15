@@ -18,10 +18,11 @@
  */
 import { createServer } from "node:http";
 import { sessionDisplayName } from "./session-name.mjs";
+import { buildIndex, countEntries, lastEntryId, readPage } from "./session-history.mjs";
 import { createRequire } from "node:module";
 import { spawn, execFileSync } from "node:child_process";
 import { readdir, readFile, stat } from "node:fs/promises";
-import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { randomUUID } from "node:crypto";
@@ -49,6 +50,8 @@ const BRIDGE_EXT = join(HERE, "bridge.mjs");
 // 曾硬编码 $HOME/.pi/agent —— 自定义配置目录下会读错 settings / 扫错 sessions。
 const AGENT_DIR = process.env.PI_CODING_AGENT_DIR ?? join(process.env.HOME, ".pi", "agent");
 const SESSIONS_ROOT = join(AGENT_DIR, "sessions");
+/** 首屏只发最近这么多条历史（其余按需加载，见 §20）；可用环境变量覆盖。 */
+const HISTORY_TAIL = Math.max(20, Number(process.env.PI_WEB_HISTORY_TAIL ?? 300) || 300);
 const SETTINGS_FILE = join(AGENT_DIR, "settings.json");
 const TOKEN = randomUUID();
 /** 本次运行的唯一 id：注入 pi 子进程环境，用于把「自己这棵树」与「另一个实例」区分开。
@@ -260,6 +263,7 @@ async function rpcData(type, extra) {
 // ------------------------------------------------------------------ WS 广播
 const clients = new Set();
 let lastScopedNoticeAt = 0; // scoped-models 提示去抖（避免每次勾选都刷一行）
+let historyIndex = null; // 会话文件行偏移索引（惰性建立，见 §20）
 let pendingScopedPatterns = null; // 待桥接即时应用的 scoped 模式（侧信道一次性交接）
 let scopedApplyResolve = null; // 等待桥接回传应用结果
 let scopedApplyTimeoutMs = 5000;
@@ -427,10 +431,46 @@ async function sendState(target) {
   else broadcast(frame);
 }
 
+/** 会话文件的行偏移索引（惰性建立；文件增长则增量扩展，变小则重建）。 */
+function ensureHistoryIndex() {
+  const file = session?.path;
+  if (!file) return null;
+  try {
+    if (!historyIndex) historyIndex = buildIndex(file);
+    else {
+      const size = statSync(file).size;
+      if (size > historyIndex.size) historyIndex = buildIndex(file, historyIndex);
+      else if (size < historyIndex.size) historyIndex = buildIndex(file);
+    }
+  } catch (err) {
+    logErr(`[pi-web] history index failed: ${err.message}`);
+    return null;
+  }
+  return historyIndex;
+}
+
 async function sendHistory(target) {
+  const file = session?.path;
+  const index = file ? ensureHistoryIndex() : null;
+  if (file && index) {
+    // 尾部优先：只解析并发送最近 HISTORY_TAIL 条（§20）
+    const total = countEntries(index);
+    const from = Math.max(0, total - HISTORY_TAIL);
+    const entries = readPage(file, index, from, total);
+    const frame = {
+      type: "history",
+      data: { entries, from, total, hasMore: from > 0, leafId: lastEntryId(file, index) },
+    };
+    log(`[pi-web] history: ${entries.length}/${total} 条（from=${from}${from > 0 ? "，可继续往前加载" : ""}）`);
+    if (target) target.send(JSON.stringify(frame));
+    else broadcast(frame);
+    return;
+  }
+  // 退化路径：拿不到会话文件时仍走 RPC 全量（旧行为）
   try {
     const data = await rpcData("get_entries");
-    const frame = { type: "history", data: { entries: data?.entries ?? [], leafId: data?.leafId ?? null } };
+    const entries = data?.entries ?? [];
+    const frame = { type: "history", data: { entries, from: 0, total: entries.length, hasMore: false, leafId: data?.leafId ?? null } };
     if (target) target.send(JSON.stringify(frame));
     else broadcast(frame);
   } catch (err) {
@@ -452,9 +492,11 @@ async function sendSessionInfo() {
   try {
     const st = (await rpcData("get_state")) ?? {};
     const stats = (await rpcData("get_session_stats")) ?? {};
+    // 条目数用本地行偏移索引（原先额外调一次全量 get_entries，大会话下要十几秒，§20）
     let entryCount = 0;
     try {
-      entryCount = ((await rpcData("get_entries"))?.entries ?? []).length;
+      const index = ensureHistoryIndex();
+      if (index) entryCount = countEntries(index);
     } catch {
       /* ignore */
     }
@@ -833,6 +875,23 @@ async function handleClientMessage(ws, msg) {
         await rpc("set_session_name", { name: msg.name });
         await sendState();
         break;
+      case "history_page": {
+        // 按需加载更早的一页（§20）：只解析该页，不经过 Pi
+        const file = session?.path;
+        const index = file ? ensureHistoryIndex() : null;
+        if (!file || !index) {
+          ws.send(JSON.stringify({ type: "history_page", data: { entries: [], from: 0, hasMore: false } }));
+          break;
+        }
+        const total = countEntries(index);
+        const before = Math.max(0, Math.min(Number(msg.before ?? total) || total, total));
+        const limit = Math.max(1, Math.min(Number(msg.limit ?? HISTORY_TAIL) || HISTORY_TAIL, 2000));
+        const from = Math.max(0, before - limit);
+        const entries = readPage(file, index, from, before);
+        log(`[pi-web] history_page: ${entries.length} 条（${from}..${before}/${total}）`);
+        ws.send(JSON.stringify({ type: "history_page", data: { entries, from, hasMore: from > 0 } }));
+        break;
+      }
       case "get_sessions": {
         const sessions = [];
         for (const p of await listSessionFiles()) {

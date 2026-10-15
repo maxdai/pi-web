@@ -196,6 +196,13 @@ class PiWebClient {
   constructor() {
     this.ws = null;
     this.contentEl = document.getElementById('content');
+    // 长会话分页（设计见 pi-web-design.md §20）：首屏只渲染尾部，
+    // 更早的条目按需加载，prepend 时做滚动锚定。
+    this.historyFrom = 0;        // 已加载区间的起始条目序号
+    this.historyTotal = 0;       // 会话条目总数
+    this.historyLoader = null;   // 顶部「加载更早」控件
+    this.historyLoading = false; // 分页请求进行中
+    this.loadedEntryIds = new Set(); // 按 id 去重（防分页与实时帧重复）
     this.statusEl = document.getElementById('conn-status');
     this.statusAreaEl = document.getElementById('status');
     this.pendingEl = document.getElementById('pending');
@@ -369,6 +376,9 @@ class PiWebClient {
         break;
       case 'history':
         this.renderHistory(data.data);
+        break;
+      case 'history_page':
+        this.prependHistory(data.data);
         break;
       case 'stats':
         this.renderStats(data.data, this.lastState);
@@ -716,13 +726,66 @@ class PiWebClient {
     return `${Math.round(count / 1000000)}M`;
   }
 
-  renderHistory(entries) {
+  renderHistory(data) {
     this.clearContent();
-    if (!entries || !entries.entries) return;
-    for (const entry of entries.entries) {
-      this.renderEntry(entry);
-    }
+    const entries = data?.entries ?? [];
+    this.historyFrom = data?.from ?? 0;
+    this.historyTotal = data?.total ?? entries.length;
+    this.historyLoading = false;
+    this.loadedEntryIds = new Set();
+    for (const entry of entries) this.renderEntryOnce(entry);
+    this.updateHistoryLoader(data?.hasMore === true);
     this.scrollToBottom();
+  }
+
+  /** 渲染一条历史条目，按 id 去重（分页与实时帧可能重叠）。 */
+  renderEntryOnce(entry) {
+    if (!entry) return false;
+    if (entry.id) {
+      if (this.loadedEntryIds.has(entry.id)) return false;
+      this.loadedEntryIds.add(entry.id);
+    }
+    this.renderEntry(entry);
+    return true;
+  }
+
+  /** 顶部「加载更早」控件（无更早条目时移除）。 */
+  updateHistoryLoader(hasMore) {
+    if (this.historyLoader) {
+      this.historyLoader.remove();
+      this.historyLoader = null;
+    }
+    if (!hasMore) return;
+    const el = document.createElement('div');
+    el.className = 'history-more';
+    el.textContent = `↑ 还有 ${this.historyFrom} 条更早的记录 · 点击加载`;
+    el.addEventListener('click', () => {
+      if (this.historyLoading) return;
+      this.historyLoading = true;
+      el.textContent = '加载中…';
+      this.send({ type: 'history_page', before: this.historyFrom, limit: 300 });
+    });
+    this.historyLoader = el;
+    this.contentEl.insertBefore(el, this.contentEl.firstChild);
+  }
+
+  /** 分页结果：prepend 到顶部，并保持视口位置不跳动。 */
+  prependHistory(data) {
+    const entries = data?.entries ?? [];
+    const scroller = document.getElementById('scroll-view');
+    const beforeHeight = scroller ? scroller.scrollHeight : 0;
+    const startIndex = this.contentEl.childNodes.length;
+    for (const entry of entries) this.renderEntryOnce(entry);
+    // 新节点被 append 到末尾，先摘出来再整体插到顶部
+    const added = Array.from(this.contentEl.childNodes).slice(startIndex);
+    for (const node of added) node.remove();
+    const frag = document.createDocumentFragment();
+    for (const node of added) frag.appendChild(node);
+    this.contentEl.insertBefore(frag, this.historyLoader ?? this.contentEl.firstChild);
+    this.historyFrom = data?.from ?? Math.max(0, this.historyFrom - entries.length);
+    this.historyLoading = false;
+    this.updateHistoryLoader(data?.hasMore === true);
+    if (scroller) scroller.scrollTop += scroller.scrollHeight - beforeHeight; // 滚动锚定
   }
 
   renderEntry(entry) {

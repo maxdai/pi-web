@@ -1535,3 +1535,29 @@ body {
   color: var(--text);
   border-color: var(--accent);
 }
+
+/* 长会话优化（设计见 pi-web-design.md §20）：
+   离屏条目跳过布局/绘制，降低内存与滚动成本；不减少 JS 构建 DOM 的耗时，
+   因此与"尾部优先 + 按需加载更早"配合使用。 */
+.message,
+.tool-block {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 240px;
+}
+
+/* 顶部「加载更早」控件 */
+.history-more {
+  margin: 8px auto 14px;
+  padding: 6px 14px;
+  width: fit-content;
+  border: 1px solid var(--border, #3a3a44);
+  border-radius: 999px;
+  color: var(--dim, #9a9aa5);
+  font-size: 12px;
+  cursor: pointer;
+  user-select: none;
+}
+.history-more:hover {
+  color: var(--fg, #e6e6e6);
+  border-color: var(--accent, #6ea8fe);
+}
