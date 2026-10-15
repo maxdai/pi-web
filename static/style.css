@@ -989,7 +989,11 @@ body {
 .modal-panel-body {
   margin: 0;
   padding: 8px 10px;
-  background: var(--panel, rgba(0, 0, 0, 0.25));
+  /* custom() 面板（/ctx-status 等）底色：**跟随主题的终端底色** —— 组件的 ANSI 颜色正是按当前主题
+     的终端底色生成的。早先用固定 rgba(0,0,0,0.25) 兜底（--panel 从未定义）→ 亮色主题下变成
+     "浅灰底 + 深灰字"对比度极低（2026-10-15 修复）。注意**必须在此处直接引用 var(--bg)**：
+     写成 :root { --panel: var(--bg) } 会在 :root 上求值，拿不到 body.theme-light 的覆盖 ✗。 */
+  background: var(--bg);
   border-radius: 4px;
   font-family: var(--font-mono);
   font-size: 12px;
