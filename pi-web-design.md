@@ -1890,3 +1890,24 @@ TUI 路线的收益是"能力面最全 + 不再追 RPC 缺口"，代价是 1200�
 | 以 `--session install` 启动 → `get_sessions` | 13 项，`install` 被正确排除 ✓ |
 | `resume` 切到临时会话 | 日志 `session switched → …` ✓；**`install` 重新出现在列表** ✓ |
 | 切到 /tmp 副本再切回 | history 分别读到 52/52 与 300/15677 条 ✓（**历史跟着切换走** ✓） |
+
+## 21. RPC 调用超时策略（2026-10-15 修复）
+
+**现象（用户报告）**：用 `!!` 执行命令时偶发 `bash: rpc timeout: bash`。
+
+**根因**：`native/server.mjs` 的 `rpc()` 对**所有** RPC 调用硬编码 30s 超时 ✗，而 bash 命令天然可以跑很久
+（`!!npm run dev`、长构建、`sleep`…）。实测精确复现：`!!sleep 35` → **30.0s** 抛 `bash: rpc timeout: bash`。
+
+**策略（按调用区分）**：
+
+| 类别 | 超时 | 理由 |
+|---|---|---|
+| 普通命令 | 30s（不变） | 正常都远低于此 |
+| **`bash`** | **不超时** | 命令可跑任意久；界面靠 `bash_execution_update` 流式输出保持活性；用户可中止 |
+| `compact` / `export_html` / 全量 `get_entries` | **10 分钟** | 大会话下可能远超 30s，但不该无限等 |
+
+**配套（关键）**：`child.on("exit")` 里**显式失败所有挂起的 RPC**（错误 `pi child exited`）——
+否则"不超时"的 bash 调用在 pi 子进程退出后会**永远挂着**（内存泄漏 + 该次操作永不返回）。
+
+**验证**：`!!sleep 35` → **35.1s 完成**（exit=0，输出 `DONE-LONG`）✓；流式命令（每秒一行 ×3）→ 3 次
+`bash_execution_update` + 正确最终输出 ✓；冒烟 42/42 ✓。

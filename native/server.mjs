@@ -242,14 +242,24 @@ const child = spawn(
 const pendingRpc = new Map();
 let rpcSeq = 0;
 
+/** 普通命令的 RPC 超时；长任务用 RPC_LONG_TIMEOUT_MS，bash 不设超时（见 rpc 的 opts.timeoutMs）。 */
+const RPC_TIMEOUT_MS = 30000;
+/** 长任务：压缩、导出 HTML、读全量条目（大会话下可能远超 30s，但不能无限等）。 */
+const RPC_LONG_TIMEOUT_MS = 10 * 60 * 1000;
+
 function rpc(type, extra = {}, opts = {}) {
   const id = opts.id ?? `c${++rpcSeq}`;
   const payload = JSON.stringify({ id, type, ...extra }) + "\n";
   return new Promise((res, rej) => {
     pendingRpc.set(id, { res, rej });
-    setTimeout(() => {
-      if (pendingRpc.delete(id)) rej(new Error(`rpc timeout: ${type}`));
-    }, 30000);
+    // opts.timeoutMs：未指定 = 默认 30s；0 = **不超时**（bash 命令可以跑任意久）；
+    // 长任务显式传 RPC_LONG_TIMEOUT_MS。
+    const timeoutMs = opts.timeoutMs === undefined ? RPC_TIMEOUT_MS : opts.timeoutMs;
+    if (timeoutMs > 0) {
+      setTimeout(() => {
+        if (pendingRpc.delete(id)) rej(new Error(`rpc timeout: ${type}`));
+      }, timeoutMs);
+    }
     child.stdin.write(payload);
   });
 }
@@ -515,7 +525,7 @@ async function sendHistory(target) {
   }
   // 退化路径：拿不到会话文件时仍走 RPC 全量（旧行为）
   try {
-    const data = await rpcData("get_entries");
+    const data = await rpc("get_entries", {}, { timeoutMs: RPC_LONG_TIMEOUT_MS }).then((r) => r?.data);
     const entries = data?.entries ?? [];
     const frame = { type: "history", data: { entries, from: 0, total: entries.length, hasMore: false, leafId: data?.leafId ?? null } };
     if (target) target.send(JSON.stringify(frame));
@@ -694,6 +704,9 @@ child.on("error", (err) => {
 
 child.on("exit", (code, signal) => {
   childExited = true;
+  // 子进程退出后，挂起的 RPC 永远不会有结果 —— 必须显式失败（否则"不超时"的 bash 调用会永远挂着）
+  for (const [, pending] of pendingRpc) pending.rej(new Error("pi child exited"));
+  pendingRpc.clear();
   if (shuttingDown) {
     log(`[pi-web] pi 子进程已随服务端退出 (code=${code} signal=${signal})`);
     return;
@@ -834,10 +847,12 @@ async function handleClientMessage(ws, msg) {
         // 作为执行 id（会出现在 bash_execution_update 事件里），所以这里把两者对齐，
         // 否则前端匹配不到流式块，会再新建一个。
         const id = typeof msg.id === "string" && msg.id ? msg.id : `bash-${Date.now()}`;
+        // bash 可以跑任意久（!!npm run dev / 长构建…），**不设超时**：靠 bash_execution_update
+        // 流式输出保持界面活性；用户可用中止按钮；子进程退出时由 child.on("exit") 统一失败挂起调用。
         const response = await rpc(
           "bash",
           { command: msg.command, excludeFromContext: msg.excludeFromContext },
-          { id },
+          { id, timeoutMs: 0 },
         );
         broadcast({ type: "bash_result", id, command: msg.command, data: response?.data ?? {} });
         break;
@@ -889,7 +904,7 @@ async function handleClientMessage(ws, msg) {
         await sendSessionInfo();
         break;
       case "compact":
-        await rpc("compact");
+        await rpc("compact", {}, { timeoutMs: RPC_LONG_TIMEOUT_MS });
         await sendState();
         break;
       case "set_model":
@@ -1085,7 +1100,7 @@ async function handleClientMessage(ws, msg) {
           notify("/export", "jsonl 导出在原生引擎下暂不支持（RPC 仅提供 export_html）", "warning");
           break;
         }
-        const data = await rpcData("export_html", { outputPath });
+        const data = await rpc("export_html", { outputPath }, { timeoutMs: RPC_LONG_TIMEOUT_MS }).then((r) => r?.data);
         notify("/export", `Session exported to: ${data?.path ?? "(unknown)"}`, "info");
         break;
       }
