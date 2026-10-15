@@ -1842,3 +1842,30 @@ TUI 路线的收益是"能力面最全 + 不再追 RPC 缺口"，代价是 1200�
    教训：**退化路径会掩盖 bug**，所以必须同时量"第二条连接"——首条连接走索引路径（看起来已优化 ✓），
    第二条才暴露问题（实测第二次连接收到 `history(15662/15662)` ✗）。诊断靠"抓浏览器实际收到的帧"，而不是只看服务端日志。
 2. 端口未清干净时新实例 `EADDRINUSE` 直接退出，测试脚本却连到旧实例 → 现象是"改了没生效"（老问题，见 AGENTS §7）。
+### 20.7 会话切换后的同步（2026-10-15 修复，用户实测发现）
+
+**现象**：从 `pi-web r pmv` 进入，用 `/resume` 切到别的会话后，**列表里再也找不到 `pmv`**，切不回去。
+
+**根因**：`session` 是启动时 `resolveSession()` 解析出来的**常量**（`native/server.mjs:206`），
+`/resume`（以及 `/new`、`/fork`、`/clone`）换了会话文件后**从不刷新** ✗，于是：
+
+1. `get_sessions` 用 `if (p === session.path) continue` 排除"当前会话"——排除的其实是**原会话** ✗
+   → 切走以后原会话从列表消失（用户遇到的现象）；
+2. **基于会话文件的 history（§20）会继续读旧文件** ✗ → 切到新会话后，页面显示的还是旧会话的内容
+   （这条是本次 §20 改动**引入的新风险**：改动前 history 来自 Pi 的 `get_entries`，天然跟着切换走）。
+
+**修法**：`get_state` 的响应里**自带 `sessionFile`**，因此在 `buildState()` 里**零额外开销**地同步：
+
+- 新增 `applySessionFile(file)`：更新 `session.path`，清空 `session.name`（重新解析）、
+  从会话文件头部（只读前 8KB）刷新 `session.cwd`，并**作废 `historyIndex`**（索引属于旧文件）；
+- `buildState()` 顺带调用它（覆盖 `/resume`：`resume` 分支先 `sendState()` 再 `sendHistory()` ✓）；
+- `get_sessions` 前额外调用 `syncSessionFile()`（该路径不走 `buildState`），保证列表里的"当前会话"是最新的；
+- 顺带修好 `delete` 的当前会话保护（此前会误判"当前"是旧会话）。
+
+**验证**（真实会话 + 会话根目录内的临时副本）：
+
+| 步骤 | 结果 |
+|---|---|
+| 以 `--session install` 启动 → `get_sessions` | 13 项，`install` 被正确排除 ✓ |
+| `resume` 切到临时会话 | 日志 `session switched → …` ✓；**`install` 重新出现在列表** ✓ |
+| 切到 /tmp 副本再切回 | history 分别读到 52/52 与 300/15677 条 ✓（**历史跟着切换走** ✓） |

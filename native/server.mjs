@@ -22,7 +22,7 @@ import { buildIndex, countEntries, lastEntryId, readPage } from "./session-histo
 import { createRequire } from "node:module";
 import { spawn, execFileSync } from "node:child_process";
 import { readdir, readFile, stat } from "node:fs/promises";
-import { existsSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, openSync, readFileSync, readSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { randomUUID } from "node:crypto";
@@ -366,6 +366,51 @@ function displayCwd(cwd) {
   return cwd;
 }
 
+/** 读会话文件头部的 cwd（只读前 8KB；大文件下避免整份读入）。 */
+function readHeaderCwd(file) {
+  try {
+    const fd = openSync(file, "r");
+    try {
+      const buf = Buffer.allocUnsafe(8192);
+      const n = readSync(fd, buf, 0, 8192, 0);
+      const line = buf.subarray(0, n).toString("utf8").split("\n")[0];
+      const header = JSON.parse(line);
+      return typeof header.cwd === "string" ? header.cwd : undefined;
+    } finally {
+      closeSync(fd);
+    }
+  } catch {
+    return undefined;
+  }
+}
+
+/** 同步"当前会话文件"。`session` 是启动时解析的常量，而 `/resume`、`/new`、`/fork`、`/clone`
+ *  都会换文件——不刷新会出两个问题（2026-10-15 用户实测）：
+ *  ① `get_sessions` 用 `p === session.path` 排除"当前会话"，排除的其实是**原会话** →
+ *     切走以后原会话从 /resume 列表里消失，切不回去；
+ *  ② 基于会话文件的 history（§20）会继续读**旧文件** → 切到新会话后显示的还是旧会话内容。
+ *  返回是否发生变化。 */
+function applySessionFile(file) {
+  if (!file || file === session.path) return false;
+  session.path = file;
+  session.name = undefined; // 名字随文件重新解析（见 get_sessions）
+  session.cwd = readHeaderCwd(file) ?? session.cwd;
+  historyIndex = null; // 索引属于旧文件，必须重建（§20）
+  log(`[pi-web] session switched → ${session.path}`);
+  return true;
+}
+
+/** 主动向 Pi 询问当前会话文件并同步（用于 get_sessions 等未走 buildState 的路径）。 */
+async function syncSessionFile() {
+  try {
+    const st = (await rpcData("get_state")) ?? {};
+    return applySessionFile(st.sessionFile);
+  } catch (err) {
+    logErr(`[pi-web] sync session failed: ${err.message}`);
+    return false;
+  }
+}
+
 async function buildState() {
   let st = {};
   try {
@@ -373,6 +418,8 @@ async function buildState() {
   } catch (err) {
     logErr(`[pi-web] get_state failed: ${err.message}`);
   }
+  // 会话切换后当前会话文件会变（见 applySessionFile）
+  applySessionFile(st.sessionFile);
   const cwd = bridgeInfo.cwd ?? session.cwd;
   if (st.sessionId) lastSessionId = String(st.sessionId);
   const state = {
@@ -893,6 +940,7 @@ async function handleClientMessage(ws, msg) {
         break;
       }
       case "get_sessions": {
+        await syncSessionFile(); // 保证"当前会话"是最新的，否则原会话会从列表里漏掉
         const sessions = [];
         for (const p of await listSessionFiles()) {
           if (p === session.path) continue;
