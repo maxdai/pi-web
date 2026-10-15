@@ -16,7 +16,13 @@
 ```bash
 cd /root/pi-web/pi-sdk-web
 npm run build                            # 纯拷贝：static/ + native/*.mjs + pii → dist/（无 tsc）
-npm install -g /root/pi-web/pi-sdk-web   # 全局安装变为**指向仓库的软链**
+
+# 全局安装变为「指向仓库的软链」；**必须先确认用户 4080 已停**（会替换全局包目录）。
+# 用下面这条「带守卫」的命令，别把检查与安装拆成两句（2026-10-15 踩过：检查打印了"占用"，
+# 安装照样执行了）。
+lsof -ti:4080 -sTCP:LISTEN >/dev/null 2>&1 \
+  && echo "⛔ 4080 仍在运行：请先停掉用户实例再更新全局安装" \
+  || npm install -g /root/pi-web/pi-sdk-web
 ```
 
 - 软链形态下，之后改 `native/`、`static/` 只需 `npm run build`，`pi-web` / `pii` / `pi-web-native`
