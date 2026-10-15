@@ -735,7 +735,7 @@ class PiWebClient {
     this.loadedEntryIds = new Set();
     for (const entry of entries) this.renderEntryOnce(entry);
     this.updateHistoryLoader(data?.hasMore === true);
-    this.scrollToBottom();
+    this.stickToBottom(); // 跟住式贴底：布局/离屏高度晚增长时也要停在底部
   }
 
   /** 渲染一条历史条目，按 id 去重（分页与实时帧可能重叠）。 */
@@ -1723,6 +1723,52 @@ class PiWebClient {
   scrollToBottom() {
     const scroller = document.getElementById('scroll-view');
     if (scroller) scroller.scrollTop = scroller.scrollHeight;
+  }
+
+  /**
+   * 首屏/切换后贴底，并**跟住**一小段时间。
+   *
+   * 为什么不能只贴一次（2026-10-15 用户实测）：长会话里离屏条目带 `content-visibility: auto`
+   * （见 pi-web-design.md §20 方案 D），它们的高度在首帧只是**估算值**，会随布局推进继续增长
+   * （实测同一页面 70,887 → 81,826px）；扩展 widget/状态区也会在稍后占位。只贴一次就会停在半路，
+   * 用户还得自己往下翻。这里持续跟随直到高度稳定，且**用户一滚动/按键就立刻停手**（不抢滚动权）。
+   */
+  stickToBottom() {
+    const scroller = document.getElementById('scroll-view');
+    if (!scroller) return;
+    let cancelled = false;
+    const cancel = () => {
+      cancelled = true;
+      window.removeEventListener('wheel', cancel);
+      window.removeEventListener('touchstart', cancel);
+      window.removeEventListener('keydown', cancel);
+    };
+    window.addEventListener('wheel', cancel, { passive: true, once: true });
+    window.addEventListener('touchstart', cancel, { passive: true, once: true });
+    window.addEventListener('keydown', cancel, { once: true });
+    const stick = () => {
+      if (!cancelled) scroller.scrollTop = scroller.scrollHeight;
+    };
+    stick();
+    let last = scroller.scrollHeight;
+    let settled = 0;
+    const tick = (n) => {
+      if (cancelled || n > 60) return;
+      requestAnimationFrame(() => {
+        stick();
+        const h = scroller.scrollHeight;
+        if (h !== last) {
+          last = h;
+          settled = 0;
+        } else if (++settled > 12) {
+          return; // 高度已稳定十几帧，收工
+        }
+        tick(n + 1);
+      });
+    };
+    tick(0);
+    // 兜底：布局/字体/widget 晚到的情况
+    for (const delay of [120, 400, 1000]) setTimeout(stick, delay);
   }
 
   /**
