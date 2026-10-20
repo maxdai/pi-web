@@ -856,17 +856,20 @@ class PiWebClient {
   }
 
   renderHistoryAssistantMessage(message) {
-    const div = document.createElement('div');
-    div.className = 'message assistant';
-    const role = document.createElement('div');
-    role.className = 'role';
-    role.textContent = 'Assistant';
-    const body = document.createElement('div');
-    body.className = 'body';
-    div.appendChild(role);
-    div.appendChild(body);
-    this.contentEl.appendChild(div);
-    this.renderAssistantContent(message, body);
+    // 纯工具调用的消息没有文字 → 不建空气泡（工具块在下面照建）
+    if (this.hasVisibleAssistantContent(message)) {
+      const div = document.createElement('div');
+      div.className = 'message assistant';
+      const role = document.createElement('div');
+      role.className = 'role';
+      role.textContent = 'Assistant';
+      const body = document.createElement('div');
+      body.className = 'body';
+      div.appendChild(role);
+      div.appendChild(body);
+      this.contentEl.appendChild(div);
+      this.renderAssistantContent(message, body);
+    }
 
     // Create tool blocks for tool calls
     for (const block of message.content || []) {
@@ -1148,6 +1151,17 @@ class PiWebClient {
     // toolResult handled via tool_execution events
   }
 
+  /** 助手消息是否有**可见内容**（text / thinking 且非空白）。
+   *  纯工具调用的助手消息没有文字 —— 早先照样建气泡，结果只显示一个 "Assistant" 标签 ✗
+   *  （实测 install 会话：128 个 assistant 气泡里 37 个是空的）。 */
+  hasVisibleAssistantContent(message) {
+    for (const block of message?.content || []) {
+      if (block.type === 'text' && (block.text || '').trim()) return true;
+      if (block.type === 'thinking' && (block.thinking || '').trim()) return true;
+    }
+    return false;
+  }
+
   /** 由增量缓冲拼出一份"部分消息"（形状与 message_event 的完整 message 一致）。 */
   partialAssistantMessage() {
     const s = this.streaming;
@@ -1427,6 +1441,12 @@ class PiWebClient {
   finalizeAssistantMessage(message) {
     if (!this.streaming.el) return;
     const body = this.streaming.body;
+    // 定稿后仍无文字（纯工具调用的消息）→ 去掉空气泡，避免留下 "Assistant" 标签
+    if (!this.hasVisibleAssistantContent(message)) {
+      this.streaming.el.remove();
+      this.resetStreaming();
+      return;
+    }
     if (body) {
       this.renderAssistantContent(message, body);
     }
