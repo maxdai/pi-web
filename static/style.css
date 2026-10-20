@@ -960,9 +960,6 @@ body {
   border-left-color: var(--error);
 }
 
-  opacity: 0;
-}
-
 .modal-message {
   color: var(--text);
   font-size: 13px;

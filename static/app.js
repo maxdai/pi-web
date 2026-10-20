@@ -2043,6 +2043,8 @@ class PiWebClient {
         }
         return;
       }
+      // 输入法组合期间（中文选词）的 Enter 不是“提交”：不拦会发送半截文本 / 误触列表动作
+      if (e.isComposing || e.keyCode === 229) return;
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
         this.sendMessage();
@@ -2101,6 +2103,8 @@ class PiWebClient {
       }
       // 列表型 modal 的键盘导航（搜索框保持焦点时 ↑↓ 归我们处理，←→ 仍可编辑文字）
       if (!modalOpen || !CURSOR_MODAL_MODES.has(this.modalMode)) return;
+      // 输入法组合期间（中文选词）的 Enter 不是“提交”：不拦会发送半截文本 / 误触列表动作
+      if (e.isComposing || e.keyCode === 229) return;
       if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
         e.preventDefault();
         this.moveModalCursor(e.key === 'ArrowDown' ? 1 : -1);
@@ -2129,6 +2133,11 @@ class PiWebClient {
 
   openModal(title, mode) {
     this.modalMode = mode;
+    // 上一个弹窗的列表数据/回调必须清空：否则“先 openModal 显示 Loading、再等异步数据”的入口
+    // （/resume、/model）在数据到达前输入字符，会把**上一个弹窗**的列表画进来，回车还会执行
+    // 上一个弹窗的动作（实测：/resume 里回车发出了 set_model ✗）。2026-10-20 审计修复。
+    this.modalItems = null;
+    this.modalOnSelect = null;
     this.stopDialogCountdown();
     this.modalTitle.textContent = title;
     this.modalSearch.value = '';
@@ -2276,10 +2285,13 @@ class PiWebClient {
     this.modalList.innerHTML = filtered
       .map(
         (item, i) =>
-          `<div class="modal-item" data-index="${i}">` +
+          `<div class="modal-item${item.onDelete ? ' resume-item' : ''}" data-index="${i}">` +
           `<span class="modal-item-name">${this.escapeHtml(item.name || item.id || '')}</span>` +
           `<span class="modal-item-desc">${this.escapeHtml(item.desc || '')}</span>` +
           (item.right ? `<span class="modal-item-right">${this.escapeHtml(item.right)}</span>` : '') +
+          // 删除图标随 item 一起渲染（数据驱动）：早先是 handleSessions 之后按下标补 DOM，
+          // 一输入过滤词就全部消失，而且下标是**未过滤**数组的 → 会删错会话 ✗（2026-10-20 修）。
+          (item.onDelete ? '<span class="resume-delete" title="Delete this session">🗑</span>' : '') +
           `</div>`,
       )
       .join('');
@@ -2289,6 +2301,13 @@ class PiWebClient {
         this.modalOnSelect(filtered[i]);
         this.closeModal();
       });
+      const del = el.querySelector('.resume-delete');
+      if (del && filtered[i].onDelete) {
+        del.addEventListener('click', (e) => {
+          e.stopPropagation(); // 点删除不要顺带 resume
+          filtered[i].onDelete();
+        });
+      }
     });
     // 过滤后应用光标：保持原位置（越界则收敛），无结果时清零
     if (rendered.length > 0) {
@@ -2416,6 +2435,8 @@ class PiWebClient {
       this.closeModal();
     });
     input.addEventListener('keydown', (e) => {
+      // 输入法组合期间按 Enter 是选词，不是提交
+      if (e.isComposing || e.keyCode === 229) return;
       if (e.key === 'Enter') {
         this.send({ type: 'extension_ui_response', id: req.id, value: input.value });
         this.closeModal();
@@ -3077,25 +3098,12 @@ class PiWebClient {
         desc: s.cwd,
         right: this.formatSessionAge(s.mtime),
         value: s.path,
+        onDelete: () => this.deleteSession(s),
       })),
       (item) => {
         this.send({ type: 'resume', path: item.value });
       },
     );
-    // Add delete buttons to each item (stopPropagation so clicks don't resume)
-    this.modalList.querySelectorAll('.modal-item').forEach((el, i) => {
-      const session = sessions[i];
-      el.classList.add('resume-item');
-      const del = document.createElement('span');
-      del.className = 'resume-delete';
-      del.title = 'Delete this session';
-      del.textContent = '🗑';
-      del.addEventListener('click', (e) => {
-        e.stopPropagation();
-        this.deleteSession(session);
-      });
-      el.appendChild(del);
-    });
   }
 
   deleteSession(session) {
