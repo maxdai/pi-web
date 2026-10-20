@@ -837,8 +837,11 @@ async function checkSessionSharers() {
 
 // ------------------------------------------------------------------ 浏览器命令
 async function handleClientMessage(ws, msg) {
-  const type = msg.type;
+  // 取值必须在 try 内且可空：早先 `const type = msg.type` 在 try 外，收到一帧 `null`
+  // 就抛 TypeError → async 函数变成 rejected promise → void 丢掉 → 进程退出（已复现 ✗）。
+  let type = "(invalid)";
   try {
+    type = msg && typeof msg === "object" ? String(msg.type ?? "(missing)") : "(invalid)";
     switch (type) {
       case "prompt":
         await rpc("prompt", { message: msg.message });
@@ -1409,6 +1412,16 @@ server.on("upgrade", (req, socket, head) => {
 wss.on("connection", async (ws) => {
   clients.add(ws);
   onBrowserPresenceChanged();
+  // ws 在协议错误（如未 MASK 的帧）或发送到已关闭 socket 时会 emit('error')；
+  // EventEmitter 无监听者即抛出 → 进程退出（已复现 ✗）。这里必须兜住。
+  ws.on("error", (err) => {
+    logErr(`[pi-web] ws error: ${err?.code ?? err?.message ?? err}`);
+    try {
+      ws.terminate();
+    } catch {
+      /* ignore */
+    }
+  });
   ws.on("close", () => {
     clients.delete(ws);
     onBrowserPresenceChanged();
@@ -1420,7 +1433,9 @@ wss.on("connection", async (ws) => {
     } catch {
       return;
     }
-    void handleClientMessage(ws, msg);
+    void handleClientMessage(ws, msg).catch((err) => {
+      logErr(`[pi-web] handleClientMessage failed: ${err?.message ?? err}`);
+    });
   });
 
   // 连接即快照重放：state → history → ext_status → widgets（与现有服务端同序）
