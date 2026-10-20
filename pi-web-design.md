@@ -1948,8 +1948,12 @@ TUI 路线的收益是"能力面最全 + 不再追 RPC 缺口"，代价是 1200�
 
 - Pi 的 RPC `prompt` **只在"预检通过"时回执** —— `rpc-mode.ts:394-413` 在 `preflightResult` 回调里
   `output(success(id, "prompt", { disposition }))`，turn 本身 fire-and-forget；
-- 但**子进程忙于重活时，这个回执会被排到后面**：实测对 40MB 会话先发 `get_entries`（重活）、
-  1s 后并发发 prompt → **90s 内既无重活回执也无 prompt 回执**（子进程事件循环被占住）；
+- 但**子进程忙于重活时，这个回执会被排到后面**：实测（`pi --mode rpc --session <40MB会话>`，2026-10-20 修正版）
+  先发 `get_entries`（重活，**+13.40s** 返回 34MB JSON），在第 **+1.0s** 并发发 prompt →
+  prompt 回执被延后到 **+13.73s**（**延后 12.7s**）。重活更久或叠加多次，就可能超过 30s → 误报；
+  > 订正记录：同一实验的首版把参数写成 `--session-file`（Pi 只认 `--session <path|id>`）→ 子进程报
+  > `Unknown option` 直接退出、毫无输出，被我误读为"90s 无回执 ✗"。**参数写错导致"实验做成了空转"**，
+  > 是这次差点把错误结论写进文档的教训。
 - 所以这条 30s 超时**只可能产生误报** ✗（命令本身仍在正常执行，等 pi 空闲即恢复）。
 
 **决定：不去掉这个超时**（用户 2026-10-15："不需要去掉超时，只要了解原因就可以了"）——超时作为兜底保留。
@@ -2009,3 +2013,30 @@ TUI 路线的收益是"能力面最全 + 不再追 RPC 缺口"，代价是 1200�
 - **必须恢复跟随**：用户上滚后 `followBottom` 为 false（设计 §20.7d）✓ —— 点这个按钮说明"我要回到最新" ✓，
   因此显式置 `followBottom = true` ✓（不依赖随后那次 `scroll` 事件的异步更新 ✓），此后新内容会继续贴底 ✓。
 - **始终可见**（与 ↑/↓ 一致 ✓），不做"已在底部时置灰" ✗（避免多余状态 ✓）。
+
+## 24. 流式文本渲染修复（2026-10-20）
+
+**现象（用户报告）**：改用 RPC 引擎后，感觉 message 流"不完全是流式"，怀疑是 JSONL 传输要等一整个 JSON
+传完才能显示。
+
+**先证伪传输层**（直接对 `pi --mode rpc --session <path>` 发 prompt，打印每个事件时刻）：
+
+```
+message_update 共 84 个；前 6 个到达时刻 4.02s / 4.02s / 4.02s / 4.09s … 末 3 个 5.70s / 5.71s / 5.71s
+```
+
+→ 增量在 **+4.0s ~ +5.7s 之间持续到达** ✓；JSONL 是**逐行帧**（每个增量是一个独立的小 JSON 行），
+不存在"等整包"的问题 ✓。经我们服务端转发实测同样正常（裸 WS 客户端能收到 `text_delta` 帧 ✓）。
+
+**真因在我们前端**：`onMessageUpdate(ev)` 里 `const msg = ev.message; if (!msg) return;` ✗ ——
+那是 **SDK 时代的形状**（带完整 `message`）；RPC 载荷只有
+`{type:"message_update", usage, assistantMessageEvent:{type:"text_delta", delta:"…"}}` ✓。
+于是**每个增量都被丢掉** ✗，文字只在 `message_end` 时一次性出现 ✗。
+
+**修法（只改前端）**：在 `streaming` 状态里累积 `text`/`thinking` 缓冲 ✓，由它们拼一份"部分消息"
+（形状与完整 message 一致：`{role:'assistant', content:[{type:'thinking'|'text', …}]}`）✓ 交给既有的
+`renderAssistantContent` ✓；`message_end` 仍用 Pi 的完整消息定稿 ✓。
+
+**验证**：服务端转发 N 个 `text_delta` → 浏览器里最后一条助手消息的正文长度出现 N+1 次变化
+（尾部一次是定稿）✓；实测 2 个 delta → 3 次变化 ✓。注意**粒度由模型/供应商的分块决定** ✓（同一问题
+可能只给 2~3 个 chunk，长回答会给几十个）——与 TUI 收到的增量完全一致 ✓，这属于 Pi 的上游行为，不是 pi-web 的差异 ✓。

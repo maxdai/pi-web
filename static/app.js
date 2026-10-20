@@ -1135,23 +1135,40 @@ class PiWebClient {
     // toolResult handled via tool_execution events
   }
 
+  /** 由增量缓冲拼出一份"部分消息"（形状与 message_event 的完整 message 一致）。 */
+  partialAssistantMessage() {
+    const s = this.streaming;
+    const content = [];
+    if (s.thinking) content.push({ type: 'thinking', thinking: s.thinking });
+    if (s.text) content.push({ type: 'text', text: s.text });
+    return { role: 'assistant', content };
+  }
+
+  /**
+   * 流式增量（`message_update`）。
+   *
+   * **RPC 的载荷里没有 `message`**：Pi 只发
+   * `{type:"message_update", usage, assistantMessageEvent:{type:"text_delta", delta:"…"}}`
+   * （`text_start`/`text_delta`/`text_end`、`thinking_*`、`toolcall_*`）。
+   * 早先这里 `const msg = ev.message; if (!msg) return;` —— 按 SDK 时代形状取数 ✗，
+   * 于是**每个增量都被丢掉**，文字只在 `message_end` 时一次性出现（用户实测：
+   * "message 流不是完全流式" ✓✓）。现在改为自己累积 delta ✓。
+   */
   onMessageUpdate(ev) {
-    const msg = ev.message;
-    if (!msg) return;
-    // Find the delta event for partial text/thinking updates
     const aev = ev.assistantMessageEvent;
-    if (!aev) return;
+    if (!aev) return; // 旧形状（带完整 message）不再出现；无增量事件则忽略
     if (!this.streaming.active || !this.streaming.el) {
-      this.startAssistantMessage(msg);
+      this.startAssistantMessage({ role: 'assistant', content: [] });
     }
-    if (aev.type === 'text_delta') {
-      // Update the assistant text content
-      this.updateAssistantText(msg);
-    } else if (aev.type === 'thinking_delta') {
-      this.updateAssistantThinking(msg);
-    } else if (aev.type === 'toolcall_delta') {
-      // Tool call streaming - could update later
+    if (aev.type === 'text_delta' && typeof aev.delta === 'string') {
+      this.streaming.text = (this.streaming.text || '') + aev.delta;
+      this.updateAssistantText(this.partialAssistantMessage());
+    } else if (aev.type === 'thinking_delta' && typeof aev.delta === 'string') {
+      this.streaming.thinking = (this.streaming.thinking || '') + aev.delta;
+      this.updateAssistantThinking(this.partialAssistantMessage());
     }
+    // text_start/text_end/thinking_start/thinking_end/toolcall_* 无需处理：
+    // 文本量由 delta 累积，工具块走 tool_execution_* 事件。
   }
 
   onMessageEnd(message) {
@@ -1355,7 +1372,9 @@ class PiWebClient {
     div.appendChild(body);
     this.contentEl.appendChild(div);
 
-    this.streaming = { active: true, el: div, body: body };
+    // 增量缓冲：RPC 的 message_update **只给增量**（assistantMessageEvent.delta），没有完整
+    // message（那是 SDK 时代的形状）→ 这里自己累积一份"部分消息"交给既有渲染（2026-10-20 修复）。
+    this.streaming = { active: true, el: div, body: body, text: '', thinking: '' };
     this.renderAssistantContent(message, body);
   }
 
