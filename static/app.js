@@ -876,12 +876,23 @@ class PiWebClient {
       if (block.type === 'toolCall') {
         const toolDiv = this.createToolBlock(block.name, block.arguments, block.id);
         this.toolEls.set(block.id, toolDiv);
+        const pendingResult = this.pendingToolResults?.get(block.id);
+        if (pendingResult) {
+          this.pendingToolResults.delete(block.id);
+          this.renderHistoryToolResult(pendingResult);
+        }
       }
     }
   }
 
   renderHistoryToolResult(message) {
     const div = this.toolEls.get(message.toolCallId);
+    if (!div) {
+      // 分页边界：结果所在页先到，它的 toolCall 还在更早（尚未加载）的页里 →
+      // 暂存，等块建好后补（否则工具块永久停在 pending、结果丢失 ✗）。2026-10-20 审计修复。
+      (this.pendingToolResults ||= new Map()).set(message.toolCallId, message);
+      return;
+    }
     if (div) {
       div.className = message.isError ? 'tool-block error' : 'tool-block success';
       this.setToolOutput(div, this.resultText(message));
@@ -1022,6 +1033,18 @@ class PiWebClient {
       widgets.innerHTML = '';
       widgets.style.display = 'none';
     }
+    // 流式 bash 区在 #content 之外，必须一起清：否则切会话后旧块残留，其 Stop 按钮
+    // 发的是无 id 的 abort_bash → 中止的是**新会话**的 bash（2026-10-20 审计修复）。
+    const bashPending = document.getElementById('bash-pending');
+    if (bashPending) {
+      bashPending.innerHTML = '';
+      bashPending.style.display = 'none';
+    }
+    this.bashEls.clear();
+    this.pendingBashId = null;
+    this.pendingBashCommand = '';
+    this.pendingToolResults?.clear();
+
     this.extStatus = {};
     const extStatusEl = document.getElementById('ext-status');
     if (extStatusEl) extStatusEl.style.display = 'none';
@@ -1439,7 +1462,11 @@ class PiWebClient {
   }
 
   finalizeAssistantMessage(message) {
-    if (!this.streaming.el) return;
+    if (!this.streaming.el) {
+      // 快照/重连会把气泡清掉：终态是权威的，有可见内容就补建，否则整条回复消失 ✗
+      if (!this.hasVisibleAssistantContent(message)) return;
+      this.startAssistantMessage({ role: 'assistant', content: [] });
+    }
     const body = this.streaming.body;
     // 定稿后仍无文字（纯工具调用的消息）→ 去掉空气泡，避免留下 "Assistant" 标签
     if (!this.hasVisibleAssistantContent(message)) {

@@ -254,6 +254,12 @@ const RPC_LONG_TIMEOUT_MS = 10 * 60 * 1000;
 function rpc(type, extra = {}, opts = {}) {
   const id = opts.id ?? `c${++rpcSeq}`;
   const payload = JSON.stringify({ id, type, ...extra }) + "\n";
+  // 子进程已死时立刻失败：destroyed stdin 上的 write 既不抛也不 emit error（只有回调能拿到
+  // ERR_STREAM_DESTROYED），早先会被静默丢弃 → 普通 RPC 等满 30s、bash（无超时）永不结算 ✗。
+  // 2026-10-20 审计修复。
+  if (childExited || !child.stdin || child.stdin.destroyed || !child.stdin.writable) {
+    return Promise.reject(new Error("pi child exited"));
+  }
   return new Promise((res, rej) => {
     pendingRpc.set(id, { res, rej });
     // opts.timeoutMs：未指定 = 默认 30s；0 = **不超时**（bash 命令可以跑任意久）；
@@ -264,7 +270,9 @@ function rpc(type, extra = {}, opts = {}) {
         if (pendingRpc.delete(id)) rej(new Error(`rpc timeout: ${type}`));
       }, timeoutMs);
     }
-    child.stdin.write(payload);
+    child.stdin.write(payload, (err) => {
+      if (err && pendingRpc.delete(id)) rej(err);
+    });
   });
 }
 
@@ -716,6 +724,9 @@ child.on("exit", (code, signal) => {
   // 子进程退出后，挂起的 RPC 永远不会有结果 —— 必须显式失败（否则"不超时"的 bash 调用会永远挂着）
   for (const [, pending] of pendingRpc) pending.rej(new Error("pi child exited"));
   pendingRpc.clear();
+  // 运行态也要复位：agent_end/agent_settled 不会再来，否则 state 快照会一直报 agentActive:true，
+  // 刷新后页脚永久显示 Working…（2026-10-20 审计修复）。
+  agentActive = false;
   if (shuttingDown) {
     log(`[pi-web] pi 子进程已随服务端退出 (code=${code} signal=${signal})`);
     return;
@@ -1188,7 +1199,7 @@ function onBrowserPresenceChanged() {
  *  ③ 只有没有浏览器（标签页关了）才启兜底超时；④ 重连即撤销兜底。 */
 function openDialog(id, frame, extensionTimeout) {
   return new Promise((resolve) => {
-    const entry = { resolve, extensionTimeout, timer: undefined, fallback: false };
+    const entry = { resolve, frame, extensionTimeout, timer: undefined, fallback: false };
     pendingDialogs.set(id, entry);
     if (extensionTimeout !== undefined) {
       entry.timer = setTimeout(() => settleDialog(id, { cancelled: true }, "timeout"), extensionTimeout);
@@ -1446,6 +1457,12 @@ wss.on("connection", async (ws) => {
   }
   for (const widget of widgetSnapshot.values()) {
     ws.send(JSON.stringify({ type: "extension_ui_request", id: randomUUID(), method: "setWidget", ...widget }));
+  }
+
+  // 未决对话框/面板必须随快照重放：否则刷新后模态消失、而浏览器一上线就撤销了兜底超时，
+  // 扩展的 await ctx.ui.confirm/select/custom 永久挂住（2026-10-20 审计修复）。
+  for (const [, dialog] of pendingDialogs) {
+    if (dialog.frame) ws.send(JSON.stringify(dialog.frame));
   }
 });
 
