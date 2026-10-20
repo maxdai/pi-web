@@ -464,6 +464,15 @@ class PiWebClient {
     if (!state) return;
     this.lastState = state;
 
+    // 恢复"运行中"指示器：刷新/重连会丢掉 agent_start/agent_settled 事件，
+    // 只靠事件计数会让 #status 的 Working… 永远不出现（用户实测 2026-10-20 ✗）。
+    // 服务端按同样的事件规则维护 agentActive 并放进 state 帧 —— 这里按它校正计数：
+    // 在跑 → 至少 1（保持事件累加语义）；已空闲 → 归零。
+    if (typeof state.agentActive === 'boolean') {
+      this.status.working = state.agentActive ? Math.max(1, this.status.working) : 0;
+      this.updateStatusDisplay();
+    }
+
     // Page title: pi-web - <session name>
     if (state.sessionName || state.sessionId) {
       document.title = `pi-web - ${state.sessionName || state.sessionId}`;
@@ -1017,6 +1026,10 @@ class PiWebClient {
     if (pendingEl) pendingEl.style.display = 'none';
     const statusEl = document.getElementById('status');
     if (statusEl) statusEl.style.display = 'none';
+    // 清屏只清"上一条会话残留"的显示；**不能就此让指示器消失** ✗ ——
+    // 刷新/切会话的顺序是 state(→working=1 显示) 再 history(→clearContent 隐藏)，
+    // 所以在末尾按当前状态重绘一次（在跑 → 显示；空闲 → 保持隐藏）。2026-10-20 用户实测修复。
+    this.updateStatusDisplay();
   }
 
   // ------------------------------------------------------------------

@@ -239,6 +239,10 @@ const child = spawn(
   },
 );
 
+/** agent 是否在跑（由 Pi 的 agent_start / agent_end|agent_settled 维护）。
+ *  刷新页面会丢掉这些事件 → 前端靠 state 快照恢复"Working…"指示器（2026-10-20 用户实测 ✗）。 */
+let agentActive = false;
+
 const pendingRpc = new Map();
 let rpcSeq = 0;
 
@@ -439,6 +443,8 @@ async function buildState() {
     thinkingLevel: st.thinkingLevel,
     autoCompactionEnabled: st.autoCompactionEnabled,
     messageCount: st.messageCount,
+    // 运行态（见 agentActive）：前端据此恢复"Working…"指示器（2026-10-20）
+    agentActive,
     version: PI_VERSION,
     piWebVersion: PI_WEB_VERSION,
     // 能力位：本引擎支持 {type:'panel_geometry'}（前端据此决定是否上报面板尺寸）。
@@ -684,6 +690,9 @@ child.stdout.on("data", (chunk) => {
     }
 
     // 会话事件：原样转发给浏览器
+    // 运行态必须在这里记账：晚连/刷新的客户端拿不到 agent_start，只能靠快照恢复指示器
+    if (ev.type === "agent_start") agentActive = true;
+    else if (ev.type === "agent_end" || ev.type === "agent_settled") agentActive = false;
     broadcast(ev);
     if (STATS_REFRESH_EVENTS.has(ev.type)) void sendStats();
   }
