@@ -1498,11 +1498,12 @@ class PiWebClient {
     }
     content.appendChild(title);
 
-    // Args (non-bash)
-    if (!isBash) {
+    // Args (non-bash)。参数未知（补建的块）时不画 —— 否则会显示一个假的 {}
+    const hasArgs = args && typeof args === 'object' && Object.keys(args).length > 0;
+    if (!isBash && hasArgs) {
       const argsEl = document.createElement('div');
       argsEl.className = 'tool-args';
-      argsEl.textContent = JSON.stringify(args || {}, null, 2);
+      argsEl.textContent = JSON.stringify(args, null, 2);
       content.appendChild(argsEl);
     }
 
@@ -1597,17 +1598,25 @@ class PiWebClient {
     this.toolTimers.set(ev.toolCallId, timer);
   }
 
+  /** 取工具块；不存在则补建（刷新/重连会丢掉 tool_execution_start，之后的结果不能静默丢弃 ✗）。 */
+  ensureToolBlock(ev) {
+    let div = this.toolEls.get(ev.toolCallId);
+    if (!div) {
+      div = this.createToolBlock(ev.toolName || 'tool', {}, ev.toolCallId);
+      this.toolEls.set(ev.toolCallId, div);
+    }
+    return div;
+  }
+
   onToolUpdate(ev) {
-    const div = this.toolEls.get(ev.toolCallId);
-    if (!div) return;
+    const div = this.ensureToolBlock(ev);
     if (ev.partialResult !== undefined && ev.partialResult !== null) {
       this.setToolOutput(div, this.resultText(ev.partialResult));
     }
   }
 
   onToolEnd(ev) {
-    const div = this.toolEls.get(ev.toolCallId);
-    if (!div) return;
+    const div = this.ensureToolBlock(ev);
     div.className = ev.isError ? 'tool-block error' : 'tool-block success';
 
     if (ev.result) {
