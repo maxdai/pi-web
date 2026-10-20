@@ -1842,6 +1842,16 @@ class PiWebClient {
     }
   }
 
+  /** 滚到底部（最新内容）并**恢复跟随**（设计文档 §23）。
+   *  用瞬时跳转而非平滑滚动：长会话里"到底部"可能跨几万像素，smooth 要滚好几秒 ✗。
+   *  显式把 followBottom 置 true —— 用户上滚后它为 false（§20.7d），点这个按钮即"我要回到最新" ✓。 */
+  jumpToBottom() {
+    const scroller = document.getElementById('scroll-view');
+    if (!scroller) return;
+    scroller.scrollTop = scroller.scrollHeight;
+    this.followBottom = true;
+  }
+
   // ------------------------------------------------------------------
   // Input
   // ------------------------------------------------------------------
@@ -1986,6 +1996,8 @@ class PiWebClient {
     const navNext = document.getElementById('nav-next');
     if (navPrev) navPrev.addEventListener('click', () => this.jumpToUserMessage(-1));
     if (navNext) navNext.addEventListener('click', () => this.jumpToUserMessage(1));
+    const navBottom = document.getElementById('nav-bottom');
+    if (navBottom) navBottom.addEventListener('click', () => this.jumpToBottom());
 
     if (this.sendBtn) {
       this.sendBtn.addEventListener('click', () => this.sendMessage());
