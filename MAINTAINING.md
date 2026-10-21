@@ -117,3 +117,17 @@ npm install -g @maxdai/pi-web@x.y.z
 - **会话显示名解析必须取"最后一条 `session_info`"**：fork 会把父会话条目带进新文件，取第一条会拿到父名
   （2026-10 的 1.1.1 修的就是这个；实现见 `native/session-name.mjs`）。
 - **不要用 `pkill -f` 清理自启实例**（会自杀）；按端口清理，详见 `AGENTS.md` §7。
+
+## 5. SDK 时代遗留（待清理，不影响运行）
+
+1.0.0（阶段 E）已把 SDK 宿主整套删掉：`pi-sdk-web/` 只剩 `dist/`+`scripts/`+`package.json`（无 `src/`、无
+TypeScript），运行时依赖只有 `ws`，`native/`、`static/`、`scripts/` 里零 `pi-coding-agent`/`pi-agent-core`/
+`createAgentSession` 引用。以下三处是**非运行时**遗留，用户 2026-10-21 决定"等确定完全清理时再做"：
+
+| 遗留 | 内容 | 处理建议 |
+|---|---|---|
+| `tools/ab-compare.mjs` + `tools/ab-report-2026-10-14.md` | 两引擎 A/B 对比工具与报告（单引擎后无用途） | 可删 |
+| `tools/tui-proto/` | TUI+pty 路线原型存档（设计文档 §18 研究已暂缓） | 作研究存档保留 |
+| 设计文档 §6 / §15 的 SDK 章节 | 历史对照（说明为什么离开 SDK 宿主） | 保留 |
+
+清理时只需删第一项；删后在文档里更新本表。
