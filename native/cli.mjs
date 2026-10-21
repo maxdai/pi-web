@@ -122,7 +122,8 @@ function heapFlags() {
 
 // ---------------------------------------------------------------- 命令
 function parsePort(value) {
-  if (value === undefined) return DEFAULT_PORT;
+  // 缺值不再静默落到 4080（比如 `--port $PORT` 未展开）
+    if (value === undefined) throw new Error("--port requires a value (1-65535)");
   if (!/^\d+$/.test(value)) throw new Error(`Invalid port: ${value} (must be a number)`);
   const port = parseInt(value, 10);
   if (!(1 <= port && port <= 65535)) throw new Error(`Invalid port: ${port} (must be 1-65535)`);

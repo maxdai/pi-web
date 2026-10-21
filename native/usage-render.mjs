@@ -24,10 +24,9 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
-const SESSIONS_DIRS = [
-    join(process.env.PI_HOME?.replace(/^~/, homedir()) ?? homedir(), ".pi", "agent", "sessions"),
-    join(homedir(), ".pi", "agent", "sessions"),
-];
+// 与引擎同源：尊重 PI_CODING_AGENT_DIR（早先用的 PI_HOME 不是 Pi 的变量 ✗）
+const AGENT_DIR = process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent");
+const SESSIONS_DIRS = [process.env.PI_CODING_AGENT_SESSION_DIR ?? join(AGENT_DIR, "sessions")];
 function sessionsDir() {
     for (const dir of SESSIONS_DIRS) {
         if (existsSync(dir))
@@ -164,6 +163,8 @@ function parseSessionFile(path) {
                     const usage = parseUsageAmount(msg.usage);
                     if (usage) {
                         messages.push({
+                            // fork 会复制父会话条目（entry id 相同）→ 聚合按 id 去重
+                            id: entry.id,
                             provider: msg.provider,
                             model: msg.model,
                             cost: usage.cost,
@@ -272,7 +273,11 @@ function periodEnd(key, now) {
  * is given, only that session's usage is aggregated (scope: current
  * session); otherwise all sessions.
  */
+/** 跨文件去重集合（fork 会话里父会话条目被整段复制，id 相同） */
+const seenEntryIds = new Set();
+
 export function buildUsageData(sessionId) {
+    seenEntryIds.clear();
     const files = collectUsage();
     const scoped = sessionId ? files.filter((f) => f.sessionId === sessionId) : files;
     if (scoped.length === 0)
@@ -288,6 +293,11 @@ export function buildUsageData(sessionId) {
     const hourStart = (ts) => Math.floor(ts / 3600_000) * 3600_000;
     for (const file of scoped) {
         for (const m of file.messages) {
+            // 跨文件按 entry id 去重（fork 复制条目）；aux 条目无 id 保持原样
+            if (m.id) {
+                if (seenEntryIds.has(m.id)) continue;
+                seenEntryIds.add(m.id);
+            }
             const ts = m.timestamp;
             {
                 const bucket = hourly.get(hourStart(ts));

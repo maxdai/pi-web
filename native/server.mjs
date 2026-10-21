@@ -23,6 +23,7 @@ import { createRequire } from "node:module";
 import { spawn, execFileSync } from "node:child_process";
 import { readdir, readFile, stat } from "node:fs/promises";
 import { closeSync, existsSync, openSync, readFileSync, readSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { StringDecoder } from "node:string_decoder";
 import { dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { randomUUID } from "node:crypto";
@@ -288,6 +289,7 @@ let lastScopedNoticeAt = 0; // scoped-models 提示去抖（避免每次勾选�
 let historyIndex = null; // 会话文件行偏移索引（惰性建立，见 §20）
 let pendingScopedPatterns = null; // 待桥接即时应用的 scoped 模式（侧信道一次性交接）
 let scopedApplyResolve = null; // 等待桥接回传应用结果
+let scopedApplyTimer = null; // 上面那个等待者的超时句柄（并发时要能取消）
 let scopedApplyTimeoutMs = 5000;
 /** 面板可用列/行数，由前端按实际版面量出后上报；桥接据此决定组件渲染宽度。
  *  默认值只在浏览器还没上报时兜底（例如扩展在页面连上之前就弹面板）。 */
@@ -478,11 +480,28 @@ async function buildState() {
  *  失败/超时返回 {ok:false}，调用方退回"写 settings + 提示需重启"的旧行为。 */
 async function applyScopedInSession(patterns) {
   pendingScopedPatterns = patterns;
+  // 前端每勾选一次就发一条 set_scoped_models，天然并发 ✗：早先单槽 scopedApplyResolve 会被覆盖，
+  // 被覆盖那次既不 resolve 也不超时（超时回调里有 === 判断）→ 永久 pending、请求永不返回。
+  // 进入时先把上一个等待者结算掉。2026-10-20 审计修复。
+  if (scopedApplyResolve) {
+    const prev = scopedApplyResolve;
+    scopedApplyResolve = null;
+    try {
+      prev({ ok: false, error: "superseded" });
+    } catch {
+      /* ignore */
+    }
+  }
+  if (scopedApplyTimer) {
+    clearTimeout(scopedApplyTimer);
+    scopedApplyTimer = null;
+  }
   const done = new Promise((resolve) => {
     scopedApplyResolve = resolve;
-    setTimeout(() => {
+    scopedApplyTimer = setTimeout(() => {
       if (scopedApplyResolve === resolve) {
         scopedApplyResolve = null;
+        scopedApplyTimer = null;
         resolve({ ok: false, error: "timeout" });
       }
     }, scopedApplyTimeoutMs);
@@ -490,6 +509,20 @@ async function applyScopedInSession(patterns) {
   try {
     await rpc("prompt", { message: "/pi-web:set-scoped-models" });
   } catch (err) {
+    // 失败早退时也要把等待者与定时器收掉，别留悬空状态
+    if (scopedApplyResolve) {
+      const pending = scopedApplyResolve;
+      scopedApplyResolve = null;
+      try {
+        pending({ ok: false, error: `rpc: ${err.message}` });
+      } catch {
+        /* ignore */
+      }
+    }
+    if (scopedApplyTimer) {
+      clearTimeout(scopedApplyTimer);
+      scopedApplyTimer = null;
+    }
     return { ok: false, error: `rpc: ${err.message}` };
   }
   return done;
@@ -649,8 +682,11 @@ async function sendUsage(scope, target) {
 
 // ------------------------------------------------------------------ RPC stdout
 let stdoutBuf = "";
+// 必须用 StringDecoder：chunk 边界不与字符边界对齐，逐块 toString() 会把跨界的 3 字节汉字
+// 解成 U+FFFD（仍是合法 JSON，静默污染正文 ✗）。2026-10-20 审计修复。
+const stdoutDecoder = new StringDecoder("utf8");
 child.stdout.on("data", (chunk) => {
-  stdoutBuf += chunk.toString();
+  stdoutBuf += stdoutDecoder.write(chunk);
   let i;
   while ((i = stdoutBuf.indexOf("\n")) >= 0) {
     const line = stdoutBuf.slice(0, i);
@@ -1251,14 +1287,18 @@ const server = createServer(async (req, res) => {
       res.writeHead(403).end("{}");
       return;
     }
-    let body = "";
-    req.on("data", (c) => (body += c));
+    // 用 Buffer 拼接后整体解码（`body += chunk` 会在多字节字符跨界时产生 U+FFFD ✗）；
+    // 坏 JSON 直接 400，早先当成 {} 继续执行路由会造出幽灵 widget/对话框。
+    const chunks = [];
+    req.on("data", (c) => chunks.push(c));
     req.on("end", async () => {
       let data = {};
       try {
-        data = JSON.parse(body || "{}");
+        data = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
       } catch {
-        /* ignore */
+        res.writeHead(400, { "content-type": "application/json" });
+        res.end(JSON.stringify({ ok: false, error: "bad json" }));
+        return;
       }
       const route = url.pathname.slice("/side/".length);
       const reply = (obj) => {

@@ -617,7 +617,7 @@ class PiWebClient {
 
   resourceSection(name, items) {
     const listItems = items
-      .map((item) => `<li class="resources-item" title="${this.escapeHtml(item)}">${this.escapeHtml(item)}</li>`)
+      .map((item) => `<li class="resources-item" title="${this.escapeAttr(item)}">${this.escapeHtml(item)}</li>`)
       .join('');
     return `<div class="resources-section"><div class="resources-section-title">${this.escapeHtml(name)}</div><ul class="resources-list">${listItems}</ul></div>`;
   }
@@ -709,6 +709,11 @@ class PiWebClient {
     } catch {
       return this.escapeHtml(text);
     }
+  }
+
+  /** 属性值转义：escapeHtml 只处理 & < >，双引号会原样输出 → 拼进 title/placeholder 时可注入属性 ✗ */
+  escapeAttr(text) {
+    return this.escapeHtml(text).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   }
 
   escapeHtml(text) {
@@ -2446,7 +2451,7 @@ class PiWebClient {
     this.startDialogCountdown(req);
     this.modalList.innerHTML = `
       <div class="modal-message">${this.escapeHtml(req.message || '')}</div>
-      <input class="modal-input" type="text" placeholder="${this.escapeHtml(req.placeholder || '')}">
+      <input class="modal-input" type="text" placeholder="${this.escapeAttr(req.placeholder || '')}">
       <div class="modal-actions">
         <button class="modal-btn ok-btn">OK</button>
         <button class="modal-btn cancel-btn">Cancel</button>
@@ -3192,7 +3197,7 @@ class PiWebClient {
         const key = `${m.provider}/${m.id}`;
         const checked = this.scopedModelsSelected.has(key);
         return (
-          `<div class="modal-item scoped-model ${checked ? 'selected' : ''}" data-key="${key}">` +
+          `<div class="modal-item scoped-model ${checked ? 'selected' : ''}" data-key="${this.escapeAttr(key)}">` +
           `<span class="modal-check">${checked ? '☑' : '☐'}</span>` +
           `<span class="modal-item-name">${this.escapeHtml(key)}${m.configured ? ' <span class="configured-badge">[configured]</span>' : ''}</span>` +
           `</div>`

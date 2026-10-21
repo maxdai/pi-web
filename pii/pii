@@ -16,7 +16,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-ROOT = Path(os.environ.get("PI_SESSION_DIR", Path.home() / ".pi" / "agent" / "sessions"))
+# 与引擎同源：Pi 只认 PI_CODING_AGENT_DIR / PI_CODING_AGENT_SESSION_DIR
+# （早先的 PI_SESSION_DIR 不是 Pi 的变量 ✗ → 自定义配置目录下 pii r --web 必失败）
+_AGENT_DIR = Path(os.environ.get("PI_CODING_AGENT_DIR", Path.home() / ".pi" / "agent")).expanduser()
+ROOT = Path(os.environ.get("PI_CODING_AGENT_SESSION_DIR", _AGENT_DIR / "sessions")).expanduser()
 # Project root: prefer PI_WEB_DIR env, then script location if inside project,
 # then fall back to ~/pi-web (when installed globally as /usr/local/bin/pii).
 def _resolve_project_root() -> Path:

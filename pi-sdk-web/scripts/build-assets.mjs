@@ -38,6 +38,9 @@ chmodSync(pkg("dist", "native", "pii"), 0o755);
 const required = [
   "static/index.html",
   "static/app.js",
+    "static/style.css",
+    "static/vendor/marked.min.js",
+    "static/pi-logo.svg",
   "native/server.mjs",
   "native/bridge.mjs",
   "native/usage-render.mjs",

@@ -442,6 +442,10 @@ export default function (pi) {
       // 用户已关闭面板：停掉刷新循环（组件自身的定时器随后只会打到空操作上）
       closed = true;
       if (updateTimer) clearTimeout(updateTimer);
+        // 关闭面板要调组件生命周期钩子（Pi 宿主会 dispose）：不调的话组件自己的
+        // setInterval（状态面板每秒刷新等）会一直活着 ✗
+        try { component?.dispose?.(); } catch { /* ignore */ }
+        try { component?.invalidate?.(); } catch { /* ignore */ }
       return answer && "value" in answer ? answer.value : hasDone ? doneValue : undefined;
     };
 
