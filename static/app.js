@@ -2452,10 +2452,12 @@ class PiWebClient {
       </div>`;
     this.modalList.querySelector('.confirm-btn').addEventListener('click', () => {
       this.send({ type: 'extension_ui_response', id: req.id, confirmed: true });
+      this.currentExtRequest = null; // 已答复，别让 closeModal 再补一条 cancelled
       this.closeModal();
     });
     this.modalList.querySelector('.cancel-btn').addEventListener('click', () => {
       this.send({ type: 'extension_ui_response', id: req.id, cancelled: true });
+      this.currentExtRequest = null; // 已答复，别让 closeModal 再补一条 cancelled
       this.closeModal();
     });
     // 单选：光标初始在第一项（Confirm）——TUI 的 ["Yes","No"] 列表默认 index 0
@@ -2477,10 +2479,12 @@ class PiWebClient {
     input.focus();
     this.modalList.querySelector('.ok-btn').addEventListener('click', () => {
       this.send({ type: 'extension_ui_response', id: req.id, value: input.value });
+      this.currentExtRequest = null; // 已答复，别让 closeModal 再补一条 cancelled
       this.closeModal();
     });
     this.modalList.querySelector('.cancel-btn').addEventListener('click', () => {
       this.send({ type: 'extension_ui_response', id: req.id, cancelled: true });
+      this.currentExtRequest = null; // 已答复，别让 closeModal 再补一条 cancelled
       this.closeModal();
     });
     input.addEventListener('keydown', (e) => {
@@ -2488,6 +2492,7 @@ class PiWebClient {
       if (e.isComposing || e.keyCode === 229) return;
       if (e.key === 'Enter') {
         this.send({ type: 'extension_ui_response', id: req.id, value: input.value });
+        this.currentExtRequest = null; // 已答复，别让 closeModal 再补一条 cancelled
         this.closeModal();
       }
     });
@@ -2508,10 +2513,12 @@ class PiWebClient {
     editor.focus();
     this.modalList.querySelector('.ok-btn').addEventListener('click', () => {
       this.send({ type: 'extension_ui_response', id: req.id, value: editor.value });
+      this.currentExtRequest = null; // 已答复，别让 closeModal 再补一条 cancelled
       this.closeModal();
     });
     this.modalList.querySelector('.cancel-btn').addEventListener('click', () => {
       this.send({ type: 'extension_ui_response', id: req.id, cancelled: true });
+      this.currentExtRequest = null; // 已答复，别让 closeModal 再补一条 cancelled
       this.closeModal();
     });
   }
