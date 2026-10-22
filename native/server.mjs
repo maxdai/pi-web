@@ -891,7 +891,11 @@ async function handleClientMessage(ws, msg) {
     type = msg && typeof msg === "object" ? String(msg.type ?? "(missing)") : "(invalid)";
     switch (type) {
       case "prompt":
-        await rpc("prompt", { message: msg.message });
+        // 运行中再发消息必须带 streamingBehavior，否则 Pi 直接抛错
+        // "Agent is already processing. Specify streamingBehavior ('steer' or 'followUp')"
+        // （core/agent-session.ts:2140）→ 消息被拒、不产生 queue_update → #pending 永远空 ✗。
+        // 用 steer：与 TUI 默认一致（当前回合结束后立即注入），并让 queued 的消息显示在 #pending。
+        await rpc("prompt", { message: msg.message, streamingBehavior: "steer" });
         break;
       case "abort":
         // 中止时撤销挂起的对话框（桥接的 handler 会拿到 cancelled）——否则网页模态残留
