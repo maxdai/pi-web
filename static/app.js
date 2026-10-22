@@ -2259,6 +2259,10 @@ class PiWebClient {
   }
 
   closeModal() {
+    if (this.panelKeyHandler) {
+      window.removeEventListener('keydown', this.panelKeyHandler, true);
+      this.panelKeyHandler = null;
+    }
     // If an extension dialog (select/confirm/input/editor) was open, notify
     // the server that it was cancelled - otherwise the extension's promise
     // never settles.
@@ -2532,10 +2536,11 @@ class PiWebClient {
     const why =
       reason === 'aborted' ? 'operation aborted'
       : reason === 'session-switch' ? 'session switched'
+      : reason === 'answered' ? null
       : 'no answer received in time';
     this.currentExtRequest = null; // closeModal() must not answer for us
     this.closeModal();
-    this.appendNotifyLine(`${title} — auto-dismissed (${why})`, 'warning');
+    if (why) this.appendNotifyLine(`${title} — auto-dismissed (${why})`, 'warning');
   }
 
   openExtensionNotify(req) {
@@ -2757,6 +2762,22 @@ class PiWebClient {
     this.openModal(req.title || 'Extension panel', 'extension-panel');
     this.currentExtRequest = req;
     this.startDialogCountdown(req);
+    // 按键回传（2026-10-22）：custom() 组件靠 handleInput 做选择/翻页。捕获阶段拦下按键，
+    // 映射成终端序列发给服务端（只有 panel 模态打开时监听，关闭即摘除）。
+    if (this.panelKeyHandler) window.removeEventListener('keydown', this.panelKeyHandler, true);
+    this.panelKeyHandler = (e) => {
+      const seq = {
+        ArrowUp: '\x1b[A', ArrowDown: '\x1b[B', ArrowLeft: '\x1b[D', ArrowRight: '\x1b[C',
+        PageUp: '\x1b[5~', PageDown: '\x1b[6~', Home: '\x1b[H', End: '\x1b[F',
+        Enter: '\r', Escape: '\x1b', Tab: '\t', Backspace: '\x7f',
+      }[e.key];
+      const data = seq !== undefined ? seq : (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey ? e.key : undefined);
+      if (data === undefined) return;
+      e.preventDefault();
+      e.stopPropagation();
+      this.send({ type: 'panel_key', id: req.id, data });
+    };
+    window.addEventListener('keydown', this.panelKeyHandler, true);
     this.modalList.innerHTML = `<pre class="modal-panel-body">${ansiToHtml(lines.join('\n'))}</pre>`;
     // 兜底：即使服务端按更大宽度渲染，这里也保证不折行（必要时缩字号），
     // 并把"基准字号下真实能容纳多少列"回报给服务端，让下次渲染直接合适。

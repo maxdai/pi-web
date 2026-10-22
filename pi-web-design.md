@@ -1072,8 +1072,17 @@ node deadlock-harness.mjs --bridge             # 桥接接管：resolve = true
   · 组件自行 `done(value)` 则采用其结论，否则关闭面板视为取消。关闭**只用模态自带的 `Close (Esc)`**
     （在模态边框上、常驻可见）——早先额外加过一个面板内按钮，与它重复（两个 Close），且位于滚动区内、
     内容长时会被滚走。
-  · **仍未覆盖**：组件**内部的选择类交互**（如 ↑↓ 移动高亮项 + Enter 确认的自定义选择器）——那需要按键回传，
-    属独立的后续项。
+  · **按键回传（2026-10-22 补齐）**：组件内部的选择类交互（↑↓/jk 移动、PgUp·PgDn 翻页、Enter 选中、Esc 取消）
+    原先不支持 ✗。现在补了一条**按键通道**：
+    1. **前端**：`panel` 模态打开时用 `keydown`（capture）捕获按键 → 映射成终端序列
+       （`↑=\x1b[A`、`↓=\x1b[B`、`PgUp=\x1b[5~`、`PgDn=\x1b[6~`、`Home=\x1b[H`、`End=\x1b[F`、`Enter=\r`、
+       `Esc=\x1b`、`Tab`、`Backspace`、可打印字符原样）→ 发 `{type:'panel_key', id, data}`，并 `preventDefault`；
+       模态关闭时卸掉监听；
+    2. **服务端**：按面板 token 缓冲按键 ✓；新增 `/side/panel-keys` **长轮询**（有键立即返回，否则挂起最多 10s）；
+       新增 `/side/panel-done` 让组件自己 `done(value)` 时结算模态（广播 `dialog_dismissed`，前端静默关闭）；
+    3. **桥接**：面板打开期间并发跑一个长轮询循环 → 逐键调 `component.handleInput(data)` → `scheduleUpdate()`
+       重绘并推 `panel-update`（既有的实时刷新链路 ✓）。
+  · **仍未覆盖**：鼠标点击/滚轮 ✗、Alt/F 键 ✗、组件用到 stub TUI 未覆盖的接口（`addChild`/焦点栈 ✗）。
 - 实测：`/ctx-status` 面板 33 行、含 `⚡ Magic Context Status` 边框内容——与 TUI 看到的对话框同源同内容。
 
 **SDK 宿主对「命令执行 / 对话框」的特化清单（2026-10 审计 + 对齐；除 ctx-status 外的同类改动）**

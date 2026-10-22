@@ -946,6 +946,20 @@ async function handleClientMessage(ws, msg) {
       case "get_state":
         await sendState(ws);
         break;
+      case "panel_key": {
+        // custom() 面板的按键（前端只在 panel 模态打开时发）→ 缓冲后由桥接长轮询取走
+        const id = typeof msg.id === "string" ? msg.id : "";
+        if (!id || typeof msg.data !== "string" || !pendingDialogs.has(id)) break;
+        const buf = panelKeyBuffers.get(id) ?? [];
+        buf.push(msg.data);
+        panelKeyBuffers.set(id, buf);
+        const wake = panelKeyWaiters.get(id);
+        if (wake) {
+          panelKeyWaiters.delete(id);
+          wake();
+        }
+        break;
+      }
       case "panel_geometry": {
         // 前端量出的面板可用列/行数（见 app.js sendPanelGeometry）
         const cols = Number(msg.cols);
@@ -1229,6 +1243,9 @@ async function handleClientMessage(ws, msg) {
  *  与 SDK 宿主的 dismissDialog(id, "session-switch" | "aborted") 对齐。 */
 /** 挂起中的对话框/面板：id -> {resolve, extensionTimeout, timer, fallback} */
 const pendingDialogs = new Map();
+/** custom() 面板的按键缓冲（token -> string[]）与长轮询等待者（token -> resolve） */
+const panelKeyBuffers = new Map();
+const panelKeyWaiters = new Map();
 
 function clearDialogTimer(entry) {
   if (entry.timer) {
@@ -1436,6 +1453,39 @@ const server = createServer(async (req, res) => {
           extensionTimeout,
         );
         return reply(answer);
+      }
+      if (route === "panel-keys") {
+        // 桥接长轮询：有键立刻返回，否则挂起最多 10s（面板关闭时前端会停发，靠超时兜底）
+        const id = String(data.token ?? "");
+        const take = () => {
+          const keys = panelKeyBuffers.get(id) ?? [];
+          panelKeyBuffers.delete(id);
+          return keys;
+        };
+        let keys = take();
+        if (keys.length === 0 && pendingDialogs.has(id)) {
+          await new Promise((resolve) => {
+            const timer = setTimeout(() => {
+              panelKeyWaiters.delete(id);
+              resolve();
+            }, 10000);
+            panelKeyWaiters.set(id, () => {
+              clearTimeout(timer);
+              resolve();
+            });
+          });
+          keys = take();
+        }
+        return reply({ keys });
+      }
+      if (route === "panel-done") {
+        // 组件自己 done(value)（Enter 选中 / Esc 取消）→ 结算模态，让浏览器关掉
+        const id = String(data.token ?? "");
+        const response = "value" in data ? { value: data.value } : {};
+        const ok = settleDialog(id, response, "answered");
+        panelKeyBuffers.delete(id);
+        panelKeyWaiters.delete(id);
+        return reply({ ok });
       }
       if (route === "panel-update") {
         // 组件的 requestRender → 就地刷新已打开的面板（前端按 update 标记替换内容，不重开模态）

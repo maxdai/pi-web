@@ -441,6 +441,8 @@ export default function (pi) {
         component = await factory(stubTui, ui.theme, {}, (value) => {
           hasDone = true;
           doneValue = value;
+          // 组件自己决定关闭（Enter 选中 / Esc 取消）→ 让服务端结算模态、浏览器关掉
+          void post("/side/panel-done", { token, value });
         });
       } catch (err) {
         console.error(`[pi-web-bridge] custom() factory failed: ${err.message}`);
@@ -448,6 +450,26 @@ export default function (pi) {
       }
       const lines = renderLines();
       lastLines = lines;
+      // 按键通道（2026-10-22）：面板打开期间长轮询 /side/panel-keys，逐键喂给组件的 handleInput，
+      // 再按既有 requestRender 链路重绘推给浏览器。组件据此支持 ↑↓/jk、PgUp·PgDn、Enter、Esc。
+      const keyLoop = (async () => {
+        while (!closed) {
+          const res = await post("/side/panel-keys", { token });
+          if (closed) return;
+          if (!res) return; // 网络失败：停，别空转
+          const keys = Array.isArray(res.keys) ? res.keys : [];
+          if (keys.length === 0) continue; // 10s 超时，继续等
+          for (const k of keys) {
+            try {
+              component?.handleInput?.(k);
+            } catch (err) {
+              console.error(`[pi-web-bridge] custom() handleInput failed: ${err.message}`);
+            }
+          }
+          scheduleUpdate();
+        }
+      })();
+      keyLoop.catch?.(() => {});
       const answer = await post("/side/panel", {
         token,
         title: options?.title,
@@ -658,6 +680,34 @@ export default function (pi) {
         { title: "pi-web demo panel" },
       );
       await post("/side/event", { type: "demo-panel", value: picked ?? null });
+    },
+  });
+
+  // 按键通道的验证夹具：↑↓/jk 移动、PgUp·PgDn 翻页、Enter 选中、Esc 取消
+  pi.registerCommand("pi-web:demo-select", {
+    description: "Demo custom() list: arrows/jk move, Enter selects, Esc cancels",
+    handler: async (_args, ctx) => {
+      let index = 0;
+      const items = Array.from({ length: 8 }, (_, i) => `item-${i + 1}`);
+      const picked = await ctx.ui.custom(
+        (tui, _theme, _kb, done) => ({
+          render: () => [
+            `[demo] index=${index}`,
+            ...items.map((label, i) => `${i === index ? ">" : " "} ${label}`),
+          ],
+          invalidate: () => {},
+          handleInput: (data) => {
+            if (data === "\x1b[A" || data === "k") index = Math.max(0, index - 1);
+            else if (data === "\x1b[B" || data === "j") index = Math.min(items.length - 1, index + 1);
+            else if (data === "\r") return done(items[index]);
+            else if (data === "\x1b") return done(undefined);
+            else return;
+            tui.requestRender();
+          },
+        }),
+        { title: "pi-web demo select" },
+      );
+      await post("/side/event", { type: "demo-select", value: picked ?? null });
     },
   });
 }
