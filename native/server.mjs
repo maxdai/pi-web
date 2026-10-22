@@ -165,15 +165,31 @@ async function listSessionFiles() {
  *  cwd 优先取位置参数（pii 已 chdir，与 Python 服务端行为一致）。 */
 async function resolveSession() {
   const withCwd = (row) => ({ ...row, cwd: POS_CWD ?? row.cwd });
+  /** 读会话文件首行 header；坏文件给出明确信息而不是裸 SyntaxError（2026-10-21 审计）。 */
+  const readHeader = (file) => {
+    let text;
+    try {
+      text = readFileSync(file, "utf8");
+    } catch (err) {
+      logErr(`[pi-web] cannot read session file: ${file} (${err.code ?? err.message})`);
+      process.exit(1);
+    }
+    try {
+      const header = JSON.parse(text.split("\n")[0]);
+      if (!header || header.type !== "session") throw new Error("first line is not a session header");
+      return header;
+    } catch (err) {
+      logErr(`[pi-web] invalid session file: ${file} (${err.message})`);
+      process.exit(1);
+    }
+  };
   if (SESSION_FILE) {
-    const text = await readFile(SESSION_FILE, "utf8");
-    const header = JSON.parse(text.split("\n")[0]);
+    const header = readHeader(SESSION_FILE);
     return withCwd({ path: resolve(SESSION_FILE), cwd: header.cwd ?? process.cwd(), name: header.name });
   }
   // 位置参数如果本身就是路径，直接当会话文件用
   if (POS_SESSION_ID && POS_SESSION_ID.endsWith(".jsonl") && existsSync(POS_SESSION_ID)) {
-    const text = await readFile(POS_SESSION_ID, "utf8");
-    const header = JSON.parse(text.split("\n")[0]);
+    const header = readHeader(POS_SESSION_ID);
     return withCwd({ path: resolve(POS_SESSION_ID), cwd: header.cwd ?? process.cwd(), name: header.name });
   }
   const hits = [];
@@ -186,7 +202,14 @@ async function resolveSession() {
     }
     // "(unnamed)" 是 pi-web 对未命名会话的展示名（与 pii 一致），匹配没有 name 的会话
     const sessionName = sessionDisplayName(text) ?? "(unnamed)";
-    const header = JSON.parse(text.split("\n")[0]);
+    // 空文件/坏 jsonl 不能让整轮扫描崩掉（与 get_sessions、cli.mjs 一致：跳过该文件）
+    let header;
+    try {
+      header = JSON.parse(text.split("\n")[0]);
+    } catch {
+      continue;
+    }
+    if (!header || header.type !== "session") continue;
     const matched = SESSION_NAME ? sessionName === SESSION_NAME : header.id === POS_SESSION_ID;
     if (!matched) continue;
     const st = await stat(p);
@@ -1046,6 +1069,13 @@ async function handleClientMessage(ws, msg) {
       case "resume":
         // 会话切换：旧会话上挂起的对话框必须撤销（与 SDK 宿主的 session-switch 一致）
         dismissDialogs("session-switch");
+        // 旧会话的 widget / ext_status 也要清：否则会残留在页面上，并被重放给新连入的客户端
+        for (const key of widgetSnapshot.keys()) {
+          broadcast({ type: "extension_ui_request", id: randomUUID(), method: "setWidget", widgetKey: key, widgetLines: [] });
+        }
+        widgetSnapshot.clear();
+        extStatusSnapshot = {};
+        broadcast({ type: "ext_status", data: {} });
         await rpc("switch_session", { sessionPath: msg.path });
         await sendState();
         await sendHistory();
@@ -1336,7 +1366,11 @@ const server = createServer(async (req, res) => {
         return reply({ ok: true });
       }
       if (route === "theme-ack") {
-        log(`[pi-web] bridge set theme → ${data.name}`);
+        // 扩展调 ctx.ui.setTheme()：真正切换并广播给浏览器（早先只记日志 → 浏览器不换肤，
+        // 且 bridge 每 2s 的 theme 轮询会把主题回滚成浏览器选的那个 ✗）。2026-10-21 审计修复。
+        themeName = data.name === "light" ? "light" : "dark";
+        log(`[pi-web] bridge set theme → ${themeName}`);
+        broadcast({ type: "theme_set", data: { name: themeName } });
         return reply({ ok: true });
       }
       if (route === "ready") {

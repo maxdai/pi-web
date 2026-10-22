@@ -293,6 +293,21 @@ export default function (pi) {
     const ui = ctx.ui;
     const hostTheme = ui.theme;
 
+    // 会话切换/重载：清掉上个会话残留的 widget（Pi 的 TUI 走 resetExtensionUI 做同样的事）。
+    // 不清的话：扩展在新会话里没重新注册 → bridge 的 entry 仍 active、服务端快照仍在 →
+    // 浏览器继续显示旧会话的 todos，且新客户端还会被重放。2026-10-21 审计修复。
+    for (const [key, entry] of widgets) {
+      try {
+        entry.active = false;
+        entry.component?.invalidate?.();
+        entry.component?.dispose?.();
+      } catch {
+        /* ignore */
+      }
+      void post("/side/widget", { key, lines: [] });
+    }
+    widgets.clear();
+
     // 0) 换肤：theme 取我们构造的 Pi Theme（暗/亮），失败时保持宿主主题
     const loaded = await loadThemes();
     if (loaded) {

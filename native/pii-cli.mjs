@@ -59,4 +59,12 @@ const result = spawnSync(python, [piiScript, ...process.argv.slice(2)], {
     env: { ...process.env, PI_WEB_DIR: piiDir },
     stdio: "inherit",
 });
+if (result.error) {
+    console.error(`pii: failed to start launcher: ${result.error.message}`);
+    process.exit(1);
+}
+if (result.signal) {
+    console.error(`pii: launcher terminated by ${result.signal}`);
+    process.exit(1);
+}
 process.exit(result.status ?? 1);

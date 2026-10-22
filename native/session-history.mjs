@@ -23,7 +23,10 @@ export function buildIndex(filePath, prev = null) {
   const size = statSync(filePath).size;
   const extend = Boolean(prev) && prev.completeEnd <= size;
   const offsets = extend ? prev.offsets.slice() : [];
-  let firstLine = !extend; // 首次建索引时，第 1 行是 header
+  // header 是否已跳过必须**跨次记住**：首建时文件可能还是空的/只写了半行（Pi 先 openSync 再写），
+  // 早先只用一个局部变量 → 之后走 extend 就一律把 header 当成第 0 条目，total 永久 +1 ✗
+  let headerEnd = extend ? (prev.headerEnd ?? -1) : -1;
+  let firstLine = headerEnd < 0; // 首次建索引、或上轮还没见到 header 换行 → 第 1 行仍算 header
   let lineStart = extend ? prev.completeEnd : 0;
   let completeEnd = lineStart;
   const fd = openSync(filePath, "r");
@@ -36,7 +39,10 @@ export function buildIndex(filePath, prev = null) {
       for (let i = 0; i < n; i++) {
         if (buf[i] !== 0x0a) continue;
         const lineEnd = pos + i;
-        if (firstLine) firstLine = false;
+        if (firstLine) {
+          firstLine = false;
+          headerEnd = lineEnd + 1; // 第一条条目从这里开始
+        }
         else if (lineEnd > lineStart) offsets.push(lineStart); // 非空行才记
         lineStart = lineEnd + 1;
         completeEnd = lineStart;
@@ -46,7 +52,7 @@ export function buildIndex(filePath, prev = null) {
   } finally {
     closeSync(fd);
   }
-  return { offsets, size, completeEnd };
+  return { offsets, size, completeEnd, headerEnd };
 }
 
 /** 读取 `[from, to)` 区间的条目（**只解析这一页**）。 */
@@ -61,11 +67,19 @@ export function readPage(filePath, index, from, to) {
   const len = end - start;
   const buf = Buffer.allocUnsafe(len);
   const fd = openSync(filePath, "r");
+  let filled = 0;
   try {
-    readSync(fd, buf, 0, len, start);
+    // 读满为止；stat 与 read 之间文件可能被 Pi 截断重写（openSync(path,'w')）→ 短读时
+    // 早先会拿 allocUnsafe 的残留内存当内容（parse 失败被静默吞掉 → 条目凭空消失 ✗）
+    while (filled < len) {
+      const n = readSync(fd, buf, filled, len - filled, start + filled);
+      if (n <= 0) break;
+      filled += n;
+    }
   } finally {
     closeSync(fd);
   }
+  if (filled < len) throw new Error("session file changed while reading");
   const out = [];
   for (const line of buf.toString("utf8").split("\n")) {
     if (!line.trim()) continue;

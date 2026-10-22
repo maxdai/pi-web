@@ -402,7 +402,20 @@ class PiWebClient {
           this.sendPanelGeometry();
         }
         break;
-      case 'theme_set':
+      case 'theme_set': {
+        // 扩展调 ctx.ui.setTheme() → 服务端透传到这里：应用主题但**不回告服务端**（否则回环）。
+        const name = data.data?.name === 'light' ? 'light' : 'dark';
+        const isLight = name === 'light';
+        if (document.body.classList.contains('theme-light') !== isLight) {
+          document.body.classList.toggle('theme-light', isLight);
+          localStorage.setItem('piweb-theme', name);
+          document.querySelectorAll('.theme-option').forEach((el) => {
+            el.classList.toggle('active', el.dataset.theme === name);
+          });
+        }
+        break;
+      }
+      case '__theme_set_placeholder__':
         // Server acknowledged the theme switch. No reload needed: CSS
         // variables already switched instantly and the server theme only
         // affects extension setStatus/setWidget generated after this point
@@ -1954,7 +1967,8 @@ class PiWebClient {
     // the newest entry when the input is empty; editing resets the browse.
     if (this.inputHistory.length === 0) return;
     if (this.historyIndex === -1) {
-      // Not browsing yet: stash the current draft, start at newest entry.
+      // 未浏览时按“下一条”（↓）应保持不动（TUI 语义）；只有 ↑ 才进入浏览
+      if (dir > 0) return;
       this.historyDraft = this.inputEl.value;
       this.historyIndex = this.inputHistory.length - 1;
     } else {
@@ -2225,13 +2239,16 @@ class PiWebClient {
     this.stopDialogCountdown();
     if (!req || typeof req.deadline !== 'number') return;
     this.dialogCountdownBase = this.modalTitle.textContent || '';
+    const remainMs = () => req.deadline - Date.now();
     const tick = () => {
-      const remain = Math.max(0, Math.ceil((req.deadline - Date.now()) / 1000));
+      const remain = Math.max(0, Math.ceil(remainMs() / 1000));
       this.modalTitle.textContent = `${this.dialogCountdownBase} (${remain}s)`;
       if (remain <= 0) this.stopDialogCountdown();
     };
     tick();
-    this.dialogCountdownTimer = setInterval(tick, 1000);
+    // deadline 已过期（后台标签页节流 / 扩展给了极短 timeout）时 tick() 已经 stop 过一次，
+    // 但那时定时器还没创建 → 早先仍会装上 interval，每秒把标题重写成 (0s) ✗
+    if (remainMs() > 0) this.dialogCountdownTimer = setInterval(tick, 1000);
   }
 
   stopDialogCountdown() {
