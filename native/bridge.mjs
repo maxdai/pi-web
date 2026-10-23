@@ -308,6 +308,14 @@ export default function (pi) {
     }
     widgets.clear();
 
+    // 进程内发生的会话切换（扩展调 resume/new/reload）服务端是无感的 → 页面会停在旧状态 ✗。
+    // 这里上报一条 session-changed，由服务端重发 state + history（buildState 里 applySessionFile
+    // 会同步 session.path；history 会按新会话重读）。2026-10-22，用户插件 resume-to-self 时发现。
+    const startReason = _event?.reason ?? "startup";
+    if (startReason !== "startup") {
+      void post("/side/event", { type: "session-changed", reason: startReason });
+    }
+
     // 0) 换肤：theme 取我们构造的 Pi Theme（暗/亮），失败时保持宿主主题
     const loaded = await loadThemes();
     if (loaded) {

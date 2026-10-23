@@ -1508,6 +1508,21 @@ const server = createServer(async (req, res) => {
       if (route === "event") {
         log(`[pi-web] bridge event: ${JSON.stringify(data)}`);
         // 忙时拒绝 reload：与 SDK 宿主的报错口径一致（前端 case 'error' → appendError）
+        if (data.type === "session-changed") {
+          // 扩展在进程内切换了会话（resume-to-self / new / reload）：旧对话框作废、widget 与
+          // ext_status 快照清空，再按新会话重发 state + history（顺序不能反：buildState 里的
+          // applySessionFile 负责把 session.path 同步好，sendHistory 才读对文件）。
+          dismissDialogs("session-switch");
+          for (const key of widgetSnapshot.keys()) {
+            broadcast({ type: "extension_ui_request", id: randomUUID(), method: "setWidget", widgetKey: key, widgetLines: [] });
+          }
+          widgetSnapshot.clear();
+          extStatusSnapshot = {};
+          broadcast({ type: "ext_status", data: {} });
+          void sendState();
+          void sendHistory();
+          log(`[pi-web] extension-driven session change (${data.reason ?? "?"})`);
+        }
         if (data.type === "reload-refused") {
           broadcast({ type: "error", error: "Wait for the current response to finish before reloading." });
         }
