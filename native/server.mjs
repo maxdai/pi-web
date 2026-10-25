@@ -918,7 +918,26 @@ async function handleClientMessage(ws, msg) {
         // "Agent is already processing. Specify streamingBehavior ('steer' or 'followUp')"
         // （core/agent-session.ts:2140）→ 消息被拒、不产生 queue_update → #pending 永远空 ✗。
         // 用 steer：与 TUI 默认一致（当前回合结束后立即注入），并让 queued 的消息显示在 #pending。
-        await rpc("prompt", { message: msg.message, streamingBehavior: "steer" });
+        // images：与 TUI 的 Ctrl+V 等价（粘贴图片）。只接受 image 块，最多 4 张、单张 ≤ 8MB，
+        // base64 由前端生成；不合法就丢弃而不是让 Pi 报错（2026-10-22，设计文档 §25）。
+        const images = Array.isArray(msg.images)
+          ? msg.images
+              .filter(
+                (im) =>
+                  im &&
+                  im.type === "image" &&
+                  typeof im.data === "string" &&
+                  im.data.length > 0 &&
+                  im.data.length <= 8 * 1024 * 1024 * 1.4 && // base64 膨胀系数
+                  typeof im.mimeType === "string" &&
+                  im.mimeType.startsWith("image/"),
+              )
+              .slice(0, 4)
+          : [];
+        await rpc(
+          "prompt",
+          { message: msg.message, ...(images.length ? { images } : {}), streamingBehavior: "steer" },
+        );
         break;
       case "abort":
         // 中止时撤销挂起的对话框（桥接的 handler 会拿到 cancelled）——否则网页模态残留

@@ -207,6 +207,8 @@ class PiWebClient {
     // 后者一旦因布局变化（状态区/widget 变高、内容增长）出现缝隙就永久关掉，表现为"每次出现
     // tool output 就脱离底部"（2026-10-15 用户报告）。
     this.followBottom = true;
+    /** 粘贴待发送的图片（{type:'image', data:<base64>, mimeType}）；发送后清空。设计文档 §25 */
+    this.pendingImages = [];
     this.statusEl = document.getElementById('conn-status');
     this.statusAreaEl = document.getElementById('status');
     this.pendingEl = document.getElementById('pending');
@@ -1423,6 +1425,16 @@ class PiWebClient {
     const body = document.createElement('div');
     body.className = 'body';
     body.innerHTML = this.renderMarkdown(text);
+    // 图片块（粘贴的图片）：实时与历史都走这里 → 刷新后仍能看到自己贴的图
+    const blocks = Array.isArray(message?.content) ? message.content : [];
+    for (const block of blocks) {
+      if (block?.type !== 'image' || !block.data) continue;
+      const img = document.createElement('img');
+      img.className = 'message-image';
+      img.src = `data:${block.mimeType || 'image/png'};base64,${block.data}`;
+      img.alt = 'pasted image';
+      body.appendChild(img);
+    }
     div.appendChild(role);
     div.appendChild(body);
     this.contentEl.appendChild(div);
@@ -1988,9 +2000,53 @@ class PiWebClient {
     this.inputEl.setSelectionRange(this.inputEl.value.length, this.inputEl.value.length);
   }
 
+  /** 输入框上方的待发送图片缩略图（× 移除）。设计文档 §25 */
+  renderImageAttachments() {
+    let box = document.getElementById('image-attachments');
+    if (!box) {
+      box = document.createElement('div');
+      box.id = 'image-attachments';
+      const row = this.inputEl?.closest('.input-row') ?? this.inputEl;
+      row?.parentNode?.insertBefore(box, row);
+    }
+    box.innerHTML = '';
+    if (this.pendingImages.length === 0) {
+      box.style.display = 'none';
+      return;
+    }
+    box.style.display = 'flex';
+    this.pendingImages.forEach((img, i) => {
+      const wrap = document.createElement('div');
+      wrap.className = 'image-chip';
+      const el = document.createElement('img');
+      el.src = `data:${img.mimeType};base64,${img.data}`;
+      el.className = 'image-chip-img';
+      const rm = document.createElement('button');
+      rm.className = 'image-chip-remove';
+      rm.textContent = '×';
+      rm.title = 'Remove';
+      rm.addEventListener('click', () => {
+        this.pendingImages.splice(i, 1);
+        this.renderImageAttachments();
+      });
+      wrap.appendChild(el);
+      wrap.appendChild(rm);
+      box.appendChild(wrap);
+    });
+  }
+
   sendMessage() {
     const text = this.inputEl.value.trim();
-    if (!text) return;
+    const images = this.pendingImages.slice();
+    // 只有图片、没有文字也允许发送（与 TUI 贴图后直接回车一致）
+    if (!text && images.length === 0) return;
+    if (!text && images.length > 0) {
+      this.pendingImages = [];
+      this.renderImageAttachments();
+      this.inputEl.value = '';
+      this.send({ type: 'prompt', message: '', images });
+      return;
+    }
     // Record every submitted input (messages, !bash, /commands) in the
     // history - TUI parity (handleSubmit addToHistory on all paths).
     if (this.inputHistory[this.inputHistory.length - 1] !== text) {
@@ -2039,7 +2095,9 @@ class PiWebClient {
         }
       }
     } else {
-      this.send({ type: 'prompt', message: text });
+      this.send({ type: 'prompt', message: text, ...(images.length ? { images } : {}) });
+      this.pendingImages = [];
+      this.renderImageAttachments();
     }
     this.inputEl.value = '';
     this.hideCommandMenu();
@@ -2072,6 +2130,35 @@ class PiWebClient {
   }
 
   bindInput() {
+    // 粘贴图片（与 TUI 的 Ctrl+V 等价）：从剪贴板取 image/*，转 base64 挂到待发送列表
+    this.inputEl.addEventListener('paste', (e) => {
+      const items = e.clipboardData?.items;
+      if (!items) return;
+      let found = false;
+      for (const item of items) {
+        if (!item.type || !item.type.startsWith('image/')) continue;
+        const file = item.getAsFile();
+        if (!file) continue;
+        found = true;
+        if (this.pendingImages.length >= 4) break;
+        const reader = new FileReader();
+        reader.onload = () => {
+          const url = String(reader.result || '');
+          const comma = url.indexOf(',');
+          if (comma < 0) return;
+          const data = url.slice(comma + 1);
+          if (data.length > 8 * 1024 * 1024 * 1.4) {
+            this.appendNotifyLine(`Image too large (${(file.size / 1048576).toFixed(1)}MB, max 8MB)`, 'warning');
+            return;
+          }
+          this.pendingImages.push({ type: 'image', data, mimeType: item.type });
+          this.renderImageAttachments();
+        };
+        reader.readAsDataURL(file);
+      }
+      if (found) e.preventDefault(); // 别把图片当文件/URL 塞进输入框
+    });
+
     this.inputEl.addEventListener('keydown', (e) => {
       const menuOpen = this.commandMenuEl && this.commandMenuEl.style.display !== 'none';
       if (menuOpen && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {

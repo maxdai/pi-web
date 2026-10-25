@@ -2049,3 +2049,20 @@ message_update 共 84 个；前 6 个到达时刻 4.02s / 4.02s / 4.02s / 4.09s 
 **验证**：服务端转发 N 个 `text_delta` → 浏览器里最后一条助手消息的正文长度出现 N+1 次变化
 （尾部一次是定稿）✓；实测 2 个 delta → 3 次变化 ✓。注意**粒度由模型/供应商的分块决定** ✓（同一问题
 可能只给 2~3 个 chunk，长回答会给几十个）——与 TUI 收到的增量完全一致 ✓，这属于 Pi 的上游行为，不是 pi-web 的差异 ✓。
+
+## 25. 粘贴图片（2026-10-22）
+
+**能力现状**：Pi 的 RPC `prompt` 支持 `images?: ImageContent[]`（`rpc-types.ts:22`，
+`ImageContent = { type:"image", data:<base64>, mimeType }`，见 `packages/ai/src/types.ts:438`）；TUI 用 Ctrl+V
+经 `readClipboardImage()` 读剪贴板图片（`interactive-mode.ts:126,3088`）。而 pi-web 之前两端都没接 ✗
+（前端无任何 paste 处理、服务端 `prompt` 只传 message）。
+
+**实现**（与 TUI 等价，走浏览器剪贴板）：
+
+1. **前端**：输入框 `paste` 监听 → 从 `clipboardData.items` 取 `image/*` → `FileReader.readAsDataURL` →
+   `{type:"image", data:<base64>, mimeType}` 存入待发送列表 → 在输入框上方渲染**缩略图 + × 移除**；
+2. **发送**：`prompt` 帧带 `images`（清空待发送列表）；有图无文字也允许发送（正文可为空）；
+3. **服务端**：校验并透传（只接受 `type==="image"` + base64 data + `mimeType`，最多 4 张、单张 ≤ 8MB）；
+4. **渲染**：用户消息气泡按 content 块渲染图片（实时与历史同路径 ✓），因此刷新后仍能看到自己贴的图 ✓。
+
+**未做**：拖拽上传 ✗（同一套 base64 处理，需要时再加）；图片压缩/缩放 ✗（原样发送，与 TUI 一致）。
