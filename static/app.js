@@ -2140,15 +2140,17 @@ class PiWebClient {
       const modalOpen = this.modalOverlay && this.modalOverlay.style.display !== 'none';
       const inInput = e.target === this.inputEl;
       if (modalOpen && !inInput) return;
-      const files = [];
+      // 两个来源**择一**：真实粘贴时 items[i].getAsFile() 与 files[i] 是不同对象，
+      // 同时扫会重复（一次 Ctrl+V 贴出两张 ✗，2026-10-25 用户实测）。优先 items，没有才退回 files。
+      let files = [];
       for (const item of dt.items ?? []) {
         if (item.type && item.type.startsWith('image/')) {
           const f = item.getAsFile();
           if (f) files.push(f);
         }
       }
-      for (const f of dt.files ?? []) {
-        if (f.type && f.type.startsWith('image/') && !files.includes(f)) files.push(f);
+      if (files.length === 0) {
+        files = [...(dt.files ?? [])].filter((f) => f.type && f.type.startsWith('image/'));
       }
       if (files.length === 0) return;
       e.preventDefault(); // 别把图片当文件/URL 塞进输入框
