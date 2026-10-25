@@ -934,6 +934,8 @@ async function handleClientMessage(ws, msg) {
               )
               .slice(0, 4)
           : [];
+        if (images.length) log(`[pi-web] prompt with ${images.length} image(s): ${images.map((i) => i.mimeType).join(",")}`);
+        else if (Array.isArray(msg.images) && msg.images.length) log(`[pi-web] prompt images rejected by validation: ${msg.images.length} item(s)`);
         await rpc(
           "prompt",
           { message: msg.message, ...(images.length ? { images } : {}), streamingBehavior: "steer" },

@@ -2130,17 +2130,33 @@ class PiWebClient {
   }
 
   bindInput() {
-    // 粘贴图片（与 TUI 的 Ctrl+V 等价）：从剪贴板取 image/*，转 base64 挂到待发送列表
-    this.inputEl.addEventListener('paste', (e) => {
-      const items = e.clipboardData?.items;
-      if (!items) return;
-      let found = false;
-      for (const item of items) {
-        if (!item.type || !item.type.startsWith('image/')) continue;
-        const file = item.getAsFile();
-        if (!file) continue;
-        found = true;
-        if (this.pendingImages.length >= 4) break;
+    // 粘贴图片（与 TUI 的 Ctrl+V 等价）。**监听 document**：真实使用时焦点常常不在输入框，
+    // 绑在 #input 上会收不到 paste 事件（2026-10-25 用户实测：页面上贴了但图片没到 Pi ✗）。
+    // 同时兼容两种来源：clipboardData.items（image/*）与 clipboardData.files。
+    document.addEventListener('paste', (e) => {
+      const dt = e.clipboardData;
+      if (!dt) return;
+      // 打开着扩展编辑器/输入对话框时，把粘贴让给那个输入框
+      const modalOpen = this.modalOverlay && this.modalOverlay.style.display !== 'none';
+      const inInput = e.target === this.inputEl;
+      if (modalOpen && !inInput) return;
+      const files = [];
+      for (const item of dt.items ?? []) {
+        if (item.type && item.type.startsWith('image/')) {
+          const f = item.getAsFile();
+          if (f) files.push(f);
+        }
+      }
+      for (const f of dt.files ?? []) {
+        if (f.type && f.type.startsWith('image/') && !files.includes(f)) files.push(f);
+      }
+      if (files.length === 0) return;
+      e.preventDefault(); // 别把图片当文件/URL 塞进输入框
+      for (const file of files) {
+        if (this.pendingImages.length >= 4) {
+          this.appendNotifyLine('At most 4 images per message', 'warning');
+          break;
+        }
         const reader = new FileReader();
         reader.onload = () => {
           const url = String(reader.result || '');
@@ -2151,13 +2167,12 @@ class PiWebClient {
             this.appendNotifyLine(`Image too large (${(file.size / 1048576).toFixed(1)}MB, max 8MB)`, 'warning');
             return;
           }
-          this.pendingImages.push({ type: 'image', data, mimeType: item.type });
+          this.pendingImages.push({ type: 'image', data, mimeType: file.type || 'image/png' });
           this.renderImageAttachments();
         };
         reader.readAsDataURL(file);
       }
-      if (found) e.preventDefault(); // 别把图片当文件/URL 塞进输入框
-    });
+    }, true);
 
     this.inputEl.addEventListener('keydown', (e) => {
       const menuOpen = this.commandMenuEl && this.commandMenuEl.style.display !== 'none';
