@@ -681,7 +681,12 @@ class PiWebClient {
       const model = state.model.id || state.model.model || '';
       const modelLabel = provider ? `${provider}/${model}` : model;
       const thinking = state.thinkingLevel || 'off';
-      const modelHtml = `<span class="clickable model-label" title="Click to pick from scoped models">${this.escapeHtml(modelLabel)}</span>`;
+      // 图片能力标注：input 含 image → "image"；只有 text → "text-only"（贴图会送不到模型 ✗）；未知 → 不标
+      const inputCaps = Array.isArray(state.model.input) ? state.model.input : null;
+      const imgCap = !inputCaps ? '' : inputCaps.includes('image')
+        ? `<span class="img-cap supported" title="This model accepts image input"> · image</span>`
+        : `<span class="img-cap unsupported" title="Text-only model: pasted images cannot reach it"> · text-only</span>`;
+      const modelHtml = `<span class="clickable model-label" title="Click to pick from scoped models">${this.escapeHtml(modelLabel)}</span>${imgCap}`;
       const cycleHtml = `<span class="clickable cycle-model-label" title="Cycle to next model (TUI Ctrl+P)">>></span>`;
       const thinkingHtml = `<span class="clickable thinking-label" title="Click to change thinking">${this.escapeHtml(thinking)}</span>`;
       rightHtml = `${modelHtml} ${cycleHtml} · ${thinkingHtml}`;
@@ -2171,6 +2176,10 @@ class PiWebClient {
           }
           this.pendingImages.push({ type: 'image', data, mimeType: file.type || 'image/png' });
           this.renderImageAttachments();
+          const caps = this.lastState?.model?.input;
+          if (Array.isArray(caps) && !caps.includes('image')) {
+            this.appendNotifyLine('Current model is text-only — the image will not reach it', 'warning');
+          }
         };
         reader.readAsDataURL(file);
       }

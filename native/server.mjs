@@ -472,7 +472,10 @@ async function buildState() {
   const state = {
     sessionId: st.sessionId,
     sessionName: st.sessionName ?? session.name,
-    model: st.model ? { provider: st.model.provider, id: st.model.id, name: st.model.name } : undefined,
+    // input 能力（["text"] / ["text","image"]）：前端页脚据此标注能否贴图
+    model: st.model
+      ? { provider: st.model.provider, id: st.model.id, name: st.model.name, input: st.model.input }
+      : undefined,
     thinkingLevel: st.thinkingLevel,
     autoCompactionEnabled: st.autoCompactionEnabled,
     messageCount: st.messageCount,

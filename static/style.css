@@ -1609,3 +1609,13 @@ body {
   border-radius: 4px;
   border: 1px solid var(--border);
 }
+
+/* 页脚图片能力标注 */
+.img-cap {
+  font-size: 11px;
+  opacity: 0.75;
+}
+.img-cap.unsupported {
+  color: var(--warning);
+  opacity: 1;
+}
