@@ -675,6 +675,13 @@ class PiWebClient {
       }
     }
 
+    // 首字延迟（prefill / TTFT）：本轮第一条 assistant 消息，从发送到第一个增量
+    if (this.lastPrefill != null) {
+      const p = this.lastPrefill;
+      const tip = `Time to first token: ${p.toFixed(2)}s (from send to the first streaming delta, includes prefill and network)`;
+      leftParts.push(`<span class="tok-rate prefill" title="${this.escapeAttr(tip)}">· prefill ${p.toFixed(2)}s</span>`);
+    }
+
     // 生成速率（tokens/s）：上一回合、生成阶段口径（首末 delta 之间）
     if (this.lastRate) {
       const tps = Math.round(this.lastRate.tps);
@@ -1105,6 +1112,7 @@ class PiWebClient {
       case 'agent_start':
         // 新一轮开始：重置本轮 tokens/s 累计（上一轮的值继续显示，直到本轮第一条消息定稿）
         this.roundRate = { tokens: 0, secs: 0 };
+        this.lastPrefill = null; // 上一轮的 prefill 立刻清掉：它属于上一轮，留着会误导
         this.status.working++;
         this.updateStatusDisplay();
         break;
@@ -1276,6 +1284,11 @@ class PiWebClient {
         // **本轮平均**：把本轮每条 assistant 消息的 output tokens 与生成时长（首末 delta，不含 prefill）
         // 分别累加 → 一条消息工具调用前后的多段生成合起来算，数值稳定、不会一来一回跳。
         const secs = (r.lastAt - r.firstAt) / 1000;
+        // 本轮 prefill（TTFT）：只取第一条 assistant 消息 —— 之后那些是"工具跑完等模型"，
+        // 混进来会把首字延迟算大 ✗（2026-10-28 用户要求单独显示）
+        if (this.lastPrefill == null && this.promptSentAt && r.firstAt > this.promptSentAt) {
+          this.lastPrefill = (r.firstAt - this.promptSentAt) / 1000;
+        }
         const acc = (this.roundRate ||= { tokens: 0, secs: 0 });
         acc.tokens += out;
         acc.secs += secs;
@@ -2085,6 +2098,7 @@ class PiWebClient {
       this.pendingImages = [];
       this.renderImageAttachments();
       this.inputEl.value = '';
+      this.promptSentAt = Date.now(); // prefill 计时锚点（TTFT = 首个增量 − 此刻）
       this.send({ type: 'prompt', message: '', images });
       return;
     }
@@ -2136,6 +2150,7 @@ class PiWebClient {
         }
       }
     } else {
+      this.promptSentAt = Date.now(); // prefill 计时锚点（TTFT = 首个增量 − 此刻）
       this.send({ type: 'prompt', message: text, ...(images.length ? { images } : {}) });
       this.pendingImages = [];
       this.renderImageAttachments();
