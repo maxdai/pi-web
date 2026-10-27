@@ -678,7 +678,7 @@ class PiWebClient {
     // 生成速率（tokens/s）：上一回合、生成阶段口径（首末 delta 之间）
     if (this.lastRate) {
       const tps = Math.round(this.lastRate.tps);
-      const tip = `${this.lastRate.tokens} output tokens in ${this.lastRate.secs.toFixed(2)}s (generation only)`;
+      const tip = `${this.lastRate.tokens} output tokens in ${this.lastRate.secs.toFixed(2)}s across this turn (generation only, prefill excluded)`;
       leftParts.push(`<span class="tok-rate" title="${this.escapeAttr(tip)}">· ${tps} tok/s</span>`);
     }
 
@@ -1103,6 +1103,8 @@ class PiWebClient {
     const wasAtBottom = this.followBottom;
     switch (ev.type) {
       case 'agent_start':
+        // 新一轮开始：重置本轮 tokens/s 累计（上一轮的值继续显示，直到本轮第一条消息定稿）
+        this.roundRate = { tokens: 0, secs: 0 };
         this.status.working++;
         this.updateStatusDisplay();
         break;
@@ -1271,8 +1273,13 @@ class PiWebClient {
       const out = message?.usage?.output;
       const r = this.turnRate;
       if (typeof out === 'number' && out > 0 && r?.firstAt && r?.lastAt && r.lastAt > r.firstAt) {
+        // **本轮平均**：把本轮每条 assistant 消息的 output tokens 与生成时长（首末 delta，不含 prefill）
+        // 分别累加 → 一条消息工具调用前后的多段生成合起来算，数值稳定、不会一来一回跳。
         const secs = (r.lastAt - r.firstAt) / 1000;
-        this.lastRate = { tps: out / secs, tokens: out, secs };
+        const acc = (this.roundRate ||= { tokens: 0, secs: 0 });
+        acc.tokens += out;
+        acc.secs += secs;
+        if (acc.secs > 0) this.lastRate = { tps: acc.tokens / acc.secs, tokens: acc.tokens, secs: acc.secs };
         if (this.statsCache) this.renderStats(this.statsCache.stats, this.statsCache.state);
       }
       this.turnRate = { firstAt: null, lastAt: null };
