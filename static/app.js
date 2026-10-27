@@ -642,6 +642,7 @@ class PiWebClient {
     if (!statsEl) return;
     if (!state) state = this.lastState;
     if (!state) return;
+    this.statsCache = { stats, state };
 
     const leftParts = [];
 
@@ -672,6 +673,13 @@ class PiWebClient {
       } else {
         leftParts.push(`?/${ctxWindow}${auto}`);
       }
+    }
+
+    // 生成速率（tokens/s）：上一回合、生成阶段口径（首末 delta 之间）
+    if (this.lastRate) {
+      const tps = Math.round(this.lastRate.tps);
+      const tip = `${this.lastRate.tokens} output tokens in ${this.lastRate.secs.toFixed(2)}s (generation only)`;
+      leftParts.push(`<span class="tok-rate" title="${this.escapeAttr(tip)}">· ${tps} tok/s</span>`);
     }
 
     // Model + thinking on the right (clickable, right-aligned)
@@ -1236,9 +1244,11 @@ class PiWebClient {
       this.startAssistantMessage({ role: 'assistant', content: [] });
     }
     if (aev.type === 'text_delta' && typeof aev.delta === 'string') {
+      this.markRateTick();
       this.streaming.text = (this.streaming.text || '') + aev.delta;
       this.updateAssistantText(this.partialAssistantMessage());
     } else if (aev.type === 'thinking_delta' && typeof aev.delta === 'string') {
+      this.markRateTick();
       this.streaming.thinking = (this.streaming.thinking || '') + aev.delta;
       this.updateAssistantThinking(this.partialAssistantMessage());
     }
@@ -1246,9 +1256,26 @@ class PiWebClient {
     // 文本量由 delta 累积，工具块走 tool_execution_* 事件。
   }
 
+  /** 记一次生成增量（用于 tokens/s：首末 delta 之间才是"生成阶段"） */
+  markRateTick() {
+    const now = Date.now();
+    const r = (this.turnRate ||= { firstAt: null, lastAt: null });
+    if (!r.firstAt) r.firstAt = now;
+    r.lastAt = now;
+  }
+
   onMessageEnd(message) {
     if (message && message.role === 'assistant') {
       this.finalizeAssistantMessage(message);
+      // tokens/s：token 数只有定稿时才有（流式期间 usage.output 恒为 0），时间用首末 delta
+      const out = message?.usage?.output;
+      const r = this.turnRate;
+      if (typeof out === 'number' && out > 0 && r?.firstAt && r?.lastAt && r.lastAt > r.firstAt) {
+        const secs = (r.lastAt - r.firstAt) / 1000;
+        this.lastRate = { tps: out / secs, tokens: out, secs };
+        if (this.statsCache) this.renderStats(this.statsCache.stats, this.statsCache.state);
+      }
+      this.turnRate = { firstAt: null, lastAt: null };
     }
   }
 
@@ -1460,6 +1487,8 @@ class PiWebClient {
     // 增量缓冲：RPC 的 message_update **只给增量**（assistantMessageEvent.delta），没有完整
     // message（那是 SDK 时代的形状）→ 这里自己累积一份"部分消息"交给既有渲染（2026-10-20 修复）。
     this.streaming = { active: true, el: div, body: body, text: '', thinking: '' };
+    // tokens/s 计时窗口：首个增量 → 末个增量（生成阶段口径，不含工具/等待首字）
+    this.turnRate = { firstAt: null, lastAt: null };
     this.renderAssistantContent(message, body);
   }
 
