@@ -479,6 +479,8 @@ async function buildState() {
     thinkingLevel: st.thinkingLevel,
     autoCompactionEnabled: st.autoCompactionEnabled,
     messageCount: st.messageCount,
+    // 生成速率（服务端计时）：{ prefill, tps, tokens, secs }
+    metrics: lastMetrics,
     // 运行态（见 agentActive）：前端据此恢复"Working…"指示器（2026-10-20）
     agentActive,
     version: PI_VERSION,
@@ -611,7 +613,7 @@ async function sendHistory(target) {
 async function sendStats() {
   try {
     const stats = await rpcData("get_session_stats");
-    broadcast({ type: "stats", data: stats });
+    broadcast({ type: "stats", data: { ...stats, metrics: lastMetrics } });
   } catch {
     /* ignore */
   }
@@ -757,6 +759,37 @@ child.stdout.on("data", (chunk) => {
       // 形状与前端期望一致（我们的 UI context 当年就是照它建模的）：原样转发
       broadcast(ev);
       continue;
+    }
+
+    // 生成速率打点（服务端计时，与浏览器是否在前台无关）
+    if (ev.type === "message_start" && ev.message?.role === "assistant") {
+      msgFirstDeltaAt = null;
+      msgLastDeltaAt = null;
+    } else if (ev.type === "message_update") {
+      const kind = ev.assistantMessageEvent?.type;
+      if (kind === "text_delta" || kind === "thinking_delta") {
+        const now = Date.now();
+        if (!msgFirstDeltaAt) msgFirstDeltaAt = now;
+        msgLastDeltaAt = now;
+      }
+    } else if (ev.type === "message_end" && ev.message?.role === "assistant") {
+      const out = ev.message?.usage?.output;
+      if (typeof out === "number" && out > 0 && msgFirstDeltaAt && msgLastDeltaAt && msgLastDeltaAt > msgFirstDeltaAt) {
+        const secs = (msgLastDeltaAt - msgFirstDeltaAt) / 1000;
+        if (turnPrefill == null && turnSentAt && msgFirstDeltaAt > turnSentAt) {
+          turnPrefill = (msgFirstDeltaAt - turnSentAt) / 1000;
+        }
+        turnTokens += out;
+        turnSecs += secs;
+        lastMetrics = {
+          prefill: turnPrefill,
+          tps: turnSecs > 0 ? turnTokens / turnSecs : null,
+          tokens: turnTokens,
+          secs: turnSecs,
+        };
+      }
+      msgFirstDeltaAt = null;
+      msgLastDeltaAt = null;
     }
 
     // 会话事件：原样转发给浏览器
@@ -937,6 +970,13 @@ async function handleClientMessage(ws, msg) {
               )
               .slice(0, 4)
           : [];
+        // 新一轮 prompt：重置速率统计的累计（lastMetrics 保留，供页脚显示上一轮 ✓）
+        turnSentAt = Date.now();
+        msgFirstDeltaAt = null;
+        msgLastDeltaAt = null;
+        turnTokens = 0;
+        turnSecs = 0;
+        turnPrefill = null;
         if (images.length) log(`[pi-web] prompt with ${images.length} image(s): ${images.map((i) => i.mimeType).join(",")}`);
         else if (Array.isArray(msg.images) && msg.images.length) log(`[pi-web] prompt images rejected by validation: ${msg.images.length} item(s)`);
         await rpc(
@@ -1267,6 +1307,20 @@ async function handleClientMessage(ws, msg) {
  *  与 SDK 宿主的 dismissDialog(id, "session-switch" | "aborted") 对齐。 */
 /** 挂起中的对话框/面板：id -> {resolve, extensionTimeout, timer, fallback} */
 const pendingDialogs = new Map();
+/**
+ * 生成速率统计（2026-10-28 从浏览器搬到服务端）：后台标签页会被浏览器节流/丢帧，
+ * 前端计时不可信 ✗；服务端收到 Pi 事件即打点，与页面状态无关 ✓。
+ *   prefill = 本轮第一条 assistant 消息的首个增量 − 发出 prompt 的时刻
+ *   tps     = 本轮所有 assistant 消息的 output tokens ÷ 各自「首末增量」时长之和
+ */
+let turnSentAt = null;        // 本轮 prompt 发出的时刻（服务端）
+let msgFirstDeltaAt = null;   // 当前 assistant 消息首个增量
+let msgLastDeltaAt = null;    // 当前 assistant 消息末个增量
+let turnTokens = 0;           // 本轮累加 output tokens
+let turnSecs = 0;             // 本轮累加生成时长
+let turnPrefill = null;       // 本轮 prefill（只取第一条消息）
+let lastMetrics = null;       // 最近一轮的 { prefill, tps, tokens, secs }
+
 /** custom() 面板的按键缓冲（token -> string[]）与长轮询等待者（token -> resolve） */
 const panelKeyBuffers = new Map();
 const panelKeyWaiters = new Map();

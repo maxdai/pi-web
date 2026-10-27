@@ -475,9 +475,19 @@ class PiWebClient {
   // Rendering: state & history
   // ------------------------------------------------------------------
 
+  /** 应用服务端算好的生成速率（服务端计时：与页面是否在前台、是否丢帧无关） */
+  applyMetrics(m) {
+    if (!m) return;
+    this.lastPrefill = typeof m.prefill === 'number' ? m.prefill : null;
+    this.lastRate = typeof m.tps === 'number' && m.tps > 0
+      ? { tps: m.tps, tokens: m.tokens, secs: m.secs }
+      : null;
+  }
+
   renderState(state) {
     if (!state) return;
     this.lastState = state;
+    this.applyMetrics(state.metrics);
 
     // 恢复"运行中"指示器：刷新/重连会丢掉 agent_start/agent_settled 事件，
     // 只靠事件计数会让 #status 的 Working… 永远不出现（用户实测 2026-10-20 ✗）。
@@ -643,6 +653,7 @@ class PiWebClient {
     if (!state) state = this.lastState;
     if (!state) return;
     this.statsCache = { stats, state };
+    this.applyMetrics(stats?.metrics ?? state?.metrics);
 
     const leftParts = [];
 
@@ -1110,9 +1121,6 @@ class PiWebClient {
     const wasAtBottom = this.followBottom;
     switch (ev.type) {
       case 'agent_start':
-        // 新一轮开始：重置本轮 tokens/s 累计（上一轮的值继续显示，直到本轮第一条消息定稿）
-        this.roundRate = { tokens: 0, secs: 0 };
-        this.lastPrefill = null; // 上一轮的 prefill 立刻清掉：它属于上一轮，留着会误导
         this.status.working++;
         this.updateStatusDisplay();
         break;
@@ -1254,11 +1262,9 @@ class PiWebClient {
       this.startAssistantMessage({ role: 'assistant', content: [] });
     }
     if (aev.type === 'text_delta' && typeof aev.delta === 'string') {
-      this.markRateTick();
       this.streaming.text = (this.streaming.text || '') + aev.delta;
       this.updateAssistantText(this.partialAssistantMessage());
     } else if (aev.type === 'thinking_delta' && typeof aev.delta === 'string') {
-      this.markRateTick();
       this.streaming.thinking = (this.streaming.thinking || '') + aev.delta;
       this.updateAssistantThinking(this.partialAssistantMessage());
     }
@@ -1266,36 +1272,9 @@ class PiWebClient {
     // 文本量由 delta 累积，工具块走 tool_execution_* 事件。
   }
 
-  /** 记一次生成增量（用于 tokens/s：首末 delta 之间才是"生成阶段"） */
-  markRateTick() {
-    const now = Date.now();
-    const r = (this.turnRate ||= { firstAt: null, lastAt: null });
-    if (!r.firstAt) r.firstAt = now;
-    r.lastAt = now;
-  }
-
   onMessageEnd(message) {
     if (message && message.role === 'assistant') {
       this.finalizeAssistantMessage(message);
-      // tokens/s：token 数只有定稿时才有（流式期间 usage.output 恒为 0），时间用首末 delta
-      const out = message?.usage?.output;
-      const r = this.turnRate;
-      if (typeof out === 'number' && out > 0 && r?.firstAt && r?.lastAt && r.lastAt > r.firstAt) {
-        // **本轮平均**：把本轮每条 assistant 消息的 output tokens 与生成时长（首末 delta，不含 prefill）
-        // 分别累加 → 一条消息工具调用前后的多段生成合起来算，数值稳定、不会一来一回跳。
-        const secs = (r.lastAt - r.firstAt) / 1000;
-        // 本轮 prefill（TTFT）：只取第一条 assistant 消息 —— 之后那些是"工具跑完等模型"，
-        // 混进来会把首字延迟算大 ✗（2026-10-28 用户要求单独显示）
-        if (this.lastPrefill == null && this.promptSentAt && r.firstAt > this.promptSentAt) {
-          this.lastPrefill = (r.firstAt - this.promptSentAt) / 1000;
-        }
-        const acc = (this.roundRate ||= { tokens: 0, secs: 0 });
-        acc.tokens += out;
-        acc.secs += secs;
-        if (acc.secs > 0) this.lastRate = { tps: acc.tokens / acc.secs, tokens: acc.tokens, secs: acc.secs };
-        if (this.statsCache) this.renderStats(this.statsCache.stats, this.statsCache.state);
-      }
-      this.turnRate = { firstAt: null, lastAt: null };
     }
   }
 
@@ -1507,8 +1486,6 @@ class PiWebClient {
     // 增量缓冲：RPC 的 message_update **只给增量**（assistantMessageEvent.delta），没有完整
     // message（那是 SDK 时代的形状）→ 这里自己累积一份"部分消息"交给既有渲染（2026-10-20 修复）。
     this.streaming = { active: true, el: div, body: body, text: '', thinking: '' };
-    // tokens/s 计时窗口：首个增量 → 末个增量（生成阶段口径，不含工具/等待首字）
-    this.turnRate = { firstAt: null, lastAt: null };
     this.renderAssistantContent(message, body);
   }
 
@@ -2098,7 +2075,6 @@ class PiWebClient {
       this.pendingImages = [];
       this.renderImageAttachments();
       this.inputEl.value = '';
-      this.promptSentAt = Date.now(); // prefill 计时锚点（TTFT = 首个增量 − 此刻）
       this.send({ type: 'prompt', message: '', images });
       return;
     }
@@ -2150,7 +2126,6 @@ class PiWebClient {
         }
       }
     } else {
-      this.promptSentAt = Date.now(); // prefill 计时锚点（TTFT = 首个增量 − 此刻）
       this.send({ type: 'prompt', message: text, ...(images.length ? { images } : {}) });
       this.pendingImages = [];
       this.renderImageAttachments();
