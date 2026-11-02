@@ -29,6 +29,28 @@ const BG_KEYS = new Set([
   "toolErrorBg",
 ]);
 
+/** 内容块 → 纯文本（树导航时回填输入框用）。 */
+function contentToText(content) {
+  if (typeof content === "string") return content || undefined;
+  if (!Array.isArray(content)) return undefined;
+  const text = content
+    .filter((c) => c && c.type === "text" && typeof c.text === "string")
+    .map((c) => c.text)
+    .join("");
+  return text || undefined;
+}
+
+/** 与 TUI `navigateTree` 的 editorText 同义：选中的若是**用户消息**，把文本交回编辑器。
+ *  RPC 绑定的返回值只有 `{cancelled}`（rpc-mode.ts:329-338 剥掉了 editorText），所以桥接自己取。 */
+function entryEditorText(entry) {
+  if (!entry) return undefined;
+  if (entry.type === "message" && entry.message?.role === "user") return contentToText(entry.message.content);
+  if (entry.type === "custom_message") {
+    return typeof entry.content === "string" ? entry.content || undefined : contentToText(entry.content);
+  }
+  return undefined;
+}
+
 export default function (pi) {
   const url = process.env.PI_WEB_BRIDGE_URL;
   const token = process.env.PI_WEB_BRIDGE_TOKEN;
@@ -610,6 +632,35 @@ export default function (pi) {
         await post("/side/scoped-applied", { ok: true, ...result });
       } catch (err) {
         await post("/side/scoped-applied", { ok: false, error: String(err?.message ?? err) });
+      }
+    },
+  });
+
+  /** 会话树导航（pi-web `/tree` 二期，设计 §26.8）。
+   *  RPC 协议没有 navigate 命令，只有扩展命令上下文能拿到 `navigateTree`；
+   *  与 pi-web:reload / set-scoped-models 同一模式：命令做工作、结果经侧信道回传。
+   *  不带摘要（`summarize: false`）：纯本地移动叶指针，不调模型。 */
+  pi.registerCommand("pi-web:navigate-tree", {
+    description: "Navigate the session tree (pi-web UI)",
+    handler: async (args, ctx) => {
+      const targetId = String(args ?? "").trim();
+      if (!targetId) {
+        await post("/side/tree-nav", { ok: false, error: "missing target id" });
+        return;
+      }
+      try {
+        // navigateTree 在流式/压缩中会抛错 → 先停下当前回答（TUI 同样先 abort，
+        // interactive-mode.ts:5600-5604）。isIdle() 覆盖 agent run / compaction / retry / 排队消息。
+        if (typeof ctx.isIdle === "function" && !ctx.isIdle()) {
+          ctx.abort();
+          await ctx.waitForIdle();
+        }
+        await ctx.navigateTree(targetId, { summarize: false });
+        const leafId = ctx.sessionManager?.getLeafId?.() ?? null;
+        const editorText = entryEditorText(ctx.sessionManager?.getEntry?.(targetId));
+        await post("/side/tree-nav", { ok: true, targetId, leafId, editorText });
+      } catch (err) {
+        await post("/side/tree-nav", { ok: false, targetId, error: String(err?.message ?? err) });
       }
     },
   });

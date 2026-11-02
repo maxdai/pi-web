@@ -109,6 +109,104 @@ export function lastEntryId(filePath, index) {
   return readPage(filePath, index, total - 1, total)[0]?.id ?? null;
 }
 
+// ---------------------------------------------------------------- 树骨架 / 路径分页
+
+/** 行首快取：绝大多数条目由 Pi 按 `type,id,parentId` 的顺序写出。
+ *  扩展经 `appendEntry` 写入的 `custom`/`custom_message` 会把 `customType` 放在前面（实测占 0.7%）→ 回退 JSON.parse。 */
+const ENTRY_HEAD_RE = /^\{"type":"([^"]+)","id":"([^"]+)","parentId":(null|"([^"]+)")/;
+
+/**
+ * 会话的**树骨架**（设计 §26.8）：`id → { parentId, start, end }` 与文件顺序的 `order`。
+ * 只取 id/parentId 与**字节**区间、不保留正文，用于「按叶指针回溯路径」。
+ *
+ * 必须按 Buffer 扫字节：早先用 `raw.split("\n")` 的字符下标当偏移，中文条目一多偏移就飘
+ * （UTF-16 码元 ≠ 字节），`readEntriesByIds` 按错误区间读回垃圾 → 整页 0 条（已复现 ✗）。
+ * 行内容只在需要解析该行时才 `toString`，避免整份文件二次解码。
+ */
+export function scanTreeIndex(filePath) {
+  const buf = readFileSync(filePath);
+  const byId = new Map();
+  const order = [];
+  let start = 0;
+  for (let i = 0; i < buf.length; i++) {
+    if (buf[i] !== 0x0a) continue;
+    if (i > start) {
+      const line = buf.toString("utf8", start, i);
+      if (line.length > 2 && line[0] === "{") {
+        let type = null;
+        let id = null;
+        let parentId = null;
+        const hit = ENTRY_HEAD_RE.exec(line);
+        if (hit) {
+          type = hit[1];
+          id = hit[2];
+          parentId = hit[3] === "null" ? null : hit[4];
+        } else {
+          try {
+            const entry = JSON.parse(line);
+            type = entry?.type ?? null;
+            id = typeof entry?.id === "string" ? entry.id : null;
+            parentId = typeof entry?.parentId === "string" ? entry.parentId : null;
+          } catch {
+            /* 坏行跳过 */
+          }
+        }
+        if (id && type && type !== "session") {
+          byId.set(id, { parentId, start, end: i });
+          order.push(id);
+        }
+      }
+    }
+    start = i + 1;
+  }
+  // 末尾没有换行的半行（Pi 正在写入）不收录：读回来也可能被截断
+  return { byId, order };
+}
+
+/** 从叶沿 `parentId` 回溯到根，返回"根 → 叶"的 id 数组（带环保护）。 */
+export function resolvePath(byId, leafId) {
+  const ids = [];
+  const seen = new Set();
+  let cursor = leafId;
+  while (cursor && byId.has(cursor) && !seen.has(cursor)) {
+    seen.add(cursor);
+    ids.push(cursor);
+    cursor = byId.get(cursor).parentId;
+  }
+  return ids.reverse();
+}
+
+/** 按 id 列表读取并解析条目（只读这些条目的字节区间，不碰其余内容）。 */
+export function readEntriesByIds(filePath, byId, ids) {
+  if (!ids || ids.length === 0) return [];
+  const out = [];
+  const fd = openSync(filePath, "r");
+  try {
+    for (const id of ids) {
+      const span = byId.get(id);
+      if (!span) continue;
+      const len = span.end - span.start;
+      if (len <= 0) continue;
+      const buf = Buffer.allocUnsafe(len);
+      let filled = 0;
+      while (filled < len) {
+        const n = readSync(fd, buf, filled, len - filled, span.start + filled);
+        if (n <= 0) break;
+        filled += n;
+      }
+      if (filled < len) continue; // 文件被截断/重写 → 跳过这条而不是塞进半截内容
+      try {
+        out.push(JSON.parse(buf.toString("utf8")));
+      } catch {
+        /* 坏行跳过 */
+      }
+    }
+  } finally {
+    closeSync(fd);
+  }
+  return out;
+}
+
 // ---------------------------------------------------------------- `/tree` 元数据
 
 /** 把任意 content（字符串 / 内容块数组）压成纯文本。 */

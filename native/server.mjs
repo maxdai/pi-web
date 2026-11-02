@@ -18,7 +18,16 @@
  */
 import { createServer } from "node:http";
 import { sessionDisplayName } from "./session-name.mjs";
-import { buildIndex, buildTreeMeta, countEntries, lastEntryId, readPage } from "./session-history.mjs";
+import {
+  buildIndex,
+  buildTreeMeta,
+  countEntries,
+  lastEntryId,
+  readEntriesByIds,
+  readPage,
+  resolvePath,
+  scanTreeIndex,
+} from "./session-history.mjs";
 import { createRequire } from "node:module";
 import { spawn, execFileSync } from "node:child_process";
 import { readdir, readFile, stat } from "node:fs/promises";
@@ -385,8 +394,11 @@ const NATIVE_COMMANDS = [
 ];
 
 function withNativeCommands(commands) {
-  const names = new Set(commands.map((c) => c?.name));
-  return [...commands, ...NATIVE_COMMANDS.filter((c) => !names.has(c.name))];
+  // 桥接自己的 `pi-web:*` 命令（reload / set-scoped-models / navigate-tree）是内部通道，
+  // 不是给用户敲的 → 一律不进 `/` 菜单（navigate-tree 尤其不能暴露）
+  const visible = commands.filter((c) => !String(c?.name ?? "").startsWith("pi-web:"));
+  const names = new Set(visible.map((c) => c?.name));
+  return [...visible, ...NATIVE_COMMANDS.filter((c) => !names.has(c.name))];
 }
 
 // ------------------------------------------------------------------ 状态构建
@@ -582,7 +594,7 @@ function ensureHistoryIndex() {
 }
 
 /** `/tree` 元数据缓存（设计 §26）：按「文件 + 大小」命中；树导航只改内存叶指针、文件不变，
- *  所以叶指针**不进缓存**，每次由 lastEntryId 现算（二期改为桥接上报）。 */
+ *  所以叶指针**不进缓存**（见下方 currentLeafId）。 */
 let treeMetaCache = null;
 
 function ensureTreeMeta() {
@@ -600,17 +612,55 @@ function ensureTreeMeta() {
   }
 }
 
+/** 当前叶指针：初始为 null（= 文件最后一条，未导航时等价）；树导航后由桥接上报，
+ *  之后每次 `entry_appended` 也跟着推进（追加必然挂在当前叶上）。设计 §26.8。 */
+let currentLeafId = null;
+
+/** 树骨架缓存（id → {parentId,start,end}），用于「按路径取历史」。按「文件+大小」命中。 */
+let treeScanCache = null;
+
+function ensureTreeScan() {
+  const file = session?.path;
+  if (!file) return null;
+  try {
+    const size = statSync(file).size;
+    if (treeScanCache && treeScanCache.file === file && treeScanCache.size === size) return treeScanCache.scan;
+    const scan = scanTreeIndex(file);
+    treeScanCache = { file, size, scan };
+    return scan;
+  } catch (err) {
+    logErr(`[pi-web] tree scan failed: ${err.message}`);
+    return null;
+  }
+}
+
+/** 当前分支的 id 列表（根 → 叶）。拿不到骨架时返回 null，调用方退回文件顺序。 */
+function currentPathIds() {
+  const file = session?.path;
+  const scan = file ? ensureTreeScan() : null;
+  if (!file || !scan) return null;
+  const index = ensureHistoryIndex();
+  const leaf = currentLeafId ?? (index ? lastEntryId(file, index) : null);
+  if (!leaf) return null;
+  const ids = resolvePath(scan.byId, leaf);
+  return ids.length > 0 ? ids : null;
+}
+
 async function sendHistory(target) {
   const file = session?.path;
   const index = file ? ensureHistoryIndex() : null;
   if (file && index) {
-    // 尾部优先：只解析并发送最近 HISTORY_TAIL 条（§20）
-    const total = countEntries(index);
+    // 尾部优先：只解析并发送最近 HISTORY_TAIL 条（§20）。分支过后按**路径**取（§26.8）：
+    // 线性会话里 path == 文件顺序，行为与过去完全一致，不需要特例。
+    const pathIds = currentPathIds();
+    const total = pathIds ? pathIds.length : countEntries(index);
     const from = Math.max(0, total - HISTORY_TAIL);
-    const entries = readPage(file, index, from, total);
+    const entries = pathIds
+      ? readEntriesByIds(file, ensureTreeScan().byId, pathIds.slice(from, total))
+      : readPage(file, index, from, total);
     const frame = {
       type: "history",
-      data: { entries, from, total, hasMore: from > 0, leafId: lastEntryId(file, index) },
+      data: { entries, from, total, hasMore: from > 0, leafId: pathIds ? pathIds[pathIds.length - 1] : lastEntryId(file, index) },
     };
     log(`[pi-web] history: ${entries.length}/${total} 条（from=${from}${from > 0 ? "，可继续往前加载" : ""}）`);
     if (target) target.send(JSON.stringify(frame));
@@ -815,6 +865,8 @@ child.stdout.on("data", (chunk) => {
     // 运行态必须在这里记账：晚连/刷新的客户端拿不到 agent_start，只能靠快照恢复指示器
     if (ev.type === "agent_start") agentActive = true;
     else if (ev.type === "agent_end" || ev.type === "agent_settled") agentActive = false;
+    // 追加必然发生在当前叶上 → 新条目就是新叶（树导航后仍成立，见设计 §26.8）
+    else if (ev.type === "entry_appended" && ev.entry?.id) currentLeafId = ev.entry.id;
     broadcast(ev);
     if (STATS_REFRESH_EVENTS.has(ev.type)) void sendStats();
   }
@@ -1087,7 +1139,7 @@ async function handleClientMessage(ws, msg) {
         await sendSessionInfo();
         break;
       case "tree": {
-        // TUI /tree 的一期：只读查看器（设计 §26）。数据取自会话文件（轻量元数据），
+        // TUI /tree 的查看器（设计 §26/§26.8）。数据取自会话文件（轻量元数据），
         // 不走 RPC get_tree —— 后者要序列化全部 entry（含消息体），大会话 14.7s（§20 实测）。
         const file = session?.path;
         const index = file ? ensureHistoryIndex() : null;
@@ -1100,10 +1152,24 @@ async function handleClientMessage(ws, msg) {
         ws.send(
           JSON.stringify({
             type: "tree",
-            data: { nodes, leafId: lastEntryId(file, index), sessionFile: file },
+            data: { nodes, leafId: currentLeafId ?? lastEntryId(file, index), sessionFile: file },
           }),
         );
         log(`[pi-web] tree: ${nodes.length} 条（${Date.now() - startedAt}ms）`);
+        break;
+      }
+      case "tree_navigate": {
+        // 二期：选中即切换分支（设计 §26.8）。走扩展命令 —— RPC 没有 navigate 命令，
+        // 而 ExtensionCommandContext.navigateTree 在 RPC 模式下已绑定（rpc-mode.ts:329）。
+        // 命令 handler 自己负责 abort + waitForIdle，因此这里可以给长超时。
+        const targetId = typeof msg.id === "string" ? msg.id.trim() : "";
+        if (!targetId) break;
+        try {
+          await rpc("prompt", { message: `/pi-web:navigate-tree ${targetId}` }, { timeoutMs: RPC_LONG_TIMEOUT_MS });
+        } catch (err) {
+          logErr(`[pi-web] tree_navigate failed: ${err.message}`);
+          broadcast({ type: "tree_navigated", data: { ok: false, error: err.message } });
+        }
         break;
       }
       case "compact":
@@ -1141,18 +1207,22 @@ async function handleClientMessage(ws, msg) {
         await sendState();
         break;
       case "history_page": {
-        // 按需加载更早的一页（§20）：只解析该页，不经过 Pi
+        // 按需加载更早的一页（§20）：只解析该页，不经过 Pi。
+        // `before`/`from`/`total` 在分支会话里是**路径内序号**（§26.8），与 sendHistory 同口径。
         const file = session?.path;
         const index = file ? ensureHistoryIndex() : null;
         if (!file || !index) {
           ws.send(JSON.stringify({ type: "history_page", data: { entries: [], from: 0, hasMore: false } }));
           break;
         }
-        const total = countEntries(index);
+        const pathIds = currentPathIds();
+        const total = pathIds ? pathIds.length : countEntries(index);
         const before = Math.max(0, Math.min(Number(msg.before ?? total) || total, total));
         const limit = Math.max(1, Math.min(Number(msg.limit ?? HISTORY_TAIL) || HISTORY_TAIL, 2000));
         const from = Math.max(0, before - limit);
-        const entries = readPage(file, index, from, before);
+        const entries = pathIds
+          ? readEntriesByIds(file, ensureTreeScan().byId, pathIds.slice(from, before))
+          : readPage(file, index, from, before);
         log(`[pi-web] history_page: ${entries.length} 条（${from}..${before}/${total}）`);
         ws.send(JSON.stringify({ type: "history_page", data: { entries, from, hasMore: from > 0 } }));
         break;
@@ -1497,6 +1567,25 @@ const server = createServer(async (req, res) => {
         const resolve = scopedApplyResolve;
         scopedApplyResolve = null;
         if (resolve) resolve(data ?? { ok: false, error: "empty result" });
+        return reply({ ok: true });
+      }
+      if (route === "tree-nav") {
+        // 桥接回报树导航结果（设计 §26.8）：先按新路径重发历史（前端会清屏重绘），
+        // 再通知前端收尾（关窗、回填输入框）——顺序不能反，否则提示行会被重绘清掉。
+        const targetId = typeof data.targetId === "string" ? data.targetId : null;
+        if (data.ok && !data.cancelled && typeof data.leafId === "string") {
+          currentLeafId = data.leafId;
+          log(`[pi-web] tree navigate → leaf ${data.leafId}`);
+          await sendHistory();
+          broadcast({
+            type: "tree_navigated",
+            data: { leafId: data.leafId, editorText: data.editorText ?? null, targetId },
+          });
+        } else {
+          const error = data.error ?? (data.cancelled ? "Navigation cancelled" : "Navigation failed");
+          logErr(`[pi-web] tree navigate failed: ${error}`);
+          broadcast({ type: "tree_navigated", data: { ok: false, error, targetId } });
+        }
         return reply({ ok: true });
       }
       if (route === "theme-ack") {

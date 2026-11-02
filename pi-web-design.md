@@ -2173,3 +2173,70 @@ message_update 共 84 个；前 6 个到达时刻 4.02s / 4.02s / 4.02s / 4.09s 
 它是 `#modal-list` 的最后一个子节点，自然会被滚出视口。改为 `position: sticky; bottom: 0` +
 **不透明背景** `var(--code-bg)`（否则行会从字底下穿过），位置由滚动容器自身固定，不需要额外的 DOM 结构。
 实测：`scrollTop = 0 / 400 / 10591` 三种位置下该行都贴在列表底边（与底边间距 0）。
+
+### 26.8 二期：选中即切换分支（不做摘要，2026-10-28 方案）
+
+**执行链**（不动 Pi）：
+
+```
+前端 Enter → WS {type:"tree_navigate", id}
+          → 服务端 rpc("prompt", "/pi-web:navigate-tree <id>")     // 扩展命令，streaming 中也立即执行
+          → bridge handler: ctx.abort()?(非 idle 时) → ctx.waitForIdle()
+                            → ctx.navigateTree(id, {summarize:false})
+                            → 读 ctx.sessionManager.getLeafId() / getEntry(id) 取回填文本
+                            → POST /side/tree-nav {ok, leafId, editorText}
+          → 服务端: currentLeafId = leafId → 重发 history（按新路径）→ 广播 tree_navigated
+          → 前端: closeModal + 输入框回填（若有）+ 消息区按新路径重绘
+```
+
+**为什么用扩展命令触发**：RPC 协议里**没有** navigate 命令（`rpc-types.ts` 的 request 联合里只有
+`fork`/`switch_session`/`get_tree`），而 `ExtensionCommandContext.navigateTree` 在 RPC 模式下已被绑定
+（`rpc-mode.ts:329-338`）；命令是拿到这个上下文的唯一途径，且 pi-web 已有同款用法
+（`/pi-web:reload`、`/pi-web:set-scoped-models`）。
+
+**路径感知的历史（二期的真正工程量）**：一旦发生过分支，文件里就同时存在多条分支的条目，
+"文件顺序 = 当前上下文"这个前提失效（`server.mjs` 的 `sendHistory`/`history_page`、`lastEntryId` 都依赖它）。
+做法：
+
+1. `scanTreeIndex(file)`：按行扫一遍，用行首正则 `/^\{"type":"…","id":"…","parentId":…/` 取 `id/parentId`
+   + 字节区间；失配行（扩展写入的 `custom`/`custom_message` 把 `customType` 放在前面，实测占 0.7%）
+   回退 `JSON.parse`。实测 40 MB / 15.6k 条约 **17 ms**（对照：`buildIndex` 扫字节 ~0.2 s、全量 `get_entries` 14.7 s）。
+2. `resolvePath(byId, leafId)`：从叶沿 `parentId` 回溯到根，反转成"根 → 叶"的 id 数组。
+3. `readEntriesByIds(file, byId, ids)`：只按字节区间读**该分支上要显示的 N 条**并解析。
+4. `sendHistory` / `history_page` 改为按路径取；`total`/`from`/`before` 的语义从"文件内序号"变成"路径内序号"。
+   **线性会话（path == 文件顺序）行为与现在完全一致**，因此不需要为"是否分支过"写特例。
+5. 叶指针来源：初始值用 `lastEntryId`（未导航时正确）；导航后由 `/side/tree-nav` 上报；
+   每次 `entry_appended` 也把叶推进到新条目（追加必然发生在当前叶上）。
+
+**其他约束**：
+
+- 导航会**中止正在进行的回答**（TUI 同样先 abort：`interactive-mode.ts:5600-5604`）；排队消息不还原（与现行 abort 一致）。
+- 目标若为 user 消息，`navigateTree` 内部把叶设为它的父节点；RPC 绑定的返回值**不含 `editorText`**
+  （`rpc-mode.ts:329-338` 只回 `{cancelled}`），所以回填文本由 bridge 用 `getEntry(id)` 自行取。
+- 命令 `pi-web:navigate-tree` 必须**不进 `/` 菜单**（服务端过滤 `pi-web:` 前缀），手动输入 `/tree` 由前端拦截。
+- 导航失败（如 `isCompacting`）只提示、不改变界面。
+
+### 26.9 二期实现记录（2026-10-28 落地）
+
+改动面：`native/session-history.mjs`（`scanTreeIndex`/`resolvePath`/`readEntriesByIds`）、
+`native/server.mjs`（路径感知 `sendHistory`/`history_page`、`currentLeafId`、WS `tree_navigate`、侧信道 `tree-nav`、
+过滤 `pi-web:` 命令）、`native/bridge.mjs`（注册 `pi-web:navigate-tree` + 两个文本提取 helper）、
+`static/app.js`（Enter/点击即导航、`tree_navigated` 收尾）。
+
+**实现中踩到的坑（已修）**：`scanTreeIndex` 起初用 `raw.split("\n")` 的**字符下标**当文件偏移，
+中文条目一多偏移就飘（UTF-16 码元 ≠ 字节）→ `readEntriesByIds` 按错误区间读回垃圾，
+表现为 **history 整页 0 条**（`0/15662 条`，实测复现 ✗）。改为按 Buffer 扫 `\n` 求字节偏移、
+只对需要解析的行做 `toString`。
+
+**实测**（`mv-main` 副本 40 MB / 15,662 条）：
+
+| 指标 | 数值 |
+|---|---|
+| `scanTreeIndex`（读 40 MB + 扫字节 + 取 id/parentId） | 约 0.22 s，其中扫字节本身 ~20 ms；按「文件+大小」缓存 |
+| 线性会话首屏 history | 300 条，`from=15362/total=15662`，与改造前一致 |
+| 翻页（`history_page`） | 每页 300 条，`from` 连续递减（路径内序号） |
+| 导航到首条 user 消息的父节点 | history 变成 5 条（叶→根路径），输入框回填该条文本 ✓ |
+| 导航到中段某节点 | 46 条消息，顶部「↑ 还有 8694 条更早」→ 翻页后 103 条 ✓ |
+| 重开树 | 当前叶 `●` 落在可见行上；再点同一行 → `Already at this point`（不重复导航）✓ |
+| `/` 菜单 | 36 条命令，**不含** `pi-web:*`，含 `/tree` ✓ |
+| smoke | 42/42 ✓（注：导航到很短的路径后「滚动门控」会因页面不需要滚动而失败，属测试前置条件，重启实例即恢复） |

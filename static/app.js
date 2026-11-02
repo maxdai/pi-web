@@ -442,6 +442,9 @@ class PiWebClient {
       case 'tree':
         this.handleTreeData(data.data);
         break;
+      case 'tree_navigated':
+        this.handleTreeNavigated(data.data);
+        break;
       case 'history_page':
         this.prependHistory(data.data);
         break;
@@ -2179,7 +2182,7 @@ class PiWebClient {
   }
 
   // ------------------------------------------------------------------
-  // /tree 会话树（设计文档 §26；一期 = 只读查看器，切换分支在二期）
+  // /tree 会话树（设计文档 §26 / §26.8）
   // ------------------------------------------------------------------
 
   /** TUI `/tree` 对应物：取树数据并打开模态。 */
@@ -2187,10 +2190,42 @@ class PiWebClient {
     this.treeNodes = null;
     this.treeLeafId = null;
     this.treeSelectedId = null;
+    this.treeNavigating = false;
     this.treeFilter = 'default'; // 与 TUI settings.treeFilterMode 默认一致
     this.openModal('Session Tree', 'tree');
     this.modalList.innerHTML = '<div class="modal-message">Loading tree...</div>';
     this.send({ type: 'tree' });
+  }
+
+  /** 选中即切换分支（§26.8）：Enter / 点击 → 让 Pi 移动叶指针 → 服务端按新路径重发历史。 */
+  navigateTreeTo(id) {
+    if (this.modalMode !== 'tree' || !id || this.treeNavigating) return;
+    if (id === this.treeLeafId) {
+      // 与 TUI 一致：选中的就是当前位置 → 什么都不做
+      this.appendNotifyLine('Already at this point', 'info');
+      return;
+    }
+    this.treeNavigating = true;
+    const footer = this.modalList.querySelector('.tree-footer');
+    if (footer) footer.textContent = 'Navigating…';
+    this.send({ type: 'tree_navigate', id });
+  }
+
+  /** 导航结果（服务端先重发 history、再发这条，所以提示行不会被重绘清掉）。 */
+  handleTreeNavigated(data) {
+    this.treeNavigating = false;
+    if (data?.error) {
+      this.appendNotifyLine(`Tree navigation failed: ${data.error}`, 'warning');
+      return;
+    }
+    if (this.modalMode === 'tree') this.closeModal();
+    const text = typeof data?.editorText === 'string' ? data.editorText : '';
+    if (text && !this.inputEl.value.trim()) {
+      this.inputEl.value = text; // 选中的是用户消息 → 回填输入框（TUI 同语义）
+      this.inputEl.dispatchEvent(new Event('input'));
+      this.inputEl.focus();
+    }
+    this.appendNotifyLine('Navigated to selected point', 'info');
   }
 
   handleTreeData(data) {
@@ -2370,7 +2405,11 @@ class PiWebClient {
 
     const rowEls = [...this.modalList.querySelectorAll('.tree-row')];
     rowEls.forEach((el) => {
-      el.addEventListener('click', () => this.setModalCursor(rowEls.indexOf(el)));
+      el.addEventListener('click', () => {
+        this.setModalCursor(rowEls.indexOf(el));
+        // Enter 走 activateModalCursor() → 点击当前行，所以这里就是「选中即导航」的落点（§26.8）
+        this.navigateTreeTo(el.dataset.id || '');
+      });
     });
     // 光标定位：优先保留上次选中项，其次当前叶（叶是隐藏条目时退到最近的可见祖先）
     const prevIdx = rows.findIndex((row) => row.node.id === this.treeSelectedId);
