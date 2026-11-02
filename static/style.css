@@ -1677,9 +1677,14 @@ body {
   color: var(--accent);
 }
 
-/* 底部计数行：不是 .modal-item，键盘光标会跳过它 */
+/* 底部计数行：不是 .modal-item，键盘光标会跳过它。
+   sticky 贴在 #modal-list 的滚动视口底部 —— 否则上万行的树一往上滚，计数/filter 状态就没了
+   （2026-10-28 用户实测反馈）。背景必须不透明，否则行会从字底下穿过去。 */
 .tree-footer {
+  position: sticky;
+  bottom: 0;
   padding: 8px 8px 2px;
+  background: var(--code-bg);
   color: var(--muted);
   font-size: 12px;
 }
