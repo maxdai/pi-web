@@ -18,7 +18,7 @@
  */
 import { createServer } from "node:http";
 import { sessionDisplayName } from "./session-name.mjs";
-import { buildIndex, countEntries, lastEntryId, readPage } from "./session-history.mjs";
+import { buildIndex, buildTreeMeta, countEntries, lastEntryId, readPage } from "./session-history.mjs";
 import { createRequire } from "node:module";
 import { spawn, execFileSync } from "node:child_process";
 import { readdir, readFile, stat } from "node:fs/promises";
@@ -581,6 +581,25 @@ function ensureHistoryIndex() {
   return historyIndex;
 }
 
+/** `/tree` 元数据缓存（设计 §26）：按「文件 + 大小」命中；树导航只改内存叶指针、文件不变，
+ *  所以叶指针**不进缓存**，每次由 lastEntryId 现算（二期改为桥接上报）。 */
+let treeMetaCache = null;
+
+function ensureTreeMeta() {
+  const file = session?.path;
+  if (!file) return null;
+  try {
+    const size = statSync(file).size;
+    if (treeMetaCache && treeMetaCache.file === file && treeMetaCache.size === size) return treeMetaCache.nodes;
+    const nodes = buildTreeMeta(file);
+    treeMetaCache = { file, size, nodes };
+    return nodes;
+  } catch (err) {
+    logErr(`[pi-web] tree meta failed: ${err.message}`);
+    return null;
+  }
+}
+
 async function sendHistory(target) {
   const file = session?.path;
   const index = file ? ensureHistoryIndex() : null;
@@ -1067,6 +1086,26 @@ async function handleClientMessage(ws, msg) {
         // TUI /session 等价物：只读信息模态（与 SDK 宿主 broadcastSessionInfo 同形同内容）
         await sendSessionInfo();
         break;
+      case "tree": {
+        // TUI /tree 的一期：只读查看器（设计 §26）。数据取自会话文件（轻量元数据），
+        // 不走 RPC get_tree —— 后者要序列化全部 entry（含消息体），大会话 14.7s（§20 实测）。
+        const file = session?.path;
+        const index = file ? ensureHistoryIndex() : null;
+        if (!file || !index) {
+          ws.send(JSON.stringify({ type: "tree", data: { nodes: [], leafId: null } }));
+          break;
+        }
+        const startedAt = Date.now();
+        const nodes = ensureTreeMeta() ?? [];
+        ws.send(
+          JSON.stringify({
+            type: "tree",
+            data: { nodes, leafId: lastEntryId(file, index), sessionFile: file },
+          }),
+        );
+        log(`[pi-web] tree: ${nodes.length} 条（${Date.now() - startedAt}ms）`);
+        break;
+      }
       case "compact":
         await rpc("compact", {}, { timeoutMs: RPC_LONG_TIMEOUT_MS });
         await sendState();

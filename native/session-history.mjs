@@ -7,7 +7,7 @@
  *
  *  内存：每条目一个字节偏移（15k 条 ≈ 15k 个数字），不保留解析后的对象。
  */
-import { closeSync, openSync, readSync, statSync } from "node:fs";
+import { closeSync, openSync, readFileSync, readSync, statSync } from "node:fs";
 
 const CHUNK = 4 * 1024 * 1024;
 
@@ -97,9 +97,144 @@ export function countEntries(index) {
   return index.offsets.length;
 }
 
-/** 当前 leafId：文件 append 顺序的最后一个条目（等价于 RPC `get_entries` 的 `leafId`）。 */
+/** 当前 leafId：文件 append 顺序的最后一个条目（等价于 RPC `get_entries` 的 `leafId`）。
+ *
+ *  ⚠️ 这个等价关系**只在从未做过树导航时成立**：`navigateTree` 不带摘要时只移动内存叶指针、
+ *  **不追加任何条目**（core/session-manager.ts:1579/1591），此后文件最后一条 ≠ 当前叶。
+ *  二期做 `/tree` 导航时必须改由桥接上报 `ctx.sessionManager.getLeafId()`（设计 §26.4）。
+ */
 export function lastEntryId(filePath, index) {
   const total = countEntries(index);
   if (total === 0) return null;
   return readPage(filePath, index, total - 1, total)[0]?.id ?? null;
+}
+
+// ---------------------------------------------------------------- `/tree` 元数据
+
+/** 把任意 content（字符串 / 内容块数组）压成纯文本。 */
+function contentText(content) {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .filter((c) => c && c.type === "text" && typeof c.text === "string")
+    .map((c) => c.text)
+    .join(" ");
+}
+
+/** 压成一行并截断（树里每条只占一行，正文不进 payload）。 */
+function oneLine(value, max = 200) {
+  const text = String(value ?? "")
+    .replace(/[\r\n\t]+/g, " ")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+  return text.length > max ? text.slice(0, max - 1) + "…" : text;
+}
+
+function argsPreview(args) {
+  if (args === undefined || args === null) return "";
+  try {
+    return oneLine(typeof args === "string" ? args : JSON.stringify(args), 60);
+  } catch {
+    return "";
+  }
+}
+
+/** 一条 entry 的单行摘要（对齐 TUI `TreeSelectorComponent.getEntryDisplayText`）。 */
+function entryText(entry, toolCalls) {
+  switch (entry.type) {
+    case "message": {
+      const msg = entry.message ?? {};
+      const role = msg.role;
+      const text = oneLine(contentText(msg.content));
+      if (role === "user") return `user: ${text}`;
+      if (role === "assistant") {
+        if (text) return `assistant: ${text}`;
+        if (msg.stopReason === "aborted") return "assistant: (aborted)";
+        if (msg.errorMessage) return `assistant: ${oneLine(msg.errorMessage, 80)}`;
+        return "assistant: (no content)";
+      }
+      if (role === "toolResult") {
+        const call = msg.toolCallId ? toolCalls.get(msg.toolCallId) : null;
+        return call ? `[${call}]` : `[${msg.toolName ?? "tool"}]`;
+      }
+      if (role === "bashExecution") return `[bash]: ${oneLine(msg.command, 120)}`;
+      return `[${role ?? "message"}]`;
+    }
+    case "custom_message": {
+      const text = typeof entry.content === "string" ? entry.content : contentText(entry.content);
+      return `[${entry.customType ?? "custom"}]: ${oneLine(text)}`;
+    }
+    case "compaction":
+      return `[compaction: ${Math.round((entry.tokensBefore ?? 0) / 1000)}k tokens]`;
+    case "branch_summary":
+      return `[branch summary]: ${oneLine(entry.summary)}`;
+    case "model_change":
+      return `model: ${entry.modelId ?? ""}`;
+    case "thinking_level_change":
+      return `thinking: ${entry.thinkingLevel ?? ""}`;
+    case "custom":
+      return `custom: ${entry.customType ?? ""}`;
+    case "context_edit":
+      return `context edit: ${entry.replacement === null ? "omit" : "replace"} ${entry.targetId ?? ""}`;
+    case "session_info":
+      return `title: ${entry.name ?? ""}`;
+    case "label":
+      return `label: ${entry.label ?? ""}`;
+    default:
+      return `[${entry.type}]`;
+  }
+}
+
+/**
+ * `/tree` 的轻量元数据（设计 §26）：只保留 `id/parentId/类型/role/时间/一行摘要/标签`，丢弃正文。
+ *
+ * 为什么不用 RPC `get_tree`：它返回**完整 entry**（含消息体），大会话下正是 §20 实测 14.7 s 的老路。
+ * 整份读取 + 解析实测（41 MB / 15,663 条）约 330 ms，可接受；调用方按文件大小做缓存。
+ */
+export function buildTreeMeta(filePath) {
+  const raw = readFileSync(filePath, "utf8");
+  const nodes = [];
+  const labels = new Map(); // targetId → { label, ts }
+  const toolCalls = new Map(); // toolCallId → "name(args)"
+
+  for (const line of raw.split("\n")) {
+    if (!line.trim()) continue;
+    let entry;
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      continue; // 坏行跳过（与 pii 的处理一致）
+    }
+    if (!entry || typeof entry !== "object" || typeof entry.id !== "string" || !entry.type) continue; // header / 坏行
+    if (entry.type === "session") continue; // 第 1 行的 session header（不是树里的条目）
+    // label / usage 也**保留为节点**（默认 filter 会隐藏）：它们是真实的树条目，
+    // 叶指针可能正好落在它们上面；丢掉会让"叶 → 根"的父链断掉、当前分支高亮全丢（实测 ✗）。
+    if (entry.type === "label") labels.set(entry.targetId, { label: entry.label, ts: entry.timestamp ?? null });
+    // 先记下工具调用 → 后面的 toolResult 行显示 "name(args)"（与 TUI 的 toolCallMap 同思路）
+    if (entry.type === "message" && entry.message?.role === "assistant" && Array.isArray(entry.message.content)) {
+      for (const block of entry.message.content) {
+        if (block && block.type === "toolCall" && typeof block.id === "string") {
+          toolCalls.set(block.id, `${block.name}(${argsPreview(block.arguments)})`);
+        }
+      }
+    }
+    const node = {
+      id: entry.id,
+      parentId: typeof entry.parentId === "string" ? entry.parentId : null,
+      type: entry.type,
+      ts: typeof entry.timestamp === "string" ? entry.timestamp : null,
+      text: entryText(entry, toolCalls),
+    };
+    if (entry.type === "message") node.role = entry.message?.role ?? null;
+    nodes.push(node);
+  }
+
+  for (const node of nodes) {
+    const hit = labels.get(node.id);
+    if (hit && hit.label) {
+      node.label = hit.label;
+      node.labelTs = hit.ts;
+    }
+  }
+  return nodes;
 }

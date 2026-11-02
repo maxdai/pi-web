@@ -9,6 +9,7 @@ const BUILTIN_COMMANDS = [
   { name: 'reload', description: 'Reload session resources and extensions', builtin: true, action: 'reload' },
   { name: 'export', description: 'Export session to HTML (or .jsonl)', builtin: true, action: 'export' },
   { name: 'session', description: 'Show session information', builtin: true, action: 'session' },
+  { name: 'tree', description: 'Show session tree (branches)', builtin: true, action: 'tree' },
   { name: 'resume', description: 'Switch to another session', builtin: true, action: 'resume' },
   { name: 'name', description: 'Set session display name', builtin: true, action: 'name' },
   { name: 'login', description: 'Configure provider authentication (not supported in web)', builtin: true, unsupported: true },
@@ -160,10 +161,22 @@ const ANSI_REGEX = /\x1b\[([\d;]*)m/g;
 // 导航键：↑↓ 循环移动，PageUp/PageDown 跳 10 项，Esc 关闭。
 // ---------------------------------------------------------------------------
 /** 需要搜索框的 modal 形态（列表型）；其余形态不显示搜索框 */
-const SEARCHABLE_MODAL_MODES = new Set(['resume', 'model', 'thinking', 'scoped-models', 'extension-select']);
+const SEARCHABLE_MODAL_MODES = new Set(['resume', 'model', 'thinking', 'scoped-models', 'extension-select', 'tree']);
 /** 光标导航适用的形态（列表型 + 单选 confirm 的两个按钮） */
 const CURSOR_MODAL_MODES = new Set([...SEARCHABLE_MODAL_MODES, 'extension-confirm', 'model-scoped']);
 const CURSOR_PAGE_STEP = 10;
+/** `/tree` 的 filter 循环（顺序与 TUI 的 `[` / `]` 一致，见 tree-selector.ts:1068-1078） */
+const TREE_FILTERS = ['default', 'no-tools', 'user-only', 'labeled-only', 'all'];
+const TREE_FILTER_LABELS = { 'no-tools': 'no-tools', 'user-only': 'user', 'labeled-only': 'labeled', all: 'all' };
+/** default 视图里隐藏的记账类条目（与 TUI 的 isSettingsEntry 一致） */
+const TREE_HIDDEN_TYPES = new Set([
+  'label',
+  'context_edit',
+  'custom',
+  'model_change',
+  'thinking_level_change',
+  'session_info',
+]);
 
 /** Convert ANSI-escaped text to HTML with inline styles. */
 function ansiToHtml(text) {
@@ -425,6 +438,9 @@ class PiWebClient {
         break;
       case 'history':
         this.renderHistory(data.data);
+        break;
+      case 'tree':
+        this.handleTreeData(data.data);
         break;
       case 'history_page':
         this.prependHistory(data.data);
@@ -2150,6 +2166,8 @@ class PiWebClient {
       this.send({ type: 'export', path: path });
     } else if (cmd.action === 'session') {
       this.send({ type: 'session' });
+    } else if (cmd.action === 'tree') {
+      this.openTreeView();
     } else if (cmd.action === 'resume') {
       this.openResumePicker();
     } else if (cmd.action === 'name') {
@@ -2158,6 +2176,214 @@ class PiWebClient {
         this.send({ type: 'set_session_name', name: newName.trim() });
       }
     }
+  }
+
+  // ------------------------------------------------------------------
+  // /tree 会话树（设计文档 §26；一期 = 只读查看器，切换分支在二期）
+  // ------------------------------------------------------------------
+
+  /** TUI `/tree` 对应物：取树数据并打开模态。 */
+  openTreeView() {
+    this.treeNodes = null;
+    this.treeLeafId = null;
+    this.treeSelectedId = null;
+    this.treeFilter = 'default'; // 与 TUI settings.treeFilterMode 默认一致
+    this.openModal('Session Tree', 'tree');
+    this.modalList.innerHTML = '<div class="modal-message">Loading tree...</div>';
+    this.send({ type: 'tree' });
+  }
+
+  handleTreeData(data) {
+    if (this.modalMode !== 'tree') return; // 弹窗已被关掉（Esc）→ 不要再画
+    this.treeNodes = Array.isArray(data?.nodes) ? data.nodes : [];
+    this.treeLeafId = data?.leafId ?? null;
+    this.renderTreeList();
+  }
+
+  renderTreeList() {
+    if (this.modalMode !== 'tree') return;
+    const all = this.treeNodes;
+    if (!all) return;
+    const byId = new Map();
+    for (const node of all) byId.set(node.id, node);
+
+    // 1) 父 → 子（保持文件顺序 = TUI 的子节点顺序）；父不在文件里的当根
+    const childrenOf = new Map();
+    const roots = [];
+    for (const node of all) {
+      const parent = node.parentId && byId.has(node.parentId) ? node.parentId : null;
+      if (parent === null) roots.push(node.id);
+      else {
+        let list = childrenOf.get(parent);
+        if (!list) childrenOf.set(parent, (list = []));
+        list.push(node.id);
+      }
+    }
+
+    // 2) 可见性：先按 filter + 搜索筛，再把每个可见节点挂到**最近的可见祖先**上
+    const tokens = (this.modalSearch?.value || '').toLowerCase().trim().split(/\s+/).filter(Boolean);
+    const visible = new Set();
+    for (const node of all) {
+      if (node.type === 'usage') continue;
+      const isLeaf = node.id === this.treeLeafId;
+      // 只有工具调用、没有正文的 assistant 消息默认不显示（TUI 同规则；当前叶例外）
+      if (node.type === 'message' && node.role === 'assistant' && !isLeaf && /\(no content\)$/.test(node.text || '')) {
+        continue;
+      }
+      if (this.treeFilter === 'user-only') {
+        if (!(node.type === 'message' && node.role === 'user')) continue;
+      } else if (this.treeFilter === 'no-tools') {
+        if (TREE_HIDDEN_TYPES.has(node.type)) continue;
+        if (node.type === 'message' && node.role === 'toolResult') continue;
+      } else if (this.treeFilter === 'labeled-only') {
+        if (!node.label) continue;
+      } else if (this.treeFilter !== 'all') {
+        if (TREE_HIDDEN_TYPES.has(node.type)) continue;
+      }
+      if (tokens.length) {
+        const haystack = `${node.text || ''} ${node.label || ''}`.toLowerCase();
+        if (!tokens.every((t) => haystack.includes(t))) continue;
+      }
+      visible.add(node.id);
+    }
+
+    const visParent = new Map();
+    for (const id of visible) {
+      let parent = byId.get(id)?.parentId ?? null;
+      while (parent && !visible.has(parent)) parent = byId.get(parent)?.parentId ?? null;
+      visParent.set(id, parent ?? null);
+    }
+    const visChildren = new Map();
+    for (const node of all) {
+      if (!visible.has(node.id)) continue;
+      const parent = visParent.get(node.id) ?? null;
+      let list = visChildren.get(parent);
+      if (!list) visChildren.set(parent, (list = []));
+      list.push(node.id);
+    }
+
+    // 3) 排版：**逐字移植 TUI 的缩进/连接线规则**（tree-selector.ts:495-575）
+    //    关键点：线性链路**不缩进**（只有分支点才 +1），否则一条 5000 条的直链会把文字挤到屏幕外；
+    //    连接线也只出现在"有多个子节点"的位置，竖向引导线靠 gutters 在位。
+    const multiRoot = (visChildren.get(null) || []).length > 1;
+    const topIds = visChildren.get(null) || [];
+    const layout = new Map(); // id → { indent, showConnector, isLast, gutters, isVirtualRootChild }
+    const order = [];
+    const stack = [];
+    for (let i = topIds.length - 1; i >= 0; i--) {
+      stack.push({
+        id: topIds[i],
+        indent: multiRoot ? 1 : 0,
+        justBranched: multiRoot,
+        showConnector: multiRoot,
+        isLast: i === topIds.length - 1,
+        gutters: [],
+        isVirtualRootChild: multiRoot,
+      });
+    }
+    while (stack.length) {
+      const item = stack.pop();
+      layout.set(item.id, item);
+      order.push(item.id);
+      const kids = visChildren.get(item.id) || [];
+      const multipleChildren = kids.length > 1;
+      const childIndent = multipleChildren
+        ? item.indent + 1
+        : item.justBranched && item.indent > 0
+          ? item.indent + 1
+          : item.indent;
+      const connectorDisplayed = item.showConnector && !item.isVirtualRootChild;
+      const displayIndent = multiRoot ? Math.max(0, item.indent - 1) : item.indent;
+      const childGutters = connectorDisplayed
+        ? [...item.gutters, { position: Math.max(0, displayIndent - 1), show: !item.isLast }]
+        : item.gutters;
+      for (let i = kids.length - 1; i >= 0; i--) {
+        stack.push({
+          id: kids[i],
+          indent: childIndent,
+          justBranched: multipleChildren,
+          showConnector: multipleChildren,
+          isLast: i === kids.length - 1,
+          gutters: childGutters,
+          isVirtualRootChild: false,
+        });
+      }
+    }
+
+    /** 一行树的前缀：gutters 占位 + 末三位放 └─/├─（与 TUI 的逐字符拼接一致）。 */
+    const rowPrefix = (item) => {
+      const displayIndent = multiRoot ? Math.max(0, item.indent - 1) : item.indent;
+      const connector = item.showConnector && !item.isVirtualRootChild ? (item.isLast ? '└─ ' : '├─ ') : '';
+      const connectorPosition = connector ? displayIndent - 1 : -1;
+      let out = '';
+      for (let i = 0; i < displayIndent * 3; i++) {
+        const level = Math.floor(i / 3);
+        const posInLevel = i % 3;
+        const gutter = item.gutters.find((g) => g.position === level);
+        if (gutter) out += posInLevel === 0 ? (gutter.show ? '│' : ' ') : ' ';
+        else if (connector && level === connectorPosition)
+          out += posInLevel === 0 ? connector[0] : posInLevel === 1 ? '─' : ' ';
+        else out += ' ';
+      }
+      return out; // 连接线已在循环里占掉最后三位，不能再拼一次
+    };
+    const rows = order.map((id) => ({ node: byId.get(id), prefix: rowPrefix(layout.get(id)) })).filter((r) => r.node);
+
+    // 4) 当前分支路径（叶 → 根）与当前叶标记
+    const activePath = new Set();
+    let cursorId = this.treeLeafId;
+    for (let guard = 0; cursorId && guard < 200000; guard++) {
+      activePath.add(cursorId);
+      cursorId = byId.get(cursorId)?.parentId ?? null;
+    }
+
+    const rowClass = (node) => {
+      if (node.type === 'message') {
+        if (node.role === 'user') return 'tree-user';
+        if (node.role === 'assistant') return 'tree-assistant';
+        return 'tree-muted';
+      }
+      if (node.type === 'branch_summary' || node.type === 'compaction') return 'tree-accent';
+      return 'tree-dim';
+    };
+
+    this.modalList.innerHTML =
+      rows
+        .map(({ node, prefix }) => {
+          const isLeaf = node.id === this.treeLeafId;
+          const mark = isLeaf
+            ? '<span class="tree-current">● </span>'
+            : activePath.has(node.id)
+              ? '<span class="tree-path">• </span>'
+              : '';
+          const label = node.label ? `<span class="tree-label">[${this.escapeHtml(node.label)}] </span>` : '';
+          return (
+            `<div class="modal-item tree-row${isLeaf ? ' current' : ''}" data-id="${this.escapeAttr(node.id)}">` +
+            `<span class="tree-prefix">${this.escapeHtml(prefix)}</span>${mark}${label}` +
+            `<span class="${rowClass(node)}">${this.escapeHtml(node.text || '')}</span></div>`
+          );
+        })
+        .join('') +
+      `<div class="tree-footer">(${rows.length}/${all.length})` +
+      `${this.treeFilter === 'default' ? '' : ` [${TREE_FILTER_LABELS[this.treeFilter] ?? this.treeFilter}]`}` +
+      ` · Tab: filter · Esc: close</div>`;
+
+    const rowEls = [...this.modalList.querySelectorAll('.tree-row')];
+    rowEls.forEach((el) => {
+      el.addEventListener('click', () => this.setModalCursor(rowEls.indexOf(el)));
+    });
+    // 光标定位：优先保留上次选中项，其次当前叶（叶是隐藏条目时退到最近的可见祖先）
+    const prevIdx = rows.findIndex((row) => row.node.id === this.treeSelectedId);
+    let leafIdx = rows.findIndex((row) => row.node.id === this.treeLeafId);
+    if (leafIdx < 0 && this.treeLeafId) {
+      let parentId = byId.get(this.treeLeafId)?.parentId ?? null;
+      for (let guard = 0; parentId && guard < 200000; guard++) {
+        leafIdx = rows.findIndex((row) => row.node.id === parentId);
+        if (leafIdx >= 0) break;
+        parentId = byId.get(parentId)?.parentId ?? null;
+      }
+    }
+    this.setModalCursor(prevIdx >= 0 ? prevIdx : leafIdx >= 0 ? leafIdx : 0);
   }
 
   bindInput() {
@@ -2274,7 +2500,11 @@ class PiWebClient {
     if (this.modalSearch) {
       this.modalSearch.addEventListener('input', () => {
         if (this.modalMode === 'scoped-models') this.renderScopedModelsList();
-        else this.filterModalItems();
+        else if (this.modalMode === 'tree') {
+          // 树重建要重排全部行（万条会话约 0.4s/次）→ 抖一下，别每个字符都重建一次
+          clearTimeout(this.treeSearchTimer);
+          this.treeSearchTimer = setTimeout(() => this.renderTreeList(), 120);
+        } else this.filterModalItems();
       });
     }
     document.addEventListener('keydown', (e) => {
@@ -2290,6 +2520,14 @@ class PiWebClient {
       if (!modalOpen || !CURSOR_MODAL_MODES.has(this.modalMode)) return;
       // 输入法组合期间（中文选词）的 Enter 不是“提交”：不拦会发送半截文本 / 误触列表动作
       if (e.isComposing || e.keyCode === 229) return;
+      // /tree：Tab 循环切换 filter（对齐 TUI 的 `[` / `]` / Tab）
+      if (this.modalMode === 'tree' && e.key === 'Tab') {
+        e.preventDefault();
+        const idx = TREE_FILTERS.indexOf(this.treeFilter);
+        this.treeFilter = TREE_FILTERS[(idx + 1) % TREE_FILTERS.length];
+        this.renderTreeList();
+        return;
+      }
       if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
         e.preventDefault();
         this.moveModalCursor(e.key === 'ArrowDown' ? 1 : -1);
@@ -2361,6 +2599,8 @@ class PiWebClient {
     this.modalCursor = idx;
     items.forEach((el, i) => el.classList.toggle('cursor', i === idx));
     if (idx >= 0 && items[idx]) items[idx].scrollIntoView({ block: 'nearest' });
+    // /tree：记住选中项，重新渲染（搜索/filter）后仍停在同一条
+    if (this.modalMode === 'tree' && idx >= 0 && items[idx]) this.treeSelectedId = items[idx].dataset.id || null;
   }
 
   /** Enter：单选列表 = 选中当前项；多选列表 = 切换勾选（复用各自的点击逻辑）。 */
@@ -2415,6 +2655,7 @@ class PiWebClient {
     this.modalMode = null;
     this.modalCursor = -1;
     this.currentExtRequest = null;
+    clearTimeout(this.treeSearchTimer); // /tree 搜索防抖：关窗后别再重建
     this.stopDialogCountdown();
     this.inputEl.focus();
   }

@@ -1624,3 +1624,62 @@ body {
 .tok-rate {
   opacity: 0.8;
 }
+
+/* --------------------------------------------------------------------------
+   /tree 会话树（设计文档 §26）
+   树形行必须等宽：└─ / │ / 空格按字符宽度对齐，非等宽字体会整体错位。
+   长行不折行（截断 + 横向可滚），否则一条摘要会占两三行、树的层级结构看不出来。
+   -------------------------------------------------------------------------- */
+.modal-item.tree-row {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.5;
+  padding: 2px 8px;
+  white-space: pre;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.modal-item.tree-row.current {
+  font-weight: 600;
+}
+
+.tree-prefix {
+  color: var(--dim);
+}
+
+.tree-user {
+  color: var(--accent);
+}
+
+.tree-assistant {
+  color: var(--bash-mode);
+}
+
+.tree-muted {
+  color: var(--muted);
+}
+
+.tree-dim {
+  color: var(--dim);
+}
+
+.tree-accent {
+  color: var(--accent);
+}
+
+.tree-label {
+  color: var(--warning);
+}
+
+.tree-path,
+.tree-current {
+  color: var(--accent);
+}
+
+/* 底部计数行：不是 .modal-item，键盘光标会跳过它 */
+.tree-footer {
+  padding: 8px 8px 2px;
+  color: var(--muted);
+  font-size: 12px;
+}

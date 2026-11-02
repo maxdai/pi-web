@@ -2066,3 +2066,105 @@ message_update 共 84 个；前 6 个到达时刻 4.02s / 4.02s / 4.02s / 4.09s 
 4. **渲染**：用户消息气泡按 content 块渲染图片（实时与历史同路径 ✓），因此刷新后仍能看到自己贴的图 ✓。
 
 **未做**：拖拽上传 ✗（同一套 base64 处理，需要时再加）；图片压缩/缩放 ✗（原样发送，与 TUI 一致）。
+
+## 26. `/tree` 会话树（2026-10-28 方案，待实现）
+
+**目标**：把 TUI 的 `/tree` 搬到 Web —— 以 ASCII 树展示会话分支、标出当前叶指针、可选中任意节点**切换分支**（之后继续对话从该点长出新枝）。
+
+### 26.1 Pi 侧事实（已核对源码）
+
+| 环节 | 事实 | 证据 |
+|---|---|---|
+| 入口 | `/tree` → `showTreeSelector()` | `interactive-mode.ts:3240` → `:5532` |
+| 数据 | `sessionManager.getTree()` + `getLeafId()`；默认 filter 来自 settings `treeFilterMode` | `:5533-5535` |
+| 选中当前点 | no-op（不重复导航） | `:5549-5551` |
+| 摘要询问 | 三选一 `No summary / Summarize / Summarize with custom prompt` | `:5555-5585` |
+| 导航 | `session.navigateTree(entryId, { summarize, customInstructions, label })` | `agent-session.ts:4024` |
+| 前置校验 | `isStreaming` / `isCompacting` 时**抛错** | `:4028-4035` |
+| 叶指针语义 | 目标是 **user message** → 新叶 = 其 `parentId`（可到 `null`），文本回填编辑器；其他 → 新叶 = 目标节点 | `:4152-4166` |
+| 落盘 | 带摘要 → 在目标位置追加 `branch_summary` 条目；**不带摘要 → 只改内存叶指针，文件一行不写** | `session-manager.ts:1579`(branch)、`:1591`(resetLeaf)、`:1600`(branchWithSummary) |
+| 收尾 | 发扩展事件 `session_tree` | `:4202` |
+| 摘要实现 | 仅 `options.summarize === true` 时才调 `generateBranchSummary`（1 次模型调用，reserveTokens 16384） | `:4096-4105`、`settings-defaults.ts:14-17` |
+
+### 26.2 可行性（三条链路都通，故无需改 Pi）
+
+| 需要 | 现成入口 | 证据 |
+|---|---|---|
+| 读树 / 读叶指针 | extension ctx 的 `sessionManager.getTree()` / `getLeafId()`；RPC 也有 `get_tree` | `rpc-types.ts:66,219` |
+| 执行导航 | `ExtensionCommandContext.navigateTree`，**RPC 模式已实现绑定** | `rpc-mode.ts:329-338`、`extensions/types.ts:422` |
+| 触发命令 | 命令可经 RPC `prompt("/name args")` 触发，**streaming 中也立即执行** | `agent-session.ts:2098-2108`、`:2180-2190` |
+| 结果回传 | bridge 既有 `/side/*` 侧信道 | `bridge.mjs` |
+| 既有先例 | pi-web 已在用命令触发：`/pi-web:reload`、`/pi-web:set-scoped-models` | `server.mjs:538,1182` |
+
+**做法**：bridge 注册内部命令 `pi-web:navigate-tree <entryId>`；handler 里
+`await ctx.abort(); await ctx.waitForIdle(); const r = await ctx.navigateTree(entryId, { summarize: false });`
+再把新叶指针与结果经侧信道上报；host 收到后按新路径重绘。
+
+### 26.3 决策
+
+1. **不做摘要**（等价于永远选 `No summary`）。理由：① 用户明确只需要切换分支；② 扩展 API **没有** `abortBranchSummary`
+   （`core/extensions/` 0 命中），做摘要就无法提供"取消"，只能让用户干等一次模型调用；③ 不摘要时整条链路纯本地，无模型成本。
+   因此也**不弹** TUI 那个三选一弹窗，`branchSummary.skipPrompt` 对本项目无意义。
+2. **树数据用本地会话文件**，不用 RPC `get_tree`：后者返回**完整 entry（含消息体）**，大会话会重演 §20 的 14.7s 问题
+   （§20 已论证全量 `get_entries` 不可用）。改为复用 `session-history.mjs` 的行偏移索引，一次性轻量解析出
+   `{ id, parentId, type, role, timestamp, label }` 元数据（丢弃正文），据此建树与算路径。
+3. **分期**：一期只读查看器（树 + 当前点 + 搜索/filter，不导航）；二期加"选中即切换分支"。
+   三期（可选，未排期）：摘要、label 编辑、复制条目、双击 Esc 打开（对应 `settings.doubleEscapeAction`）。
+
+### 26.4 实现要点与坑
+
+1. **`leafId` 语义必须改**：现在 `server.mjs:594` 与 `session-history.mjs:100` 直接把"文件最后一条"当叶指针——
+   树导航后两者不再等价（未摘要导航**不写文件**）。改为：叶指针经侧信道向 bridge 取（`ctx.sessionManager.getLeafId()`），
+   仅在"文件尾条 == 路径末条"时才能沿用旧快路径。
+2. **重绘必须按路径过滤**：现有渲染是"文件顺序 + 分页"（§20）。改为先按 `parentId` 从叶回溯出路径集合，
+   再做"路径感知分页"（可见条目只算路径上的），否则会把已放弃的分支也渲染出来。
+   元数据 map 只建一次并随文件增量扩展，避免每次开 `/tree` 全量重解析。
+3. **streaming 中导航**：`navigateTree` 会抛错 → handler 内先 `abort` + `waitForIdle`（TUI 同样是先 abort，`interactive-mode.ts:5600-5604`）。
+   TUI 还会 `restoreQueuedMessagesToEditor()`，一期**不做**（与 pi-web 现有 abort 行为保持一致），实测后再定。
+4. **目标为用户消息时回填输入框**：`navigateTree` 会返回 `editorText`，但 **RPC 绑定版只回 `{cancelled}`**
+   （`rpc-mode.ts:329-338`）→ 文本由 bridge 自己算（目标 entry 的 user 文本）并在侧信道一并返回，前端填入输入框。
+5. **命令会污染 `/` 菜单**：注册命令默认出现在补全列表（demo 命令因此默认关闭，`server.mjs:259`）→
+   `pi-web:navigate-tree` 必须从 commands 列表里**永久过滤**，且手动输入也由前端拦截（`/tree` 由前端处理，不下发 Pi）。
+6. **`/tree` 是 TUI 专有命令**，RPC 侧不存在同义命令；前端 `selectCommand` 命中 `/tree` 时发自己的 WS 帧，不调用 `prompt`。
+
+### 26.5 验收标准
+
+- 打开 `/tree`：树结构、当前叶高亮、↑↓/Enter/Esc、搜索与 filter 与 TUI 视觉一致（filter 取 `default` 语义）；
+- 选中旧节点：不弹摘要框、不发 prompt、不产生新会话文件；消息区重绘为**该分支路径**，树中当前点随之移动；
+- 选中 user message：输入框回填该条文本，叶指针指向其父节点；
+- 导航后继续发消息：新条目挂在目标节点下（会话文件里 `parentId` 正确），刷新浏览器后仍显示该分支；
+- 长会话（≥10k 条）打开 `/tree` 不阻塞发送，重绘不重演 §20 的卡顿；
+- 既有 smoke（42 项）与宿主契约核对器保持全绿。
+
+### 26.6 明确不做
+
+摘要生成（含 custom prompt）✗、label 编辑 ✗、条目复制 ✗、双击 Esc 打开树 ✗（均列为三期可选项）、
+`/fork`（用户消息选择器）✗（另一个命令，另行讨论）。
+
+### 26.7 一期实现记录（2026-10-28 落地）
+
+改动面：`native/session-history.mjs`（新增 `buildTreeMeta`）、`native/server.mjs`（WS 帧 `tree` + 元数据缓存）、
+`static/app.js`（`/tree` 内建命令 + 树形模态）、`static/style.css`（`.tree-*`）。**未改 Pi**。
+
+实现中确认/踩到的四点（都已修）：
+
+1. **label / usage 条目必须留在树里**：它们默认被 filter 隐藏，但叶指针可能正好落在它们上面
+   （实测：会话最后一条是 `label` 或 `thinking_level_change`）——把它们从元数据里剔掉会让"叶 → 根"的父链断在半路，
+   表现为**整棵树一条高亮都没有** ✗。修法：全部保留为节点、只由 filter 隐藏（与 TUI 一致）。
+2. **缩进必须是"分支才缩进"**：TUI 的规则是 `childIndent = 多子 ? +1 : (刚分叉 && indent>0 ? +1 : indent)`
+   （`tree-selector.ts:534-544`）；照普通树那样"每层 +3 字符"会让 5000 条的**直链**缩进到屏幕外 ✗（实测深度 490 就完全看不到文字）。
+   连接线同理：只有"有多个子节点"的位置才画 `├─/└─`，竖向 `│` 由 gutters 保持。
+3. **页脚当前叶通常不可见**：叶若是记账条目，`●` 不出现；光标要退到**最近的可见祖先**（TUI `findNearestVisibleIndex` 同义）。
+4. **搜索要防抖**：万条会话每次重建约 0.3~0.4 s，逐字符重建会卡 ✗ → 120 ms 防抖。
+
+实测（40 MB / 15,662 条的 `mv-main` 会话副本）：
+
+| 指标 | 数值 |
+|---|---|
+| `buildTreeMeta` 首次（读 + 解析全文件） | 约 0.48 s（一次性，之后按"文件+大小"命中缓存） |
+| WS 帧大小 | 约 2.8 MB（只有一行摘要 + id/parentId/类型） |
+| 首次打开 `/tree` → 树渲染完成 | 约 0.93~1.5 s |
+| 搜索一次（含重建） | 约 0.35 s（防抖后不再逐字符触发） |
+| default filter 可见行 | 9,253 / 15,662（隐藏工具结果之外还有记账条目） |
+
+对照：RPC `get_tree` 走的是"全量 entry（含消息体）序列化"的老路（§20 实测 14.7 s），因此不采用。
