@@ -2240,3 +2240,68 @@ message_update 共 84 个；前 6 个到达时刻 4.02s / 4.02s / 4.02s / 4.09s 
 | 重开树 | 当前叶 `●` 落在可见行上；再点同一行 → `Already at this point`（不重复导航）✓ |
 | `/` 菜单 | 36 条命令，**不含** `pi-web:*`，含 `/tree` ✓ |
 | smoke | 42/42 ✓（注：导航到很短的路径后「滚动门控」会因页面不需要滚动而失败，属测试前置条件，重启实例即恢复） |
+
+## 27. 回合结束后折叠过程内容（2026-11-03 已实现）
+
+**目标**：agent 还在跑的时候**保持现在的输出量**（thinking 全文、工具块预览、实时流）；等**这一轮 agent loop 彻底结束**后，
+把本轮的过程信息收敛成一行，让最终正文自己站出来。纯前端改动（`static/app.js` + `style.css`），不动服务端、不动 Pi。
+
+### 27.1 触发点：`agent_settled`（不是 `agent_end`）
+
+| 事件 | 语义 | 结论 |
+|---|---|---|
+| `turn_end` | 每次 LLM 调用结束（工具循环中途也发） | ✗ 会在半路折叠 |
+| `agent_end` | 一次 run 结束，但携带 `willRetry`（可能马上重试） | ✗ 重试场景误折 |
+| `agent_settled` | run 循环（含 follow-up 队列、settle 边界）**排空后**发一次 | ✓ 就是"这一轮完成" |
+
+证据：`agent-session.ts:1908-1937`（`agent.prompt` → `while (_handlePostAgentRun / _runBeforeSettleBoundary)` →
+`finally { _emitAgentSettled() }`）；前端已有该分支（`app.js` 的 `case 'agent_settled'`）。
+
+### 27.2 折叠形态（**全部本地文本处理，不调模型**）
+
+| 块 | 展开时（运行中） | 折叠后（settled） |
+|---|---|---|
+| thinking | 全文流式 | 一行：`Thinking… <thinking 首行纯文本，截断 ~60 字>` |
+| 工具块 | 参数 + 输出预览（bash 5 行 / 其他 10 行）+ 时长 | 一行：`✓ 名称 · 时长 · N 行 — <输出首个非空行，截断 ~80 字>` |
+
+- 首行摘要都是**字符串截断**（`split("\n")[0]` + 截断），**不经过 LLM**；
+- 折叠后**点击任意位置即可展开**（工具块点标题展开/收起，点输出区仍是"预览 ↔ 全文"）；
+- 用户**手动展开过**的块记住 `data-user-expanded`，后续 settled 不再自动收起；
+- 历史重放（刷新 / 加载更早）本来属于已完成的回合 → **创建即折叠**；
+- 中间正文（工具调用之间的 assistant 文字）**不折叠**。
+
+### 27.3 两个必须处理的副作用
+
+1. **高度骤减会跳视口**：折叠前记录视口顶部锚点元素及其 `offsetTop`，折叠后按差值补偿 `scrollTop`；
+   处于贴底跟随时则保持贴底（复用 `followBottom` / `stickToBottom()`）。
+2. **流式重绘会丢状态**：`renderAssistantContent` 每个增量都会 `innerHTML = ''` 重建，所以折叠状态**只能**在
+   settled（所有增量与 `message_end` 都结束之后）施加；历史块则靠"创建即折叠"的初始属性，不依赖后续事件。
+
+### 27.4 验收标准
+
+- 运行中观感与现在**完全一致**（thinking 全文、工具块预览、实时流）；
+- settled 后：本轮 thinking 全部变一行带首行摘要、工具块全部变一行带状态/名称/时长/行数/输出首行；
+- 点击任一折叠块可展开全文；展开过的块在后续 settled 中保持展开；
+- 刷新页面：历史轮次默认折叠，正在跑的那一轮保持展开；
+- 折叠瞬间：上滚阅读视口不跳；贴底时保持贴底；
+- smoke 42/42 保持全绿。
+
+### 27.5 实现记录与实测（2026-11-03）
+
+改动面：`static/app.js`（`renderAssistantContent` 的 thinking 包装、`createToolBlock` 的摘要行与点击语义、
+`collapseFinishedTurn` / `withScrollAnchor`、`agent_settled` 分支、`renderHistory`/`prependHistory` 的 replaying 标记）、
+`static/style.css`（`.thinking-block` / `.tool-summary` / 折叠态隐藏规则）、`tools/smoke.mjs`（新增 3 项断言）。
+**未改服务端、未改 Pi。**
+
+实测：
+
+| 场景 | 结果 |
+|---|---|
+| 用真实模型跑一轮（`ls` + 一句话总结） | 运行中过程块展开（`data-collapsed=false`）；`agent_settled` 后 thinking → `Thinking… <首行>`、工具 → `✓ bash · 0.0s · 10 行 — AGENTS.md`，正文可见 ✓ |
+| 手动点击展开 | 展开后 `data-user-expanded=true`，**再次 settled 不会被收起** ✓ |
+| 历史重放（刷新 / 分页） | 创建即折叠，thinking 头为 `Thinking… <首行>` ✓ |
+| 滚动锚定（34 轮已折叠历史 + 1 轮运行中，视口在 400px 处上滚） | 折叠后锚点位移 **0px**、`followBottom` 保持不变 ✓ |
+| 短文档（内容折叠后不足一屏） | 锚点会被浏览器按 `maxScroll` 夹紧而位移（无法避免，非实现缺陷） |
+| 冒烟 | **45/45**（新增 3 项：折叠形态、摘要格式、展开后不再收起） |
+
+备注：折叠行里的时长沿用 TUI 的 `formatDuration`（一位小数），极快的命令会显示 `0.0s` —— 与 TUI 一致，不另做特化。

@@ -1688,3 +1688,53 @@ body {
   color: var(--muted);
   font-size: 12px;
 }
+
+/* --------------------------------------------------------------------------
+   回合结束后的过程块折叠（设计文档 §27）
+   运行中保持原样（thinking 全文、工具块预览）；`agent_settled` 后收成一行，
+   点一下即可展开。折叠行都是本地文本截断，不经过模型。
+   -------------------------------------------------------------------------- */
+.thinking-block {
+  margin: 6px 0;
+}
+
+.thinking-block .thinking-head {
+  display: none;
+  color: var(--thinking);
+  font-style: italic;
+  font-size: 13px;
+  opacity: 0.85;
+  cursor: pointer;
+  user-select: none;
+  padding: 1px 0;
+}
+
+.thinking-block[data-collapsed='true'] .thinking-head {
+  display: block;
+}
+
+.thinking-block[data-collapsed='true'] .thinking {
+  display: none;
+}
+
+/* 工具块折叠行：与标题区分开，暗一档 */
+.tool-block .tool-summary {
+  display: none;
+  color: var(--muted);
+  font-size: 12px;
+  font-family: var(--font-mono);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-top: 2px;
+}
+
+.tool-block[data-collapsed='true'] .tool-summary {
+  display: block;
+}
+
+.tool-block[data-collapsed='true'] .tool-args,
+.tool-block[data-collapsed='true'] .tool-output,
+.tool-block[data-collapsed='true'] .tool-meta {
+  display: none;
+}

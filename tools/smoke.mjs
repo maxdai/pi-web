@@ -449,6 +449,53 @@ const results = await page.evaluate(() => {
   client.closeModal();
   client.lastState = { ...client.lastState, scopedModels: [] };
 
+  // 回合结束后折叠过程块（设计 §27）：运行中保持展开 → agent_settled 收成一行；
+  // 手动展开过的块不再被自动收起。
+  client.startAssistantMessage({ role: "assistant", content: [] });
+  const smokeBody = client.streaming.body;
+  client.renderAssistantContent(
+    { content: [{ type: "thinking", thinking: "smoke 思考首行\n细节" }, { type: "text", text: "smoke 正文" }] },
+    smokeBody,
+  );
+  client.onToolStart({ toolCallId: "smoke-collapse-tool", toolName: "bash", args: { command: "echo collapse" } });
+  client.onToolEnd({
+    type: "tool_execution_end",
+    toolCallId: "smoke-collapse-tool",
+    toolName: "bash",
+    isError: false,
+    result: { content: [{ type: "text", text: "smoke out line 1\nsmoke out line 2" }] },
+    durationMs: 1500,
+  });
+  const thinkBlock = smokeBody.querySelector(".thinking-block");
+  // onToolEnd 会把它从 toolEls 里删掉 → 直接从 DOM 取
+  const toolBlock = document.querySelector('[data-tool-call-id="smoke-collapse-tool"]');
+  const shown = (el) => !!el && el.offsetParent !== null;
+  out.collapse = {
+    duringThinkingOpen: thinkBlock?.dataset.collapsed === "false" && shown(thinkBlock.querySelector(".thinking")),
+    duringToolOpen: toolBlock?.dataset.collapsed === "false" && shown(toolBlock.querySelector(".tool-output")),
+  };
+  client.renderEvent({ type: "agent_settled" });
+  out.collapse.headText = thinkBlock?.querySelector(".thinking-head")?.textContent ?? "";
+  out.collapse.thinkingCollapsed =
+    thinkBlock?.dataset.collapsed === "true" &&
+    !shown(thinkBlock.querySelector(".thinking")) &&
+    shown(thinkBlock.querySelector(".thinking-head"));
+  out.collapse.toolCollapsed =
+    toolBlock?.dataset.collapsed === "true" &&
+    !shown(toolBlock.querySelector(".tool-output")) &&
+    shown(toolBlock.querySelector(".tool-summary"));
+  out.collapse.summaryText = toolBlock?.querySelector(".tool-summary")?.textContent ?? "";
+  // 手动展开 → 再次 settled 不应被收起
+  toolBlock?.querySelector(".tool-summary")?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  out.collapse.expandedAfterClick = toolBlock?.dataset.collapsed === "false";
+  client.renderEvent({ type: "agent_settled" });
+  out.collapse.manualExpandKept =
+    toolBlock?.dataset.collapsed === "false" && toolBlock?.dataset.userExpanded === "true";
+  const smokeMsgEl = client.streaming?.el;
+  client.resetStreaming();
+  smokeMsgEl?.remove();
+  toolBlock?.remove();
+
   // 清理本次注入的节点（按 smoke 标签精确识别，避免误判会话里本就存在的块）
   const cleanup = () => {
     for (const el of [...document.querySelectorAll(".special-block")]) {
@@ -563,6 +610,26 @@ check(
     results.scrollGate.followOffAfterScrollUp &&
     results.scrollGate.notYankedWhileScrolledUp,
   JSON.stringify(results.scrollGate),
+);
+
+check(
+  "过程块折叠：运行中展开 / 回合结束后收成一行",
+  results.collapse.duringThinkingOpen &&
+    results.collapse.duringToolOpen &&
+    results.collapse.thinkingCollapsed &&
+    results.collapse.toolCollapsed &&
+    results.collapse.headText.startsWith("Thinking…"),
+  JSON.stringify(results.collapse),
+);
+check(
+  "工具折叠摘要含状态/名称/时长/行数/输出首行",
+  /^✓ bash · 1\.5s · 2 行 — smoke out line 1$/.test(results.collapse.summaryText),
+  JSON.stringify(results.collapse.summaryText),
+);
+check(
+  "折叠后点击展开，且不再被后续回合收起",
+  results.collapse.expandedAfterClick === true && results.collapse.manualExpandKept === true,
+  JSON.stringify({ expandedAfterClick: results.collapse.expandedAfterClick, manualExpandKept: results.collapse.manualExpandKept }),
 );
 
 // 注入节点应已被清理，且全程无新增 pageerror

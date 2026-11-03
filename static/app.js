@@ -846,7 +846,14 @@ class PiWebClient {
     this.historyTotal = data?.total ?? entries.length;
     this.historyLoading = false;
     this.loadedEntryIds = new Set();
-    for (const entry of entries) this.renderEntryOnce(entry);
+    // 历史条目都属于**已完成的回合** → 过程块创建即折叠（设计 §27）；
+    // 正在跑的那一轮会由随后的实时事件继续展开渲染。
+    this.replaying = true;
+    try {
+      for (const entry of entries) this.renderEntryOnce(entry);
+    } finally {
+      this.replaying = false;
+    }
     this.updateHistoryLoader(data?.hasMore === true);
     this.stickToBottom(); // 跟住式贴底：布局/离屏高度晚增长时也要停在底部
   }
@@ -888,7 +895,12 @@ class PiWebClient {
     const scroller = document.getElementById('scroll-view');
     const beforeHeight = scroller ? scroller.scrollHeight : 0;
     const startIndex = this.contentEl.childNodes.length;
-    for (const entry of entries) this.renderEntryOnce(entry);
+    this.replaying = true; // 更早的分页同属已完成回合 → 过程块创建即折叠（§27）
+    try {
+      for (const entry of entries) this.renderEntryOnce(entry);
+    } finally {
+      this.replaying = false;
+    }
     // 新节点被 append 到末尾，先摘出来再整体插到顶部
     const added = Array.from(this.contentEl.childNodes).slice(startIndex);
     for (const node of added) node.remove();
@@ -1163,6 +1175,8 @@ class PiWebClient {
         break;
       case 'agent_settled':
         this.resetStreaming();
+        // 这一轮 agent loop 彻底结束（含 follow-up 队列与重试）→ 把过程内容收成一行（§27）
+        this.collapseFinishedTurn();
         if (this.status.working > 0) this.status.working--;
         this.updateStatusDisplay();
         break;
@@ -1528,10 +1542,26 @@ class PiWebClient {
     body.innerHTML = '';
     for (const block of message.content || []) {
       if (block.type === 'thinking') {
+        // 过程块（设计 §27）：运行中完整显示正文，回合结束后由 collapseFinishedTurn() 收成一行。
+        const wrap = document.createElement('div');
+        wrap.className = 'thinking-block';
+        wrap.dataset.collapsed = this.replaying ? 'true' : 'false';
+        const head = document.createElement('div');
+        head.className = 'thinking-head';
+        head.textContent = this.thinkingHeadText(block.thinking);
         const p = document.createElement('div');
         p.className = 'thinking body-text';
         p.innerHTML = this.renderMarkdown(block.thinking);
-        body.appendChild(p);
+        wrap.appendChild(head);
+        wrap.appendChild(p);
+        wrap.addEventListener('click', (e) => {
+          const collapsed = wrap.dataset.collapsed === 'true';
+          // 展开态下只有点标题才收起；正文里的点击是选字，不要打扰
+          if (!collapsed && !e.target.closest('.thinking-head')) return;
+          wrap.dataset.collapsed = collapsed ? 'false' : 'true';
+          if (collapsed) wrap.dataset.userExpanded = 'true';
+        });
+        body.appendChild(wrap);
       } else if (block.type === 'text') {
         const p = document.createElement('div');
         p.className = 'body-text';
@@ -1539,6 +1569,22 @@ class PiWebClient {
         body.appendChild(p);
       }
     }
+  }
+
+  /** 折叠行文案：`Thinking… <首行截断>` —— 纯字符串处理，不经过模型（设计 §27.2）。 */
+  thinkingHeadText(thinking) {
+    const first = String(thinking || '')
+      .split('\n')
+      .map((line) => line.trim())
+      .find(Boolean);
+    return first ? `Thinking… ${this.shortenText(first, 60)}` : 'Thinking…';
+  }
+
+  /** 去掉 ANSI 控制码 + 压成一行 + 截断（折叠行摘要专用）。 */
+  shortenText(value, max) {
+    const plain = String(value ?? '').replace(ANSI_REGEX, '');
+    if (plain.length <= max) return plain;
+    return plain.slice(0, max - 1) + '…';
   }
 
   finalizeAssistantMessage(message) {
@@ -1574,7 +1620,7 @@ class PiWebClient {
     div.addEventListener('click', (e) => {
       const dx = e.clientX - downX, dy = e.clientY - downY;
       if (dx * dx + dy * dy > 9) return; // dragged: preserve selection
-      toggleFn(div);
+      toggleFn(div, e);
     });
   }
 
@@ -1584,6 +1630,8 @@ class PiWebClient {
     div.dataset.toolCallId = toolCallId || '';
     div.dataset.toolName = toolName || '';
     div.dataset.expanded = 'false';
+    // 过程块折叠态（设计 §27）：历史重放＝已完成回合 → 创建即折叠；实时＝展开
+    div.dataset.collapsed = this.replaying ? 'true' : 'false';
 
     const isBash = toolName === 'bash';
 
@@ -1604,6 +1652,11 @@ class PiWebClient {
       title.textContent = toolName || 'tool';
     }
     content.appendChild(title);
+
+    // 折叠行（只在折叠态显示）：`✓ 名称 · 时长 · N 行 — 输出首行`
+    const summary = document.createElement('div');
+    summary.className = 'tool-summary';
+    content.appendChild(summary);
 
     // Args (non-bash)。参数未知（补建的块）时不画 —— 否则会显示一个假的 {}
     const hasArgs = args && typeof args === 'object' && Object.keys(args).length > 0;
@@ -1631,12 +1684,53 @@ class PiWebClient {
     div.appendChild(content);
     div.appendChild(bottom);
 
-    // Click to expand/collapse, but NOT when the pointer was dragged (see
-    // bindExpandToggle - a drag that selected text must preserve selection).
-    this.bindExpandToggle(div, (d) => this.toggleToolExpand(d));
+    // 点击语义（§27.2）：
+    //   折叠态 → 点任意处展开整块；
+    //   展开态 → 点输出区切换"预览 ↔ 全文"，点其它处（标题/摘要/边框）收起整块。
+    // 拖拽选字不算点击（见 bindExpandToggle）。
+    this.bindExpandToggle(div, (d, e) => {
+      if (d.dataset.collapsed === 'true') {
+        this.setBlockCollapsed(d, false);
+        d.dataset.userExpanded = 'true';
+        return;
+      }
+      if (e?.target?.closest?.('.tool-output')) {
+        this.toggleToolExpand(d);
+        return;
+      }
+      this.setBlockCollapsed(d, true);
+    });
 
     this.contentEl.appendChild(div);
     return div;
+  }
+
+  /** 折叠/展开一个过程块（thinking 或工具），并在折叠时重算摘要行。 */
+  setBlockCollapsed(div, collapsed) {
+    div.dataset.collapsed = collapsed ? 'true' : 'false';
+    if (div.classList.contains('tool-block') && collapsed) this.updateToolSummary(div);
+  }
+
+  /** 工具块摘要行：状态 + 名称 + 时长 + 行数 + 输出首行（纯字符串处理，不经过模型）。 */
+  updateToolSummary(div) {
+    const sum = div.querySelector('.tool-summary');
+    if (!sum) return;
+    const name = div.dataset.toolName || 'tool';
+    const failed = div.classList.contains('error');
+    const done = div.classList.contains('success');
+    const mark = failed ? '✗' : done ? '✓' : '…';
+    const parts = [`${mark} ${name}`];
+    const durationEl = div.querySelector('.tool-duration');
+    const duration = (durationEl?.textContent || '').replace(/^Took\s+/, '').trim();
+    if (duration && duration !== 'Running...') parts.push(duration);
+    const full = div.dataset.fullOutput || '';
+    const lines = full ? full.split('\n').length : 0;
+    if (lines > 0) parts.push(`${lines} 行`);
+    const first = full
+      .split('\n')
+      .map((line) => line.trim())
+      .find(Boolean);
+    sum.textContent = parts.join(' · ') + (first ? ` — ${this.shortenText(first, 80)}` : '');
   }
 
   setToolOutput(div, text) {
@@ -1644,6 +1738,7 @@ class PiWebClient {
     if (!out) return;
     div.dataset.fullOutput = text || '';
     this.applyToolPreview(div);
+    if (div.dataset.collapsed === 'true') this.updateToolSummary(div);
   }
 
   applyToolPreview(div) {
@@ -1669,6 +1764,41 @@ class PiWebClient {
     const expanded = div.dataset.expanded === 'true';
     div.dataset.expanded = expanded ? 'false' : 'true';
     this.applyToolPreview(div);
+  }
+
+  /**
+   * 一轮 agent loop 结束后，把本轮的过程块（thinking / 工具块）收成一行（设计 §27）。
+   *
+   * 只处理"还展开着"的块：历史重放创建时就是折叠态，因此不会被重复处理；
+   * 用户手动展开过的块（data-user-expanded）永远不再自动收起。
+   */
+  collapseFinishedTurn() {
+    const targets = [
+      ...this.contentEl.querySelectorAll('.thinking-block[data-collapsed="false"], .tool-block[data-collapsed="false"]'),
+    ].filter((el) => el.dataset.userExpanded !== 'true');
+    if (targets.length === 0) return;
+    this.withScrollAnchor(() => {
+      for (const el of targets) this.setBlockCollapsed(el, true);
+    });
+  }
+
+  /**
+   * 执行一次会大幅改变高度的 DOM 操作，同时保持阅读位置（§27.3）。
+   * 贴底跟随时保持贴底；否则以"视口顶部第一个块"为锚点补偿 scrollTop。
+   */
+  withScrollAnchor(fn) {
+    const scroller = document.getElementById('scroll-view');
+    if (!scroller || this.followBottom) {
+      fn();
+      if (this.followBottom) this.stickToBottom();
+      return;
+    }
+    const viewportTop = scroller.getBoundingClientRect().top;
+    const anchor = [...this.contentEl.children].find((el) => el.getBoundingClientRect().bottom > viewportTop + 1);
+    const beforeTop = anchor ? anchor.getBoundingClientRect().top : null;
+    fn();
+    if (!anchor || beforeTop === null || !anchor.isConnected) return;
+    scroller.scrollTop += anchor.getBoundingClientRect().top - beforeTop;
   }
 
   // TUI-aligned duration formatting (bash.ts formatDuration): one decimal
