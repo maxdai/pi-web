@@ -1713,6 +1713,12 @@ body {
   display: block;
 }
 
+/* 折叠过一轮之后，标题常驻：展开态下它仍然是"点击收起"的入口
+   （早先只在折叠态显示标题 → 展开后无处可点、无法再折叠 ✗，2026-11-03 用户实测反馈）。 */
+.thinking-block[data-finished='true'] .thinking-head {
+  display: block;
+}
+
 .thinking-block[data-collapsed='true'] .thinking {
   display: none;
 }

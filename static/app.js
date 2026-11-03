@@ -1546,9 +1546,11 @@ class PiWebClient {
         const wrap = document.createElement('div');
         wrap.className = 'thinking-block';
         wrap.dataset.collapsed = this.replaying ? 'true' : 'false';
+        if (this.replaying) wrap.dataset.finished = 'true';
         const head = document.createElement('div');
         head.className = 'thinking-head';
-        head.textContent = this.thinkingHeadText(block.thinking);
+        head.dataset.first = this.firstLine(block.thinking);
+        head.textContent = this.thinkingHeadText(head.dataset.first, wrap.dataset.collapsed === 'true');
         const p = document.createElement('div');
         p.className = 'thinking body-text';
         p.innerHTML = this.renderMarkdown(block.thinking);
@@ -1556,10 +1558,10 @@ class PiWebClient {
         wrap.appendChild(p);
         wrap.addEventListener('click', (e) => {
           const collapsed = wrap.dataset.collapsed === 'true';
-          // 展开态下只有点标题才收起；正文里的点击是选字，不要打扰
+          // 展开态下只有点标题才收起（正文里的点击是选字，不打扰）；
+          // 折叠态下整块可见内容只有标题，点哪里都能展开。
           if (!collapsed && !e.target.closest('.thinking-head')) return;
-          wrap.dataset.collapsed = collapsed ? 'false' : 'true';
-          if (collapsed) wrap.dataset.userExpanded = 'true';
+          this.toggleThinkingBlock(wrap);
         });
         body.appendChild(wrap);
       } else if (block.type === 'text') {
@@ -1571,13 +1573,31 @@ class PiWebClient {
     }
   }
 
-  /** 折叠行文案：`Thinking… <首行截断>` —— 纯字符串处理，不经过模型（设计 §27.2）。 */
-  thinkingHeadText(thinking) {
-    const first = String(thinking || '')
-      .split('\n')
-      .map((line) => line.trim())
-      .find(Boolean);
-    return first ? `Thinking… ${this.shortenText(first, 60)}` : 'Thinking…';
+  /** 取一段文本的首个非空行（折叠摘要用，纯本地处理）。 */
+  firstLine(value) {
+    return (
+      String(value || '')
+        .split('\n')
+        .map((line) => line.trim())
+        .find(Boolean) || ''
+    );
+  }
+
+  /** 折叠行文案：`▸ Thinking… <首行截断>` / 展开时 `▾ …` —— 纯字符串处理，不经过模型（§27.2）。 */
+  thinkingHeadText(first, collapsed) {
+    const mark = collapsed ? '▸' : '▾';
+    return first ? `${mark} Thinking… ${this.shortenText(first, 60)}` : `${mark} Thinking…`;
+  }
+
+  /** 切换 thinking 过程块的展开状态，并同步标题上的折叠指示。 */
+  toggleThinkingBlock(wrap) {
+    const collapsed = wrap.dataset.collapsed === 'true';
+    const next = !collapsed;
+    wrap.dataset.collapsed = next ? 'true' : 'false';
+    wrap.dataset.finished = 'true'; // 一旦折叠过，标题就常驻（否则展开后没有可点的收起入口）
+    if (collapsed) wrap.dataset.userExpanded = 'true';
+    const head = wrap.querySelector('.thinking-head');
+    if (head) head.textContent = this.thinkingHeadText(head.dataset.first ?? '', next);
   }
 
   /** 去掉 ANSI 控制码 + 压成一行 + 截断（折叠行摘要专用）。 */
@@ -1705,9 +1725,23 @@ class PiWebClient {
     return div;
   }
 
-  /** 折叠/展开一个过程块（thinking 或工具），并在折叠时重算摘要行。 */
+  /** 折叠/展开一个过程块（thinking 或工具），并在折叠时重算摘要行。
+   *  两种块的「收起入口」都必须在展开态依然可点：
+   *  - thinking：标题行常驻（`data-finished`，CSS 控制），点标题收起；
+   *  - 工具块：标题文字前缀 `▸ / ▾`，点标题收起（早先只有折叠态可见摘要行，展开后无处可点 ✗）。 */
   setBlockCollapsed(div, collapsed) {
     div.dataset.collapsed = collapsed ? 'true' : 'false';
+    div.dataset.finished = 'true';
+    const title = div.querySelector('.tool-title');
+    if (title) {
+      const base = title.dataset.base ?? title.textContent;
+      title.dataset.base = base;
+      title.textContent = `${collapsed ? '▸' : '▾'} ${base}`;
+    }
+    if (div.classList.contains('thinking-block')) {
+      const head = div.querySelector('.thinking-head');
+      if (head) head.textContent = this.thinkingHeadText(head.dataset.first ?? '', collapsed);
+    }
     if (div.classList.contains('tool-block') && collapsed) this.updateToolSummary(div);
   }
 

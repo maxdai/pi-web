@@ -485,12 +485,22 @@ const results = await page.evaluate(() => {
     !shown(toolBlock.querySelector(".tool-output")) &&
     shown(toolBlock.querySelector(".tool-summary"));
   out.collapse.summaryText = toolBlock?.querySelector(".tool-summary")?.textContent ?? "";
+  // 折叠↔展开必须可来回（2026-11-03 用户实测反馈：展开后无法再收起）
+  const thinkHead = thinkBlock?.querySelector(".thinking-head");
+  thinkHead?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  out.collapse.thinkingExpanded = thinkBlock?.dataset.collapsed === "false";
+  thinkHead?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  out.collapse.thinkingRecollapsed = thinkBlock?.dataset.collapsed === "true";
+
   // 手动展开 → 再次 settled 不应被收起
   toolBlock?.querySelector(".tool-summary")?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
   out.collapse.expandedAfterClick = toolBlock?.dataset.collapsed === "false";
   client.renderEvent({ type: "agent_settled" });
   out.collapse.manualExpandKept =
     toolBlock?.dataset.collapsed === "false" && toolBlock?.dataset.userExpanded === "true";
+  // 展开态下点标题仍能收起（标题带 ▾ 指示）
+  toolBlock?.querySelector(".tool-title")?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  out.collapse.toolRecollapsed = toolBlock?.dataset.collapsed === "true";
   const smokeMsgEl = client.streaming?.el;
   client.resetStreaming();
   smokeMsgEl?.remove();
@@ -618,7 +628,7 @@ check(
     results.collapse.duringToolOpen &&
     results.collapse.thinkingCollapsed &&
     results.collapse.toolCollapsed &&
-    results.collapse.headText.startsWith("Thinking…"),
+    results.collapse.headText.includes("Thinking…"),
   JSON.stringify(results.collapse),
 );
 check(
@@ -627,9 +637,19 @@ check(
   JSON.stringify(results.collapse.summaryText),
 );
 check(
-  "折叠后点击展开，且不再被后续回合收起",
-  results.collapse.expandedAfterClick === true && results.collapse.manualExpandKept === true,
-  JSON.stringify({ expandedAfterClick: results.collapse.expandedAfterClick, manualExpandKept: results.collapse.manualExpandKept }),
+  "折叠块可反复展开/收起，且手动展开不被后续回合收起",
+  results.collapse.thinkingExpanded === true &&
+    results.collapse.thinkingRecollapsed === true &&
+    results.collapse.expandedAfterClick === true &&
+    results.collapse.manualExpandKept === true &&
+    results.collapse.toolRecollapsed === true,
+  JSON.stringify({
+    thinkingExpanded: results.collapse.thinkingExpanded,
+    thinkingRecollapsed: results.collapse.thinkingRecollapsed,
+    expandedAfterClick: results.collapse.expandedAfterClick,
+    manualExpandKept: results.collapse.manualExpandKept,
+    toolRecollapsed: results.collapse.toolRecollapsed,
+  }),
 );
 
 // 注入节点应已被清理，且全程无新增 pageerror
