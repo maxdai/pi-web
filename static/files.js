@@ -13,6 +13,7 @@ const state = {
   showHidden: localStorage.getItem("piweb-fs-hidden") !== "0",
   wrap: localStorage.getItem("piweb-fs-wrap") !== "0",
   split: Number(localStorage.getItem("piweb-fs-split")) || 0.42, // 列表占左栏比例
+  listOpen: localStorage.getItem("piweb-fs-list") !== "0",
   selected: null, // 当前查看的文件
 };
 
@@ -294,11 +295,28 @@ el("fs-sort").addEventListener("click", () => {
 });
 el("fs-close-view").addEventListener("click", closeView);
 
-/** 列表/查看器分栏：`#fs-list` 用固定百分比，拖动分栏条调整并记忆。 */
+/** 列表/查看器分栏：`#fs-list` 用固定百分比，拖动分栏条调整并记忆；列表可整体收起。 */
 function applySplit() {
   const viewOpen = !viewEl.hidden;
-  el("fs-splitter").hidden = !viewOpen;
-  listEl.style.flex = viewOpen ? `0 0 ${(state.split * 100).toFixed(2)}%` : "1 1 100%";
+  // 没有打开文件时列表总是显示：否则"收起了列表 + 刷新页面"会得到一片空白（只剩顶栏按钮）✗
+  const listOpen = state.listOpen || !viewOpen;
+  listEl.hidden = !listOpen;
+  el("fs-splitter").hidden = !viewOpen || !listOpen;
+  if (!listOpen) {
+    listEl.style.flex = "";
+    viewEl.style.flex = "1 1 100%";
+  } else if (!viewOpen) {
+    listEl.style.flex = "1 1 100%";
+    viewEl.style.flex = "";
+  } else {
+    listEl.style.flex = `0 0 ${(state.split * 100).toFixed(2)}%`;
+    viewEl.style.flex = "1 1 auto";
+  }
+  const btn = el("fs-toggle-list");
+  // 没有打开文件时按钮本身不显示：此时列表本来就占满整宽，"收起"会变成一个按了没反应的按钮 ✗
+  btn.hidden = !viewOpen;
+  btn.textContent = state.listOpen ? "«" : "»";
+  btn.title = state.listOpen ? "Collapse the file list" : "Expand the file list";
 }
 function startSplitDrag(startEvent) {
   startEvent.preventDefault();
@@ -316,6 +334,13 @@ function startSplitDrag(startEvent) {
   window.addEventListener("pointerup", up);
 }
 el("fs-splitter").addEventListener("pointerdown", startSplitDrag);
+
+// 一键收起/展开左侧文件列表（不用再手动拖分栏条）
+el("fs-toggle-list").addEventListener("click", () => {
+  state.listOpen = !state.listOpen;
+  localStorage.setItem("piweb-fs-list", state.listOpen ? "1" : "0");
+  applySplit();
+});
 el("fs-splitter").addEventListener("dblclick", () => {
   state.split = 0.42;
   applySplit();
