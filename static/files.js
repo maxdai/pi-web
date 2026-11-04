@@ -10,7 +10,7 @@ const state = {
   truncated: false,
   filter: "",
   sort: "name", // name | mtime
-  showHidden: false,
+  showHidden: localStorage.getItem("piweb-fs-hidden") !== "0",
   selected: null, // 当前查看的文件
 };
 
@@ -94,14 +94,17 @@ function renderCrumbs() {
   };
   add("/", "/");
   let acc = "";
-  for (const part of parts) {
+  parts.forEach((part, index) => {
     acc += `/${part}`;
-    const sep = document.createElement("span");
-    sep.className = "fs-sep";
-    sep.textContent = "/";
-    nav.appendChild(sep);
+    // 根那一段本身以 "/" 结尾 → 第一段不再补分隔符（否则出现 "//root/…"）
+    if (index > 0) {
+      const sep = document.createElement("span");
+      sep.className = "fs-sep";
+      sep.textContent = "/";
+      nav.appendChild(sep);
+    }
     add(part, acc);
-  }
+  });
 }
 
 function renderList() {
@@ -249,8 +252,10 @@ el("fs-filter").addEventListener("input", (e) => {
   state.filter = e.target.value;
   renderList();
 });
+if (el("fs-hidden")) el("fs-hidden").checked = state.showHidden;
 el("fs-hidden").addEventListener("change", (e) => {
   state.showHidden = e.target.checked;
+  localStorage.setItem("piweb-fs-hidden", state.showHidden ? "1" : "0");
   renderList();
 });
 el("fs-sort").addEventListener("click", () => {
@@ -260,5 +265,6 @@ el("fs-sort").addEventListener("click", () => {
 });
 el("fs-close-view").addEventListener("click", closeView);
 
-const initialPath = new URLSearchParams(location.search).get("path") || "/";
-navigate(initialPath);
+// 默认从**当前会话 cwd** 开始：不带 path 时服务端按会话 cwd 解析（§28.3）
+const initialPath = new URLSearchParams(location.search).get("path");
+navigate(initialPath || null);

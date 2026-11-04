@@ -168,6 +168,14 @@
   border-left: 1px solid var(--border);
 }
 
+/* display:flex 会盖掉浏览器对 [hidden] 的默认 display:none —— 必须显式补回来，
+   否则"还没选文件"时右侧会显示空的查看器头和工具栏 ✗ */
+#fs-view[hidden],
+#fs-text[hidden],
+#fs-image[hidden] {
+  display: none;
+}
+
 #fs-view-head {
   display: flex;
   align-items: center;
