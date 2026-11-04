@@ -197,6 +197,8 @@ function isImage(path) {
 async function openFile(path) {
   state.selected = path;
   viewEl.hidden = false;
+  // 打开文件＝要读内容 → 左侧列表自动收起，正文占满整宽（用户点 « / » 仍可随时切换）
+  state.listOpen = false;
   applySplit();
   textEl.textContent = "";
   imageEl.innerHTML = "";
@@ -209,7 +211,7 @@ async function openFile(path) {
     textEl.hidden = true;
     imageEl.hidden = false;
     const img = document.createElement("img");
-    img.src = fileUrl(path);
+    img.src = `${fileUrl(path)}&_=${Date.now()}`;
     img.alt = path;
     img.addEventListener("error", () => showNote("图片加载失败（可能不是合法图片）"));
     imageEl.appendChild(img);
@@ -294,6 +296,9 @@ el("fs-sort").addEventListener("click", () => {
   renderList();
 });
 el("fs-close-view").addEventListener("click", closeView);
+el("fs-refresh").addEventListener("click", () => {
+  if (state.selected) openFile(state.selected); // 重新读盘（文本走 no-store，图片加时间戳破缓存）
+});
 
 /** 列表/查看器分栏：`#fs-list` 用固定百分比，拖动分栏条调整并记忆；列表可整体收起。 */
 function applySplit() {
