@@ -1568,6 +1568,7 @@ class PiWebClient {
         const p = document.createElement('div');
         p.className = 'body-text';
         p.innerHTML = this.renderMarkdown(block.text);
+        this.linkifyCodeElements(p); // inline code 里的路径可点（§28.4）
         body.appendChild(p);
       }
     }
@@ -1581,6 +1582,66 @@ class PiWebClient {
         .map((line) => line.trim())
         .find(Boolean) || ''
     );
+  }
+
+  // ------------------------------------------------------------------
+  // 路径联动（设计 §28.4）：消息里的文件路径 → 在文件浏览器里打开
+  // ------------------------------------------------------------------
+
+  /** 像路径吗？排除 URL、带空格的长句、纯单词。 */
+  isPathLike(text) {
+    if (typeof text !== 'string') return false;
+    const t = text.trim();
+    if (!t || t.length > 300) return false;
+    if (/\s/.test(t)) return false;
+    if (t.includes('://') || t.startsWith('//')) return false;
+    return /^(?:~\/|\/|\.{1,2}\/)[\w./@+-]+$/.test(t) || /^[\w.-]+(?:\/[\w.@+-]+)+$/.test(t);
+  }
+
+  /** 把一个元素的文本节点里像路径的片段换成链接（工具参数用）。 */
+  linkifyTextNodes(root) {
+    if (!root) return;
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    const nodes = [];
+    while (walker.nextNode()) nodes.push(walker.currentNode);
+    for (const node of nodes) {
+      const raw = node.nodeValue || '';
+      if (!raw.includes('/')) continue;
+      const re = /[~\w./@+-]{2,300}/g;
+      let match;
+      let last = 0;
+      let frag = null;
+      while ((match = re.exec(raw))) {
+        const candidate = match[0];
+        if (!this.isPathLike(candidate)) continue;
+        frag = frag || document.createDocumentFragment();
+        frag.appendChild(document.createTextNode(raw.slice(last, match.index)));
+        frag.appendChild(this.buildFileLink(candidate));
+        last = match.index + candidate.length;
+      }
+      if (!frag) continue;
+      frag.appendChild(document.createTextNode(raw.slice(last)));
+      node.parentNode.replaceChild(frag, node);
+    }
+  }
+
+  /** 只对 `<code>` 内的路径做链接（正文裸文本不自动识别，避免误伤句子，§28.5）。 */
+  linkifyCodeElements(root) {
+    if (!root) return;
+    for (const code of root.querySelectorAll('code')) {
+      this.linkifyTextNodes(code);
+    }
+  }
+
+  buildFileLink(path) {
+    const a = document.createElement('a');
+    a.className = 'file-link';
+    a.href = `/files?path=${encodeURIComponent(path)}`;
+    a.target = '_blank';
+    a.rel = 'noopener';
+    a.title = `Open in file browser: ${path}`;
+    a.textContent = path;
+    return a;
   }
 
   /** 折叠行文案：`▸ Thinking… <首行截断>` / 展开时 `▾ …` —— 纯字符串处理，不经过模型（§27.2）。 */
@@ -1683,7 +1744,9 @@ class PiWebClient {
     if (!isBash && hasArgs) {
       const argsEl = document.createElement('div');
       argsEl.className = 'tool-args';
+      // 参数里的路径渲染成链接（设计 §28.4）：点开在文件浏览器里看
       argsEl.textContent = JSON.stringify(args, null, 2);
+      this.linkifyTextNodes(argsEl);
       content.appendChild(argsEl);
     }
 

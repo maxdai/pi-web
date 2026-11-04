@@ -152,6 +152,12 @@ body {
   color: var(--accent);
 }
 
+/* 顶栏「文件」入口是 <a>（新标签打开 /files，见设计 §28）——去掉链接默认样式 */
+a.nav-btn {
+  text-decoration: none;
+  font-family: inherit;
+}
+
 #conn-status {
   font-size: 12px;
   padding: 2px 8px;
@@ -1743,4 +1749,15 @@ body {
 .tool-block[data-collapsed='true'] .tool-output,
 .tool-block[data-collapsed='true'] .tool-meta {
   display: none;
+}
+
+/* 路径链接（设计 §28.4）：消息里的文件路径点开在文件浏览器里查看 */
+.file-link {
+  color: var(--accent);
+  text-decoration: none;
+  border-bottom: 1px dotted var(--accent-soft, rgba(138, 190, 183, 0.3));
+}
+
+.file-link:hover {
+  text-decoration: underline;
 }

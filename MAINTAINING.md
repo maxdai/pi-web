@@ -46,7 +46,7 @@ node tools/host-contract/check-host-contract.mjs --update # 有意变更契约�
   勾选了哪些模型），只作信息展示、不参与漂移判定；
 - 细节与探针说明见 `tools/host-contract/README.md`。
 
-### 2.2 冒烟测试（45 项只读回归）
+### 2.2 冒烟测试（52 项只读回归）
 
 ```bash
 pi-web r <session>              # 先起着服务（默认 4080；测试实例统一用 4096）
@@ -96,7 +96,7 @@ git ls-remote --tags origin | grep vX.Y.Z             # 核对远端确有该 ta
 for i in $(seq 1 16); do npm view @maxdai/pi-web@x.y.z version && break; sleep 15; done
 npm install -g @maxdai/pi-web@x.y.z
 
-# 6. 安装版复验：三入口 + 冒烟 45/45 + header 版本 + /usage + /resume + 核对器
+# 6. 安装版复验：三入口 + 冒烟 52/52 + header 版本 + /usage + /resume + 核对器
 ```
 
 - **作用域包首次/每次发布都要 `--access public`**；

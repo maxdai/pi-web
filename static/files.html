@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>pi-web · files</title>
+  <link rel="icon" type="image/svg+xml" href="pi-logo.svg">
+  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="files.css">
+</head>
+<body class="files-page">
+  <div id="fs-header">
+    <span id="fs-title">Files</span>
+    <nav id="fs-crumbs" aria-label="path"></nav>
+    <span id="fs-tools">
+      <input id="fs-filter" type="search" placeholder="filter…" autocomplete="off" spellcheck="false">
+      <button id="fs-sort" class="fs-btn" title="Sort by name / modified time">name</button>
+      <label id="fs-hidden-wrap" title="Show hidden files">
+        <input id="fs-hidden" type="checkbox"> hidden
+      </label>
+    </span>
+  </div>
+  <div id="fs-main">
+    <div id="fs-list" role="list"></div>
+    <div id="fs-view" hidden>
+      <div id="fs-view-head">
+        <span id="fs-view-name"></span>
+        <span id="fs-view-meta"></span>
+        <a id="fs-download" class="fs-btn" href="#" download>download</a>
+        <button id="fs-close-view" class="fs-btn">close</button>
+      </div>
+      <pre id="fs-text"></pre>
+      <div id="fs-image"></div>
+      <div id="fs-note" hidden></div>
+    </div>
+  </div>
+  <script nonce="__PI_WEB_FS_NONCE__">window.__PI_WEB_FS_TOKEN__ = "__PI_WEB_FS_TOKEN_VALUE__";</script>
+  <script src="files.js"></script>
+</body>
+</html>

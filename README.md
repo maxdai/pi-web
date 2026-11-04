@@ -243,7 +243,7 @@ pi-web/
 │   └── pii              # Python 启动器（会话名解析、TUI 入口、--web 转调引擎）
 ├── static/              # 浏览器前端（唯一一份，index/style/app + vendor）
 ├── tools/
-│   ├── smoke.mjs        # 只读冒烟（45 项，含部署漂移校验）
+│   ├── smoke.mjs        # 只读冒烟（52 项，含部署漂移校验）
 │   ├── ab-compare.mjs   # 两引擎 A/B 对比工具（阶段 E 前的对照证据）
 │   ├── ab-report-*.md   # A/B 记录
 │   └── host-contract/   # 宿主契约核对器 + 进程内探针 + 基线（Pi 升级后 / 发版前必跑）

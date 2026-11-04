@@ -41,6 +41,11 @@ const required = [
     "static/style.css",
     "static/vendor/marked.min.js",
     "static/pi-logo.svg",
+  // 文件浏览器（设计 §28）
+  "static/files.html",
+  "static/files.js",
+  "static/files.css",
+  "native/fs-browser.mjs",
   "native/server.mjs",
   "native/bridge.mjs",
   "native/usage-render.mjs",

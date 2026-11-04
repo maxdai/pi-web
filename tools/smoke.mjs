@@ -33,6 +33,7 @@ import { createHash } from "node:crypto";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
+import { request } from "node:http";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const args = process.argv.slice(2);
@@ -123,6 +124,8 @@ async function checkDeployment() {
   for (const [served, local] of [
     ["/app.js", join(REPO_ROOT, "static", "app.js")],
     ["/style.css", join(REPO_ROOT, "static", "style.css")],
+    ["/files.js", join(REPO_ROOT, "static", "files.js")],
+    ["/files.css", join(REPO_ROOT, "static", "files.css")],
   ]) {
     const remote = await fetchText(served);
     const localText = readFileSync(local, "utf8");
@@ -133,6 +136,54 @@ async function checkDeployment() {
       same ? sha(localText) : `服务端 ${sha(remote.text)} ≠ 仓库 ${sha(localText)}（未同步/未重启？）`,
     );
   }
+}
+
+// ---------------------------------------------------------------- 文件浏览器（设计 §28）
+async function checkFileBrowser() {
+  const page = await fetchText("/files");
+  const token = /window\.__PI_WEB_FS_TOKEN__ = "([^"]+)"/.exec(page.text)?.[1] ?? "";
+  check(
+    "/files 返回 200 且注入了 FS_TOKEN",
+    page.status === 200 && token.length > 10 && !page.text.includes("__PI_WEB_FS_TOKEN_VALUE__"),
+    `status=${page.status} token=${token ? token.slice(0, 8) + "…" : "(none)"}`,
+  );
+
+  const noToken = await fetchText("/fs/list?path=/");
+  check("/fs/list 无 token → 403", noToken.status === 403, `status=${noToken.status}`);
+
+  const list = await fetch(`${url}/fs/list?path=/`, { headers: { "x-pi-web-fs-token": token } });
+  const listData = await list.json().catch(() => ({}));
+  check(
+    "/fs/list 带 token → 200 + entries",
+    list.status === 200 && Array.isArray(listData.entries) && typeof listData.path === "string",
+    `status=${list.status} entries=${Array.isArray(listData.entries) ? listData.entries.length : "n/a"}`,
+  );
+
+  // Host 白名单（挡 DNS rebinding）：用 curl 才能自定义 Host，这里直接发裸请求
+  const rebinding = await new Promise((resolve) => {
+    const u = new URL(url);
+    const req = request(
+      { host: u.hostname, port: u.port || 80, path: "/files", headers: { Host: "evil.example" } },
+      (res) => {
+        res.resume();
+        resolve(res.statusCode);
+      },
+    );
+    req.on("error", () => resolve(0));
+    req.end();
+  });
+  check("伪造 Host 访问 /files → 403", rebinding === 403, `status=${rebinding}`);
+
+  // 磁盘上的 .html 不能被当成页面执行（同源 XSS 会读到 token）
+  const raw = await fetch(`${url}/fs/raw?path=${encodeURIComponent("static/files.html")}`, {
+    headers: { "x-pi-web-fs-token": token },
+  });
+  const rawType = raw.headers.get("content-type") ?? "";
+  check(
+    "/fs/raw 对 .html 返回不可执行类型",
+    raw.status === 200 && !rawType.includes("text/html") && raw.headers.get("x-content-type-options") === "nosniff",
+    `${raw.status} ${rawType}`,
+  );
 }
 
 // ---------------------------------------------------------------- 主流程
@@ -171,6 +222,7 @@ try {
 }
 
 await checkDeployment();
+await checkFileBrowser();
 
 await page.goto(url, { waitUntil: "load" });
 await page.waitForTimeout(2500); // 等 WS 连接 + 首屏 history 渲染

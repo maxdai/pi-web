@@ -28,6 +28,7 @@ import {
   resolvePath,
   scanTreeIndex,
 } from "./session-history.mjs";
+import { createFsBrowser } from "./fs-browser.mjs";
 import { createRequire } from "node:module";
 import { spawn, execFileSync } from "node:child_process";
 import { readdir, readFile, stat } from "node:fs/promises";
@@ -64,6 +65,8 @@ const SESSIONS_ROOT = join(AGENT_DIR, "sessions");
 const HISTORY_TAIL = Math.max(20, Number(process.env.PI_WEB_HISTORY_TAIL ?? 300) || 300);
 const SETTINGS_FILE = join(AGENT_DIR, "settings.json");
 const TOKEN = randomUUID();
+/** 文件浏览器（§28）专用 token：与桥接侧信道分开，页面里注入了它也不至于顺带暴露 /side/*。 */
+const FS_TOKEN = randomUUID();
 /** 本次运行的唯一 id：注入 pi 子进程环境，用于把「自己这棵树」与「另一个实例」区分开。
  *  否则 pi 子进程派生的助手进程（aft bridge、LSP、bash…）会继承会话标记而被误判成
  *  "另一个 web 实例"（2026-10-14 实测误报：同一实例被报成 3 个 PID）。 */
@@ -1516,6 +1519,9 @@ const MIME = {
   ".json": "application/json; charset=utf-8",
 };
 
+// 文件浏览器（§28）：Host 白名单 + FS_TOKEN 校验，只读；相对路径按当前会话 cwd 解析
+const fsRoute = createFsBrowser({ token: FS_TOKEN, getCwd: () => session?.cwd ?? process.cwd() });
+
 const server = createServer(async (req, res) => {
   const url = new URL(req.url ?? "/", `http://127.0.0.1:${PORT}`);
 
@@ -1738,6 +1744,9 @@ const server = createServer(async (req, res) => {
     });
     return;
   }
+
+  // ---- 文件浏览器（§28）：/files 页面 + /fs/*（Host 白名单 + FS_TOKEN，只读）
+  if (await fsRoute(req, res, url)) return;
 
   // ---- 静态资源（仓库 static/，与发布版本同源）
   let path = url.pathname === "/" ? "/index.html" : url.pathname;
