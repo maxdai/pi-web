@@ -176,6 +176,50 @@ async function navigate(path) {
   }
 }
 
+
+/**
+ * 记录当前阅读位置（刷新前后保持，方便对着改动看）。
+ * 折行模式按**行号**锚定（插入/删除行后仍停在同一行）；非折行模式按像素（两列布局没有行元素）。
+ */
+function captureViewAnchor() {
+  if (textEl.hidden) return null;
+  const base = { scrollTop: textEl.scrollTop, scrollLeft: textEl.scrollLeft, line: null };
+  if (!state.wrap) return base;
+  // 视口内**最上面那一行**的行号：二分查找（行的 rect 单调递增），比 elementFromPoint 可靠
+  // ——后者在 padding 区域会命中容器本身而不是行元素（实测拿到 null ✗）。
+  const rows = textEl.querySelectorAll(".fs-line");
+  if (rows.length === 0) return base;
+  const top = textEl.getBoundingClientRect().top;
+  let lo = 0;
+  let hi = rows.length - 1;
+  let found = 0;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (rows[mid].getBoundingClientRect().bottom > top) {
+      found = mid;
+      hi = mid - 1;
+    } else {
+      lo = mid + 1;
+    }
+  }
+  base.line = Number(rows[found].dataset.line) || null;
+  return base;
+}
+
+function restoreViewAnchor(anchor) {
+  if (!anchor || textEl.hidden) return;
+  if (state.wrap && anchor.line) {
+    const row = textEl.querySelector(`.fs-line[data-line="${anchor.line}"]`);
+    if (row) {
+      const delta = row.getBoundingClientRect().top - textEl.getBoundingClientRect().top;
+      textEl.scrollTop += delta;
+      return;
+    }
+  }
+  textEl.scrollTop = anchor.scrollTop;
+  textEl.scrollLeft = anchor.scrollLeft;
+}
+
 function showNote(text) {
   noteEl.hidden = !text;
   noteEl.textContent = text || "";
@@ -195,6 +239,7 @@ function isImage(path) {
 }
 
 async function openFile(path) {
+  const anchor = state.selected === path ? captureViewAnchor() : null;
   state.selected = path;
   viewEl.hidden = false;
   // 打开文件＝要读内容 → 左侧列表自动收起，正文占满整宽（用户点 « / » 仍可随时切换）
@@ -230,6 +275,7 @@ async function openFile(path) {
     textEl.hidden = false;
     imageEl.hidden = true;
     renderText(data.text || "");
+    restoreViewAnchor(anchor); // 刷新后回到原来的行
     if (data.truncated) showNote(`文件较大，只显示前 ${fmtSize(TEXT_PREVIEW_BYTES)}；完整内容请 download`);
   } catch (err) {
     showNote(`读不了这个文件：${err.message}`);
@@ -254,6 +300,7 @@ function renderText(text) {
     shown.forEach((line, i) => {
       const row = document.createElement("div");
       row.className = "fs-line";
+      row.dataset.line = String(i + 1);
       const no = document.createElement("span");
       no.className = "fs-lineno";
       no.textContent = String(i + 1);
