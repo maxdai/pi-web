@@ -46,6 +46,16 @@ node tools/host-contract/check-host-contract.mjs --update # 有意变更契约�
   勾选了哪些模型），只作信息展示、不参与漂移判定；
 - 细节与探针说明见 `tools/host-contract/README.md`。
 
+### 2.1b 部署就绪核对（让用户测试前必跑）
+
+```bash
+node tools/check-deploy.mjs                    # 默认检查 4080
+node tools/check-deploy.mjs --no-instance      # 只看安装态
+```
+
+回答一个问题：**用户实际跑的那份，是不是我刚改的那份？** 逐文件比对「全局 dist ↔ 仓库 dist」，
+实例在跑时再比对「服务端提供的文件 ↔ 仓库源文件」。**退出码非 0 就不要让用户测试**（规则见 `AGENTS.md` §8）。
+
 ### 2.2 冒烟测试（52 项只读回归）
 
 ```bash
