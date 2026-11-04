@@ -101,10 +101,35 @@
 }
 
 #fs-list {
-  flex: 1 1 50%;
+  flex: 1 1 100%;
   min-width: 0;
   overflow: auto;
   padding: 6px 0;
+}
+
+/* 拖动分栏条左右两侧宽度（设计 §28）：右侧正文太窄时不再只能忍着 */
+#fs-splitter {
+  flex: 0 0 6px;
+  cursor: col-resize;
+  background: var(--border);
+  opacity: 0.35;
+}
+
+#fs-splitter:hover {
+  opacity: 0.8;
+  background: var(--accent);
+}
+
+#fs-splitter[hidden] {
+  display: none;
+}
+
+#fs-wrap-wrap {
+  color: var(--muted);
+  font-size: 12px;
+  user-select: none;
+  cursor: pointer;
+  white-space: nowrap;
 }
 
 .fs-row {
@@ -161,7 +186,7 @@
 }
 
 #fs-view {
-  flex: 1 1 50%;
+  flex: 1 1 auto;
   min-width: 0;
   display: flex;
   flex-direction: column;
@@ -225,6 +250,35 @@
 
 #fs-text .fs-code {
   flex: 0 0 auto;
+  color: var(--text);
+}
+
+/* 折行模式：每行一个 flex 行（行号列 + 内容列），行号与折行后的内容保持对齐 */
+#fs-text.wrap {
+  display: block;
+  white-space: normal;
+  overflow-x: hidden;
+}
+
+#fs-text.wrap .fs-line {
+  display: flex;
+  align-items: flex-start;
+}
+
+#fs-text.wrap .fs-lineno {
+  flex: 0 0 auto;
+  color: var(--dim);
+  user-select: none;
+  text-align: right;
+  padding-right: 12px;
+  white-space: pre;
+}
+
+#fs-text.wrap .fs-linecode {
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
   color: var(--text);
 }
 

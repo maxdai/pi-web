@@ -11,10 +11,13 @@ const state = {
   filter: "",
   sort: "name", // name | mtime
   showHidden: localStorage.getItem("piweb-fs-hidden") !== "0",
+  wrap: localStorage.getItem("piweb-fs-wrap") !== "0",
+  split: Number(localStorage.getItem("piweb-fs-split")) || 0.42, // 列表占左栏比例
   selected: null, // 当前查看的文件
 };
 
 const el = (id) => document.getElementById(id);
+const clampSplit = (value) => Math.min(0.8, Math.max(0.2, value));
 const listEl = el("fs-list");
 const viewEl = el("fs-view");
 const textEl = el("fs-text");
@@ -180,6 +183,7 @@ function showNote(text) {
 function closeView() {
   state.selected = null;
   viewEl.hidden = true;
+  applySplit();
   textEl.textContent = "";
   imageEl.innerHTML = "";
   showNote("");
@@ -192,6 +196,7 @@ function isImage(path) {
 async function openFile(path) {
   state.selected = path;
   viewEl.hidden = false;
+  applySplit();
   textEl.textContent = "";
   imageEl.innerHTML = "";
   showNote("");
@@ -228,22 +233,46 @@ async function openFile(path) {
   }
 }
 
-/** 行号 + 等宽正文；不折行（横向滚动），大文件按行数截断渲染以保持流畅。 */
+/**
+ * 渲染文本正文。
+ * - 折行模式：每行一个 `.fs-line`（行号 + 内容），文字 `pre-wrap` —— 行号与折行后的内容仍对齐；
+ * - 非折行模式：行号列 + 正文列两列，横向滚动（等宽对齐、便于看表格/对齐代码）。
+ * 两种模式都按行数截断渲染（折行模式 DOM 行更多，上限更小），避免几万行卡住页面。
+ */
 function renderText(text) {
   const lines = text.split("\n");
-  const max = 20000;
+  const wrap = state.wrap;
+  const max = wrap ? 5000 : 20000;
   const shown = lines.length > max ? lines.slice(0, max) : lines;
-  const width = String(shown.length).length;
-  const gutter = shown.map((_, i) => String(i + 1).padStart(width, " ")).join("\n");
   textEl.textContent = "";
-  const g = document.createElement("span");
-  g.className = "fs-gutter";
-  g.textContent = gutter;
-  const body = document.createElement("span");
-  body.className = "fs-code";
-  body.textContent = shown.join("\n");
-  textEl.append(g, body);
-  if (lines.length > max) showNote(`文件行数过多，只渲染前 ${max} 行；完整内容请 download`);
+  textEl.classList.toggle("wrap", wrap);
+  if (wrap) {
+    const frag = document.createDocumentFragment();
+    shown.forEach((line, i) => {
+      const row = document.createElement("div");
+      row.className = "fs-line";
+      const no = document.createElement("span");
+      no.className = "fs-lineno";
+      no.textContent = String(i + 1);
+      const code = document.createElement("span");
+      code.className = "fs-linecode";
+      code.textContent = line.length ? line : " ";
+      row.append(no, code);
+      frag.appendChild(row);
+    });
+    textEl.appendChild(frag);
+  } else {
+    const width = String(shown.length).length;
+    const gutter = shown.map((_, i) => String(i + 1).padStart(width, " ")).join("\n");
+    const g = document.createElement("span");
+    g.className = "fs-gutter";
+    g.textContent = gutter;
+    const body = document.createElement("span");
+    body.className = "fs-code";
+    body.textContent = shown.join("\n");
+    textEl.append(g, body);
+  }
+  if (lines.length > max) showNote(`文件行数过多，只渲染前 ${max} 行（${wrap ? "折行模式" : "非折行模式"}）；完整内容请 download`);
 }
 
 // ---------------------------------------------------------------- 事件绑定
@@ -265,6 +294,42 @@ el("fs-sort").addEventListener("click", () => {
 });
 el("fs-close-view").addEventListener("click", closeView);
 
+/** 列表/查看器分栏：`#fs-list` 用固定百分比，拖动分栏条调整并记忆。 */
+function applySplit() {
+  const viewOpen = !viewEl.hidden;
+  el("fs-splitter").hidden = !viewOpen;
+  listEl.style.flex = viewOpen ? `0 0 ${(state.split * 100).toFixed(2)}%` : "1 1 100%";
+}
+function startSplitDrag(startEvent) {
+  startEvent.preventDefault();
+  const mainRect = el("fs-main").getBoundingClientRect();
+  const move = (e) => {
+    state.split = clampSplit((e.clientX - mainRect.left) / mainRect.width);
+    applySplit();
+  };
+  const up = () => {
+    window.removeEventListener("pointermove", move);
+    window.removeEventListener("pointerup", up);
+    localStorage.setItem("piweb-fs-split", String(state.split));
+  };
+  window.addEventListener("pointermove", move);
+  window.addEventListener("pointerup", up);
+}
+el("fs-splitter").addEventListener("pointerdown", startSplitDrag);
+el("fs-splitter").addEventListener("dblclick", () => {
+  state.split = 0.42;
+  applySplit();
+  localStorage.setItem("piweb-fs-split", String(state.split));
+});
+
+if (el("fs-wrap")) el("fs-wrap").checked = state.wrap;
+el("fs-wrap").addEventListener("change", (e) => {
+  state.wrap = e.target.checked;
+  localStorage.setItem("piweb-fs-wrap", state.wrap ? "1" : "0");
+  if (state.selected) openFile(state.selected); // 重新渲染正文（行号对齐方式不同）
+});
+
 // 默认从**当前会话 cwd** 开始：不带 path 时服务端按会话 cwd 解析（§28.3）
+applySplit();
 const initialPath = new URLSearchParams(location.search).get("path");
 navigate(initialPath || null);
