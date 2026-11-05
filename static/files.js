@@ -15,7 +15,7 @@ const state = {
   split: Number(localStorage.getItem("piweb-fs-split")) || 0.42, // 列表占左栏比例
   listOpen: localStorage.getItem("piweb-fs-list") !== "0",
   selected: null, // 当前查看的文件
-  preview: localStorage.getItem("piweb-fs-preview") !== "0", // 富文本预览偏好（md/json 系列）
+  pendingMode: null, // 下一次 openFile 想要的视图（null = 默认预览）
   viewMode: "source", // 当前实际视图：source | preview（带 &line= 时会强制 source）
   objectUrls: [], // 图片 blob URL，切换/关闭时释放
 };
@@ -602,10 +602,11 @@ async function openFile(path, line = 0) {
       return;
     }
     imageEl.hidden = true;
-    // 富文本预览（§29）：md / json / jsonc / jsonl 且用户选择看预览；
-    // 带行号跳转时强制源码视图（预览没有行号可定位，§30.6）
+    // 视图选择（§29.6）：**默认预览**；带行号跳转强制源码；"切换视图/刷新"这类操作传一次性 pendingMode。
+    const wanted = line > 0 ? "source" : (state.pendingMode || "preview");
+    state.pendingMode = null;
     state.viewMode = "source";
-    if (kind && state.preview && !data.binary && !(line > 0)) {
+    if (kind && wanted === "preview" && !data.binary) {
       const ok = line > 0 ? false : await renderPreview(kind, path, data.text || "");
       if (ok) {
         state.viewMode = "preview";
@@ -1004,11 +1005,12 @@ el("fs-preview-toggle").addEventListener("click", () => {
   pendingSwitch = state.viewMode === "preview"
     ? { from: "preview", text: useText ? previewAnchorText() : "", ratio: currentScrollRatio() }
     : { from: "source", line: topLine, text: useText ? sourceAnchorText(topLine) : "", ratio: currentScrollRatio() };
-  state.preview = state.viewMode !== "preview";
-  localStorage.setItem("piweb-fs-preview", state.preview ? "1" : "0");
+  // 只影响当前文件：不写入偏好，新打开的文件仍默认预览（§29.6）
+  state.pendingMode = state.viewMode === "preview" ? "source" : "preview";
   if (state.selected) openFile(state.selected);
 });
 el("fs-refresh").addEventListener("click", () => {
+  state.pendingMode = state.viewMode; // 刷新保持当前视图
   if (state.selected) openFile(state.selected); // 重新读盘（文本走 no-store，图片加时间戳破缓存）
 });
 
@@ -1073,6 +1075,7 @@ el("fs-wrap").addEventListener("change", (e) => {
 
 // 默认从**当前会话 cwd** 开始：不带 path 时服务端按会话 cwd 解析（§28.3）
 applySplit();
+localStorage.removeItem("piweb-fs-preview"); // 旧版本记忆的偏好：不再使用（§29.6）
 applyTheme(currentTheme());
 for (const el of document.querySelectorAll(".theme-option")) {
   el.addEventListener("click", () => applyTheme(el.dataset.theme));
