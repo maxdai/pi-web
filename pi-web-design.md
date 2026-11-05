@@ -2454,3 +2454,12 @@ markdown 里的相对图片同样走这条路。
 1. 图片预览一直取不到：`/fs/*` 要 `x-pi-web-fs-token` 头，而 `<img src>` 无法带头 → 改 fetch + `createObjectURL`；
 2. 加了 blob 后图片仍不显示：页面 CSP 是 `img-src 'self' data:`，**不含 `blob:`** → 补上。
    另外 markdown 里的相对图片要在挂到 DOM **之前**摘掉 `src`，否则浏览器会先按页面路径请求一次（实测 404 `/pic.png`）。
+
+**修复（同日，用户实测反馈）**：JSON 预览**缩进丢失、行号与内容粘在一起** ✗ —— 原因是行结构样式
+（`.fs-line` / `.fs-lineno` / `.fs-linecode`）当时只写在 `#fs-text.wrap` 作用域下，
+`#fs-preview` 里的行拿不到 `display:flex` 与 `white-space:pre-wrap`，缩进被当普通空格折叠。
+改为**全局作用域**（源码视图与预览共用），并显式 `text-align:left`、`justify-content:flex-start`。
+
+同时收敛"看起来居中/没占满"的观感：`#fs-view` 显式 `align-items:stretch; justify-content:flex-start`，
+`#fs-preview` 与 `.fs-preview-body` 显式左对齐，并**去掉预览正文的 `max-width: 900px` 上限**
+（宽面板里内容缩成一条窄带，容易被当成"居中"）。

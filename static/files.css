@@ -200,6 +200,8 @@
   min-width: 0;
   display: flex;
   flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
   border-left: 1px solid var(--border);
 }
 
@@ -270,12 +272,17 @@
   overflow-x: hidden;
 }
 
-#fs-text.wrap .fs-line {
+/* 行结构（行号列 + 内容列）在**源码视图与预览**里都要生效：
+   早先只写在 #fs-text.wrap 下，JSON 预览的行拿不到 display:flex / white-space:pre-wrap，
+   缩进被当普通空格折叠、行号与内容粘在一起（2026-11-05 用户实测反馈 ✗）。 */
+.fs-line {
   display: flex;
   align-items: flex-start;
+  justify-content: flex-start;
+  text-align: left;
 }
 
-#fs-text.wrap .fs-lineno {
+.fs-lineno {
   flex: 0 0 auto;
   color: var(--dim);
   user-select: none;
@@ -284,12 +291,14 @@
   white-space: pre;
 }
 
-#fs-text.wrap .fs-linecode {
+.fs-linecode {
   flex: 1 1 auto;
   min-width: 0;
+  /* 必须 pre-wrap：普通 normal 会吞掉 JSON 的缩进空格 */
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   color: var(--text);
+  text-align: left;
 }
 
 #fs-image {
@@ -323,6 +332,8 @@
   flex: 1 1 auto;
   overflow: auto;
   padding: 10px 14px;
+  display: block;
+  text-align: left;
 }
 
 #fs-preview[hidden] {
@@ -330,7 +341,10 @@
 }
 
 .fs-preview-body {
-  max-width: 900px;
+  /* 不设 max-width：早先 900px 上限会让内容在宽面板里缩成一条窄带（看起来像"居中/没占满"） */
+  max-width: none;
+  margin: 0;
+  text-align: left;
 }
 
 .fs-preview-body img {
