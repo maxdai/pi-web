@@ -1450,6 +1450,7 @@ class PiWebClient {
     const body = document.createElement('div');
     body.className = 'body';
     body.innerHTML = this.renderMarkdown(text);
+    this.linkifyCodeElements(body); // 用户消息里的 inline code 路径同样可点（§28.4）
     // 图片块（粘贴的图片）：实时与历史都走这里 → 刷新后仍能看到自己贴的图
     const blocks = Array.isArray(message?.content) ? message.content : [];
     for (const block of blocks) {
@@ -1586,11 +1587,88 @@ class PiWebClient {
     }
   }
 
+
+  /**
+   * 工具输出里的路径链接（§28.4）。只认**整行就是一个路径**的情况，避免把普通输出拆得零碎：
+   *   `/root/pi-web/native/server.mjs`            → 整行
+   *   `/root/pi-web/native/server.mjs:12`         → grep 风格，链路径、保留 `:12`
+   *   `/root/pi-web/native/server.mjs:12:5`       → 同上
+   * 其它（含前缀文字、表格行、`read` 的行号前缀）一律不动。
+   */
+  linkifyOutputPaths(root) {
+    if (!root) return;
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    const nodes = [];
+    while (walker.nextNode()) nodes.push(walker.currentNode);
+    for (const node of nodes) {
+      const raw = node.nodeValue || '';
+      if (!raw.includes('/')) continue;
+      let frag = null;
+      let last = 0;
+      const re = /[^\n]+/g;
+      let m;
+      while ((m = re.exec(raw)) !== null) {
+        const line = m[0];
+        const hit = this.matchPathLine(line.trim());
+        if (!hit) continue;
+        const indent = line.length - line.trimStart().length;
+        frag = frag || document.createDocumentFragment();
+        frag.appendChild(document.createTextNode(raw.slice(last, m.index)));
+        if (indent > 0) frag.appendChild(document.createTextNode(line.slice(0, indent)));
+        frag.appendChild(this.buildFileLink(hit.path));
+        if (hit.rest) frag.appendChild(document.createTextNode(hit.rest));
+        last = m.index + m[0].length;
+      }
+      if (!frag) continue;
+      frag.appendChild(document.createTextNode(raw.slice(last)));
+      node.parentNode.replaceChild(frag, node);
+    }
+  }
+
+  /** 整行路径匹配：整行是路径，或是 `path:line[:col]`。 */
+  matchPathLine(text) {
+    if (!text) return null;
+    if (this.isPathLike(text)) return { path: text, rest: '' };
+    const m = /^(.+?):(\d+)(?::(\d+))?$/.exec(text);
+    if (m && this.isPathLike(m[1])) return { path: m[1], rest: `:${m[2]}${m[3] ? `:${m[3]}` : ''}` };
+    return null;
+  }
+
   /** 只对 `<code>` 内的路径做链接（正文裸文本不自动识别，避免误伤句子，§28.5）。 */
   linkifyCodeElements(root) {
     if (!root) return;
     for (const code of root.querySelectorAll('code')) {
+      if (code.closest('pre')) continue; // 代码块里的内容保持原样，只处理行内 `...`
       this.linkifyTextNodes(code);
+      // 反引号里的**裸文件名**（`README.md`、`package.json`）也给出链接：
+      // 代码片段是显式声明的"这是个标识符"，误伤风险低；工具输出里则不这样识别（行内容可能是普通单词）。
+      this.linkifyBareFiles(code);
+    }
+  }
+
+  /** 只匹配带常见扩展名的裸文件名（不含路径分隔符）。 */
+  linkifyBareFiles(root) {
+    const re = /\b([\w-]+(?:\.\w+)*\.(?:md|markdown|json|jsonc|jsonl|ndjson|js|mjs|cjs|ts|tsx|jsx|py|sh|bash|css|html|htm|yaml|yml|toml|txt|log|svg|png|jpg|jpeg|gif|webp|pdf|csv|xml|ini|conf|lock))\b/gi;
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    const nodes = [];
+    while (walker.nextNode()) nodes.push(walker.currentNode);
+    for (const node of nodes) {
+      const raw = node.nodeValue || '';
+      let frag = null;
+      let last = 0;
+      let m;
+      while ((m = re.exec(raw)) !== null) {
+        if (this.isPathLike(m[1])) continue; // 带斜杠的交给上面的路径规则
+        const before = raw[m.index - 1];
+        if (before === '/' || /[\w.-]/.test(before ?? '')) continue; // 别切开已有的路径/单词
+        frag = frag || document.createDocumentFragment();
+        frag.appendChild(document.createTextNode(raw.slice(last, m.index)));
+        frag.appendChild(this.buildFileLink(m[1]));
+        last = m.index + m[0].length;
+      }
+      if (!frag) continue;
+      frag.appendChild(document.createTextNode(raw.slice(last)));
+      node.parentNode.replaceChild(frag, node);
     }
   }
 
@@ -1816,6 +1894,8 @@ class PiWebClient {
     } else {
       out.innerHTML = ansiToHtml(full);
     }
+    // 整行就是一个路径（或 `path:行:列`）→ 给出文件浏览器链接（设计 §28.4）
+    this.linkifyOutputPaths(out);
   }
 
   toggleToolExpand(div) {
