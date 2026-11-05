@@ -548,6 +548,7 @@ function isImage(path) {
 }
 
 async function openFile(path, line = 0) {
+  state.raw = null;
   const anchor = state.selected === path ? captureViewAnchor() : null;
   // 预览视图的"刷新"也要保持位置：源码视图用行锚点，预览只能按比例
   const previewRatio = state.selected === path && !previewEl.hidden ? currentScrollRatio() : null;
@@ -567,6 +568,7 @@ async function openFile(path, line = 0) {
   el("fs-view-meta").textContent = "";
   el("fs-download").href = fileUrl(path, true);
   const kind = fileKind(path);
+  state.kind = kind;
   updatePreviewToggle(kind);
 
   if (isImage(path)) {
@@ -587,6 +589,7 @@ async function openFile(path, line = 0) {
 
   try {
     const data = await api("/fs/text", { path });
+    state.raw = data.text || ""; // 供内容锚点查找使用（§29.6）
     const lines = countLines(data.text || "");
     el("fs-view-meta").textContent =
       `${fmtSize(data.size)} · ${lines.toLocaleString()} lines` +
@@ -608,9 +611,10 @@ async function openFile(path, line = 0) {
         updatePreviewToggle(kind);
         textEl.hidden = true;
         previewEl.hidden = false;
-        if (pendingRatio !== null) {
-          applyScrollRatio(pendingRatio);
-          pendingRatio = null;
+        if (pendingSwitch) {
+          const sw = pendingSwitch;
+          pendingSwitch = null;
+          if (!applySwitchAnchor(sw)) applyScrollRatio(sw.ratio);
         } else if (previewRatio !== null) {
           applyScrollRatio(previewRatio);
         }
@@ -624,9 +628,10 @@ async function openFile(path, line = 0) {
     updatePreviewToggle(kind);
     renderText(data.text || "");
     if (line > 0) focusLine(line);
-    else if (pendingRatio !== null) {
-      applyScrollRatio(pendingRatio);
-      pendingRatio = null;
+    else if (pendingSwitch) {
+      const sw = pendingSwitch;
+      pendingSwitch = null;
+      if (!applySwitchAnchor(sw)) applyScrollRatio(sw.ratio);
     } else restoreViewAnchor(anchor); // 刷新后回到原来的行
     if (data.truncated) showNote(`文件较大，只显示前 ${fmtSize(TEXT_PREVIEW_BYTES)}；完整内容请 download`);
   } catch (err) {
@@ -677,10 +682,22 @@ function renderText(text) {
   if (lines.length > max) showNote(`文件行数过多，只渲染前 ${max} 行（${wrap ? "折行模式" : "非折行模式"}）；完整内容请 download`);
 }
 
-// ---------------------------------------------------------------- 视图切换保持位置
+// ---------------------------------------------------------------- 视图切换保持位置（§29.6）
 
-/** 切换 preview / source 时携带的滚动比例（0..1）；不是切换触发的渲染不会用到它。 */
-let pendingRatio = null;
+/**
+ * 切换 preview / source 时携带的"锚点"。
+ * 渲染会改变行数与行高（空行消失、标题变高、表格加边框、段落折行），所以不能按行号换算：
+ * 优先用**内容锚点**（顶部可见行的文本），匹配不到再退回滚动比例。
+ */
+let pendingSwitch = null;
+
+/** 归一化：去掉 markdown 标记符号、压缩空白。 */
+function normText(value) {
+  return String(value ?? "")
+    .replace(/[`*_#>~\[\]]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
 
 /** 当前可见视图的滚动比例（没有可滚动的就返回 0）。 */
 function currentScrollRatio() {
@@ -690,11 +707,99 @@ function currentScrollRatio() {
   return Math.min(1, Math.max(0, pane.scrollTop / max));
 }
 
-/** 把比例应用回"新视图"（预览与源码的排版差异很大，只能按比例近似保持位置）。 */
+/** 把比例应用回"新视图"（内容锚点匹配失败时的兜底）。 */
 function applyScrollRatio(ratio) {
   const pane = !previewEl.hidden ? previewEl : textEl;
   const max = pane.scrollHeight - pane.clientHeight;
   if (max > 0) pane.scrollTop = Math.round(ratio * max);
+}
+
+/** 源码视图视口顶部那一行（折行模式按行元素二分；非折行按行高估算）。 */
+function currentTopLine() {
+  const anchor = captureViewAnchor();
+  if (anchor && anchor.line) return anchor.line;
+  const total = state.raw ? state.raw.split("\n").length : 0;
+  if (!total) return null;
+  const code = textEl.querySelector(".fs-code") || textEl.querySelector(".fs-linecode");
+  if (!code) return null;
+  const lineHeight = code.getBoundingClientRect().height / total;
+  if (!(lineHeight > 0)) return null;
+  return Math.max(1, Math.min(total, Math.floor(textEl.scrollTop / lineHeight) + 1));
+}
+
+/** 源码视图顶部可见行的文本（太短就往下找一行更有辨识度的）。 */
+function sourceAnchorText(line) {
+  if (!line || !state.raw) return "";
+  const lines = state.raw.split("\n");
+  for (let i = line - 1; i < Math.min(lines.length, line + 2); i++) {
+    const t = normText(lines[i]);
+    if (t.length >= 8) return t.slice(0, 60);
+  }
+  return "";
+}
+
+/** 预览视图顶部可见块的文本。 */
+function previewAnchorText() {
+  const body = previewEl.querySelector(".fs-preview-body");
+  if (!body) return "";
+  const top = previewEl.getBoundingClientRect().top;
+  const blocks = body.querySelectorAll("h1,h2,h3,h4,h5,h6,p,li,pre,table,blockquote");
+  for (const el of blocks) {
+    const rect = el.getBoundingClientRect();
+    if (rect.bottom <= top + 6) continue;
+    const t = normText(el.textContent);
+    if (t.length >= 8) return t.slice(0, 60);
+  }
+  return "";
+}
+
+/** 在预览正文里找含该文本的元素（按整块 textContent 匹配，行内 code/加粗把文本切开也能命中）。 */
+function findPreviewElement(needle) {
+  const body = previewEl.querySelector(".fs-preview-body");
+  if (!body || !needle) return null;
+  const short = needle.slice(0, 12);
+  const blocks = body.querySelectorAll("h1,h2,h3,h4,h5,h6,p,li,pre,td,th,blockquote");
+  for (const el of blocks) {
+    if (normText(el.textContent).includes(short)) return el;
+  }
+  // 兜底：按文本节点找（例如文字不在上述块里）
+  const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT);
+  while (walker.nextNode()) {
+    if (normText(walker.currentNode.nodeValue).includes(short)) return walker.currentNode.parentElement;
+  }
+  return null;
+}
+
+/** 在源码里找含该文本的行号。 */
+function findSourceLine(needle) {
+  if (!state.raw || !needle) return null;
+  const short = needle.slice(0, 16);
+  const lines = state.raw.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    if (normText(lines[i]).includes(short)) return i + 1;
+  }
+  return null;
+}
+
+/** 切到新视图后按锚点定位；返回 false 表示锚点不可用（调用方退回比例）。 */
+function applySwitchAnchor(sw) {
+  if (!sw) return false;
+  if (!previewEl.hidden) {
+    if (sw.from !== "source" || !sw.text) return false;
+    const el = findPreviewElement(sw.text);
+    if (!el) return false;
+    const offset = el.getBoundingClientRect().top - previewEl.getBoundingClientRect().top + previewEl.scrollTop - 8;
+    previewEl.scrollTop = Math.max(0, Math.round(offset));
+    return true;
+  }
+  if (sw.from !== "preview" || !sw.text) {
+    // 源码 → 源码（刷新）仍用行锚点
+    return false;
+  }
+  const line = findSourceLine(sw.text);
+  if (!line) return false;
+  focusLine(line, { highlight: false, alignTop: true });
+  return true;
 }
 
 // ---------------------------------------------------------------- 定位到指定行
@@ -704,14 +809,22 @@ function applyScrollRatio(ratio) {
  * 折行模式：每行是独立元素 → 精确滚动 + 高亮闪烁；
  * 非折行模式：只有一个行号栏 + 一大块文本 → 按行高估算滚动（不高亮）。
  */
-function focusLine(line) {
+function focusLine(line, opts = {}) {
   if (!(line > 0)) return;
+  const alignTop = opts.alignTop === true; // 视图切换时贴在顶部（居中会让"顶部行"再偏移几行）
   if (state.wrap) {
     const row = textEl.querySelector(`.fs-line[data-line="${line}"]`);
     if (row) {
-      row.scrollIntoView({ block: "center" });
-      row.classList.add("fs-line-focus");
-      setTimeout(() => row.classList.remove("fs-line-focus"), 2000);
+      if (alignTop) {
+        const delta = row.getBoundingClientRect().top - textEl.getBoundingClientRect().top;
+        textEl.scrollTop = Math.max(0, textEl.scrollTop + delta - 4);
+      } else {
+        row.scrollIntoView({ block: "center" });
+      }
+      if (opts.highlight !== false) {
+        row.classList.add("fs-line-focus");
+        setTimeout(() => row.classList.remove("fs-line-focus"), 2000);
+      }
       return;
     }
   }
@@ -723,7 +836,7 @@ function focusLine(line) {
   const box = textEl.getBoundingClientRect();
   const lineHeight = code.getBoundingClientRect().height / total;
   if (!Number.isFinite(lineHeight) || lineHeight <= 0) return;
-  textEl.scrollTop = Math.max(0, (line - 1) * lineHeight - box.height / 2 + lineHeight);
+  textEl.scrollTop = Math.max(0, (line - 1) * lineHeight - (alignTop ? 4 : box.height / 2 - lineHeight));
 }
 
 // ---------------------------------------------------------------- 主题（Dark / Light）
@@ -775,7 +888,10 @@ function updatePreviewToggle(kind) {
 
 el("fs-preview-toggle").addEventListener("click", () => {
   // 以"当前实际视图"为准取反：带 &line= 被强制成 source 时，点一下也能正常进预览
-  pendingRatio = currentScrollRatio(); // 切换前后保持阅读位置（§29.6）
+  const useText = state.kind === "md"; // 只有 markdown 两者文本可对应
+  pendingSwitch = state.viewMode === "preview"
+    ? { from: "preview", text: useText ? previewAnchorText() : "", ratio: currentScrollRatio() }
+    : { from: "source", text: useText ? sourceAnchorText(currentTopLine()) : "", ratio: currentScrollRatio() };
   state.preview = state.viewMode !== "preview";
   localStorage.setItem("piweb-fs-preview", state.preview ? "1" : "0");
   if (state.selected) openFile(state.selected);
