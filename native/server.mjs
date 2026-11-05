@@ -476,6 +476,7 @@ async function broadcastTurnFiles() {
         }
       }
       const trimmed = diffText ? truncateDiff(diffText) : null;
+      if (!trimmed && code !== "D") log(`[pi-web] turn files: 拿不到 ${file} 的 diff（徽标仍显示行数）`);
       const line = untracked
         ? 1
         : firstChangedLine(worktreeDiffs.get(file)) ?? firstChangedLine(committedDiffs.get(file));
@@ -530,7 +531,9 @@ function gitDiffChunks(cwd, args, files) {
   if (files.length === 0) return chunks;
   let text = "";
   try {
-    text = execFileSync("git", ["diff", "-U3", "--no-renames", ...args, "--", ...files], {
+    // core.quotepath=false：否则非 ASCII 路径在 diff 头里被转义成 \346\255\243…，
+    // 与 `git status`/numstat 给出的真实路径对不上（中文文件名会因此拿不到 diff 和行号）。
+    text = execFileSync("git", ["-c", "core.quotepath=false", "diff", "-U3", "--no-renames", ...args, "--", ...files], {
       cwd,
       encoding: "utf8",
       timeout: 15000,
@@ -540,12 +543,13 @@ function gitDiffChunks(cwd, args, files) {
   } catch {
     return chunks;
   }
+  // 不解析 diff 头里的路径（含空格/特殊字符时 git 会加引号转义），而是拿已知文件去匹配头部行。
   let current = null;
   for (const line of text.split("\n")) {
-    const m = /^diff --git a\/(.+?) b\/(.+)$/.exec(line);
-    if (m) {
-      current = { file: m[2], lines: [line] };
-      chunks.set(current.file, current.lines);
+    if (line.startsWith("diff --git ")) {
+      const hit = files.find((f) => line.includes(f)) ?? null;
+      current = hit ? { file: hit, lines: [line] } : null;
+      if (hit) chunks.set(hit, current.lines);
       continue;
     }
     if (current) current.lines.push(line);
@@ -555,11 +559,26 @@ function gitDiffChunks(cwd, args, files) {
   return out;
 }
 
-/** diff 里第一处改动的**新文件行号**（`@@ -a,b +c,d @@` 的 c）。 */
+/**
+ * diff 里第一处改动的**新文件行号**。
+ * 不能直接用 `@@ +c` —— 那是 hunk 起点（含 3 行上下文），要在 hunk 体内跳过前导上下文行。
+ */
 function firstChangedLine(chunk) {
   if (!chunk) return null;
-  const m = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/m.exec(chunk);
-  return m ? Number(m[1]) : null;
+  const lines = chunk.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const m = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(lines[i]);
+    if (!m) continue;
+    let newLine = Number(m[1]);
+    for (let j = i + 1; j < lines.length; j++) {
+      const line = lines[j];
+      if (line.startsWith("@@") || line.startsWith("diff --git")) break;
+      if (line.startsWith("+") || line.startsWith("-")) return newLine;
+      if (line.startsWith(" ")) newLine += 1;
+    }
+    return newLine;
+  }
+  return null;
 }
 
 /** 截断 diff 文本（80 行 / 4 KB），返回 {text, truncated, omitted}。 */
