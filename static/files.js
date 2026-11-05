@@ -549,6 +549,8 @@ function isImage(path) {
 
 async function openFile(path, line = 0) {
   const anchor = state.selected === path ? captureViewAnchor() : null;
+  // 预览视图的"刷新"也要保持位置：源码视图用行锚点，预览只能按比例
+  const previewRatio = state.selected === path && !previewEl.hidden ? currentScrollRatio() : null;
   state.selected = path;
   // URL 跟着文件走：刷新后仍停在这个文件（链接分享/直达也一致）
   history.replaceState(null, "", `/files?path=${encodeURIComponent(path)}`);
@@ -606,6 +608,12 @@ async function openFile(path, line = 0) {
         updatePreviewToggle(kind);
         textEl.hidden = true;
         previewEl.hidden = false;
+        if (pendingRatio !== null) {
+          applyScrollRatio(pendingRatio);
+          pendingRatio = null;
+        } else if (previewRatio !== null) {
+          applyScrollRatio(previewRatio);
+        }
         if (data.truncated) showNote(`文件较大，预览只覆盖前 ${fmtSize(TEXT_PREVIEW_BYTES)}；完整内容请 download`);
         return;
       }
@@ -616,7 +624,10 @@ async function openFile(path, line = 0) {
     updatePreviewToggle(kind);
     renderText(data.text || "");
     if (line > 0) focusLine(line);
-    else restoreViewAnchor(anchor); // 刷新后回到原来的行
+    else if (pendingRatio !== null) {
+      applyScrollRatio(pendingRatio);
+      pendingRatio = null;
+    } else restoreViewAnchor(anchor); // 刷新后回到原来的行
     if (data.truncated) showNote(`文件较大，只显示前 ${fmtSize(TEXT_PREVIEW_BYTES)}；完整内容请 download`);
   } catch (err) {
     showNote(`读不了这个文件：${err.message}`);
@@ -664,6 +675,26 @@ function renderText(text) {
     textEl.append(g, body);
   }
   if (lines.length > max) showNote(`文件行数过多，只渲染前 ${max} 行（${wrap ? "折行模式" : "非折行模式"}）；完整内容请 download`);
+}
+
+// ---------------------------------------------------------------- 视图切换保持位置
+
+/** 切换 preview / source 时携带的滚动比例（0..1）；不是切换触发的渲染不会用到它。 */
+let pendingRatio = null;
+
+/** 当前可见视图的滚动比例（没有可滚动的就返回 0）。 */
+function currentScrollRatio() {
+  const pane = !previewEl.hidden ? previewEl : textEl;
+  const max = pane.scrollHeight - pane.clientHeight;
+  if (!(max > 0)) return 0;
+  return Math.min(1, Math.max(0, pane.scrollTop / max));
+}
+
+/** 把比例应用回"新视图"（预览与源码的排版差异很大，只能按比例近似保持位置）。 */
+function applyScrollRatio(ratio) {
+  const pane = !previewEl.hidden ? previewEl : textEl;
+  const max = pane.scrollHeight - pane.clientHeight;
+  if (max > 0) pane.scrollTop = Math.round(ratio * max);
 }
 
 // ---------------------------------------------------------------- 定位到指定行
@@ -744,6 +775,7 @@ function updatePreviewToggle(kind) {
 
 el("fs-preview-toggle").addEventListener("click", () => {
   // 以"当前实际视图"为准取反：带 &line= 被强制成 source 时，点一下也能正常进预览
+  pendingRatio = currentScrollRatio(); // 切换前后保持阅读位置（§29.6）
   state.preview = state.viewMode !== "preview";
   localStorage.setItem("piweb-fs-preview", state.preview ? "1" : "0");
   if (state.selected) openFile(state.selected);
