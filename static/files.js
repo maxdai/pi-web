@@ -487,6 +487,7 @@ async function renderPreview(kind, path, text) {
   previewEl.textContent = "";
   if (kind === "md") {
     await renderMarkdownPreview(previewEl, text, path);
+    buildLineMap(); // 给预览块打 data-src-line（§29.6）
     return true;
   }
   if (kind === "json" || kind === "jsonc") {
@@ -682,6 +683,79 @@ function renderText(text) {
   if (lines.length > max) showNote(`文件行数过多，只渲染前 ${max} 行（${wrap ? "折行模式" : "非折行模式"}）；完整内容请 download`);
 }
 
+
+// ---------------------------------------------------------------- 行号 ↔ 预览块映射（§29.6）
+
+/**
+ * 预览渲染后没有"源码行号"信息（marked 不提供 sourcemap），所以**一次性**建立映射：
+ * 源码行与预览块都在文档顺序上单调，做一次顺序对齐即可给每个命中的块打上
+ * `data-src-line`（相当于用户说的"隐藏标记"）——之后两边都往这个标记跳，不再做文本模糊匹配。
+ */
+let lineMap = null; // [{ line, el }]，line 递增
+
+function buildLineMap() {
+  lineMap = null;
+  const body = previewEl.querySelector(".fs-preview-body");
+  if (!body || !state.raw) return;
+  const blocks = [...body.querySelectorAll("h1,h2,h3,h4,h5,h6,p,li,pre,table,td,th,blockquote")];
+  if (blocks.length === 0) return;
+  const texts = blocks.map((el) => normText(el.textContent));
+  const lines = state.raw.split("\n");
+  const map = [];
+  let bi = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const t = normText(lines[i]);
+    const meaningful = (t.match(/[\p{L}\p{N}]/gu) || []).length;
+    if (meaningful < 4) continue; // 空行、围栏、表格分隔线不参与
+    const short = t.slice(0, 12);
+    // 只往前走（两边顺序一致），最多向前找 120 个块
+    for (let j = bi; j < Math.min(blocks.length, bi + 120); j++) {
+      if (!texts[j].includes(short)) continue;
+      bi = j;
+      blocks[j].dataset.srcLine = String(i + 1);
+      map.push({ line: i + 1, el: blocks[j] });
+      break;
+    }
+  }
+  lineMap = map;
+}
+
+/** 找 line 对应的预览块：取 srcLine ≤ line 的最后一个（映射是稀疏的）。 */
+function previewBlockForLine(line) {
+  if (!lineMap || lineMap.length === 0) return null;
+  let lo = 0;
+  let hi = lineMap.length - 1;
+  let best = null;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (lineMap[mid].line <= line) {
+      best = lineMap[mid];
+      lo = mid + 1;
+    } else {
+      hi = mid - 1;
+    }
+  }
+  return best ? best.el : lineMap[0].el;
+}
+
+/** 预览顶部可见块对应的源码行号（用 data-src-line，没有就往前找最近有标记的块）。 */
+function sourceLineForPreviewTop() {
+  const body = previewEl.querySelector(".fs-preview-body");
+  if (!body) return null;
+  const top = previewEl.getBoundingClientRect().top;
+  const blocks = [...body.querySelectorAll("[data-src-line]")];
+  if (blocks.length === 0) return null;
+  let candidate = null;
+  for (const el of blocks) {
+    if (el.getBoundingClientRect().bottom > top + 6) {
+      candidate = el;
+      break;
+    }
+  }
+  if (!candidate) candidate = blocks[blocks.length - 1];
+  return Number(candidate.dataset.srcLine) || null;
+}
+
 // ---------------------------------------------------------------- 视图切换保持位置（§29.6）
 
 /**
@@ -824,18 +898,16 @@ function findSourceLine(needle, expectedRatio = 0) {
 function applySwitchAnchor(sw) {
   if (!sw) return false;
   if (!previewEl.hidden) {
-    if (sw.from !== "source" || !sw.text) return false;
-    const el = findPreviewElement(sw.text, sw.ratio || 0);
+    if (sw.from !== "source") return false;
+    // ① 行号映射（精确）② 文本匹配 ③ 比例
+    const el = (sw.line && previewBlockForLine(sw.line)) || (sw.text ? findPreviewElement(sw.text, sw.ratio || 0) : null);
     if (!el) return false;
     const offset = el.getBoundingClientRect().top - previewEl.getBoundingClientRect().top + previewEl.scrollTop - 8;
     previewEl.scrollTop = Math.max(0, Math.round(offset));
     return true;
   }
-  if (sw.from !== "preview" || !sw.text) {
-    // 源码 → 源码（刷新）仍用行锚点
-    return false;
-  }
-  const line = findSourceLine(sw.text, sw.ratio || 0);
+  if (sw.from !== "preview") return false;
+  const line = sourceLineForPreviewTop() ?? (sw.text ? findSourceLine(sw.text, sw.ratio || 0) : null);
   if (!line) return false;
   focusLine(line, { highlight: false, alignTop: true });
   return true;
@@ -928,9 +1000,10 @@ function updatePreviewToggle(kind) {
 el("fs-preview-toggle").addEventListener("click", () => {
   // 以"当前实际视图"为准取反：带 &line= 被强制成 source 时，点一下也能正常进预览
   const useText = state.kind === "md"; // 只有 markdown 两者文本可对应
+  const topLine = state.viewMode === "preview" ? null : currentTopLine();
   pendingSwitch = state.viewMode === "preview"
     ? { from: "preview", text: useText ? previewAnchorText() : "", ratio: currentScrollRatio() }
-    : { from: "source", text: useText ? sourceAnchorText(currentTopLine()) : "", ratio: currentScrollRatio() };
+    : { from: "source", line: topLine, text: useText ? sourceAnchorText(topLine) : "", ratio: currentScrollRatio() };
   state.preview = state.viewMode !== "preview";
   localStorage.setItem("piweb-fs-preview", state.preview ? "1" : "0");
   if (state.selected) openFile(state.selected);
