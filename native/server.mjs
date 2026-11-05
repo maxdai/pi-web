@@ -33,9 +33,10 @@ import { createRequire } from "node:module";
 import { spawn, execFileSync } from "node:child_process";
 import { readdir, readFile, stat } from "node:fs/promises";
 import { createHash } from "node:crypto";
-import { closeSync, existsSync, openSync, readFileSync, readSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { StringDecoder } from "node:string_decoder";
-import { dirname, extname, join, resolve } from "node:path";
+import { basename, dirname, extname, join, resolve } from "node:path";
+import { homedir } from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { randomUUID } from "node:crypto";
 
@@ -405,17 +406,118 @@ function withNativeCommands(commands) {
   return [...visible, ...NATIVE_COMMANDS.filter((c) => !names.has(c.name))];
 }
 
+
+// ---- §30.7：按会话持久化"本轮改动"块（服务端 sidecar）----
+
+const TURN_FILES_MAX_BLOCKS = 20; // 每会话保留最近 20 轮
+const TURN_FILES_DIFF_BLOCKS = 5; // 只有最近 5 轮保留 diff 正文
+const TURN_FILES_MAX_BYTES = 1024 * 1024; // 单文件上限 1 MB
+
+/** sidecar 路径：`~/.pi/agent/pi-web/turn-files/<会话文件名>.json`（不碰 Pi 的 session 文件）。 */
+function turnFilesStorePath() {
+  const file = session?.path;
+  if (!file) return null;
+  const base = basename(file).replace(/\.jsonl$/, "");
+  return join(homedir(), ".pi", "agent", "pi-web", "turn-files", `${base}.json`);
+}
+
+function loadTurnFileStore() {
+  const path = turnFilesStorePath();
+  if (!path) return { version: 1, blocks: [] };
+  try {
+    const raw = JSON.parse(readFileSync(path, "utf8"));
+    return { version: 1, blocks: Array.isArray(raw.blocks) ? raw.blocks : [] };
+  } catch {
+    return { version: 1, blocks: [] };
+  }
+}
+
+function saveTurnFileStore(store) {
+  const path = turnFilesStorePath();
+  if (!path) return;
+  try {
+    mkdirSync(dirname(path), { recursive: true });
+    if (store.blocks.length === 0) {
+      // 没有内容就删掉文件，别留空壳
+      if (existsSync(path)) unlinkSync(path);
+      return;
+    }
+    writeFileSync(path, JSON.stringify(store));
+  } catch (err) {
+    logErr(`[pi-web] turn-files 保存失败：${err.message}`);
+  }
+}
+
+/** 当前会话里仍然存在的 entry id 集合（分支切换/清理后用它丢弃失效锚点）。 */
+function currentEntryIds() {
+  const file = session?.path;
+  if (!file || !existsSync(file)) return null;
+  try {
+    return new Set(scanTreeIndex(file).order);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 修剪 + 同步：丢掉锚点已不存在于会话的块（例如 /tree 切分支、会话被改写），
+ * 再套上限（轮数 / diff 轮数 / 字节数）。没 git 更新的回合也会走一遍，保持存储与会话一致。
+ */
+function pruneTurnFileStore(store, validIds) {
+  let blocks = store.blocks.filter((b) => {
+    if (!b) return false;
+    if (!b.anchorEntryId) return false;
+    return validIds ? validIds.has(b.anchorEntryId) : true;
+  });
+  blocks = blocks.slice(-TURN_FILES_MAX_BLOCKS);
+  const strip = (b) => ({
+    ...b,
+    files: (b.files || []).map((f) => ({ ...f, diff: null, diffTruncated: false, omitted: 0 })),
+  });
+  blocks = blocks.map((b, i) => (i >= blocks.length - TURN_FILES_DIFF_BLOCKS ? b : strip(b)));
+  let json = JSON.stringify({ version: 1, blocks });
+  // 还是太大 → 从最旧的开始继续丢 diff
+  for (let i = 0; json.length > TURN_FILES_MAX_BYTES && i < blocks.length - 1; i++) {
+    blocks[i] = strip(blocks[i]);
+    json = JSON.stringify({ version: 1, blocks });
+  }
+  return { version: 1, blocks };
+}
+
 /** 本轮开始时的 git 快照（`agent_start` 拍，`agent_settled` 消费）。 */
 let turnGitBefore;
 
-/** 广播本轮改动文件（§30）：没有 git、或本轮没变化就不发。 */
+/**
+ * 记录本轮改动文件（§30）：算差集 → 追加到会话 sidecar → 修剪同步 → 广播。
+ * 即使本轮没有 git 变化也会执行修剪（用户要求"没更新也要清理存储、保持同步"）。
+ */
 async function broadcastTurnFiles() {
   const before = turnGitBefore;
   turnGitBefore = undefined;
-  if (!before) return; // 非 git 仓库 / 拿不到快照
-  const cwd = session?.cwd ?? "";
-  const after = gitSnapshot(cwd);
-  if (!after) return;
+  try {
+    const cwd = session?.cwd ?? "";
+    const after = before ? gitSnapshot(cwd) : null;
+    const files = before && after ? collectTurnFiles(cwd, before, after) : [];
+    const store = loadTurnFileStore();
+    const file = session?.path;
+    const anchorEntryId = file && existsSync(file) ? lastEntryId(file, ensureHistoryIndex()) : null;
+    if (files.length > 0 && anchorEntryId) {
+      store.blocks.push({ ts: Date.now(), anchorEntryId, files });
+      log(`[pi-web] turn files: ${files.length} 个（${files.slice(0, 5).map((f) => f.code + " " + f.path).join(", ")}${files.length > 5 ? ", …" : ""}）`);
+    }
+    // 无论有没有新块都修剪一次：锚点已失效的块（切分支/会话改写）就此清掉（用户要求"没更新也要清理"）
+    const pruned = pruneTurnFileStore(store, currentEntryIds());
+    saveTurnFileStore(pruned);
+    if (files.length > 0 && anchorEntryId) {
+      broadcast({ type: "turn_files", data: { cwd, files, anchorEntryId } });
+    }
+  } catch (err) {
+    logErr(`[pi-web] turn files 处理失败：${err.message}`);
+  }
+}
+
+/** 计算本轮改动文件（工作区差集 + 本轮提交），带 diff 统计与首处改动行（§30.6）。 */
+function collectTurnFiles(cwd, before, after) {
   // 先取"本轮内提交过"的文件（改完立刻 commit 时工作区会变干净，只比工作区会漏掉 ✗），
   // 再用工作区差集覆盖（工作区才是最终状态）。
   const merged = new Map();
@@ -425,7 +527,6 @@ async function broadcastTurnFiles() {
   for (const { file, code } of diffGitSnapshots(before.status, after.status)) {
     merged.set(file, displayStatusCode(code));
   }
-  // §30.6：diff 统计 + 首处改动行（两次 diff 各批量取一次，再按文件切分）
   const paths = [...merged.keys()];
   const worktreeNum = gitNumstatMap(cwd, ["HEAD"]);
   const committedNum = before.head && after.head && before.head !== after.head
@@ -494,9 +595,7 @@ async function broadcastTurnFiles() {
       };
     })
     .sort((a, b) => a.path.localeCompare(b.path));
-  if (files.length === 0) return;
-  log(`[pi-web] turn files: ${files.length} 个（${files.slice(0, 5).map((f) => f.code + " " + f.path).join(", ")}${files.length > 5 ? ", …" : ""}）`);
-  broadcast({ type: "turn_files", data: { cwd, files } });
+  return files;
 }
 
 
@@ -970,7 +1069,15 @@ async function sendHistory(target) {
       : readPage(file, index, from, total);
     const frame = {
       type: "history",
-      data: { entries, from, total, hasMore: from > 0, leafId: pathIds ? pathIds[pathIds.length - 1] : lastEntryId(file, index) },
+      data: {
+        entries,
+        from,
+        total,
+        hasMore: from > 0,
+        leafId: pathIds ? pathIds[pathIds.length - 1] : lastEntryId(file, index),
+        // §30.7：本会话已记录的各轮改动（按锚点 entry id 复原到消息流里）
+        turnFiles: loadTurnFileStore().blocks,
+      },
     };
     log(`[pi-web] history: ${entries.length}/${total} 条（from=${from}${from > 0 ? "，可继续往前加载" : ""}）`);
     if (target) target.send(JSON.stringify(frame));
@@ -981,7 +1088,10 @@ async function sendHistory(target) {
   try {
     const data = await rpc("get_entries", {}, { timeoutMs: RPC_LONG_TIMEOUT_MS }).then((r) => r?.data);
     const entries = data?.entries ?? [];
-    const frame = { type: "history", data: { entries, from: 0, total: entries.length, hasMore: false, leafId: data?.leafId ?? null } };
+    const frame = {
+      type: "history",
+      data: { entries, from: 0, total: entries.length, hasMore: false, leafId: data?.leafId ?? null, turnFiles: loadTurnFileStore().blocks },
+    };
     if (target) target.send(JSON.stringify(frame));
     else broadcast(frame);
   } catch (err) {

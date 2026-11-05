@@ -819,6 +819,7 @@ class PiWebClient {
       this.replaying = false;
     }
     this.updateHistoryLoader(data?.hasMore === true);
+    this.restoreTurnFiles(data?.turnFiles); // 服务端记录的各轮改动块按 entry id 复原（§30.7）
     this.stickToBottom(); // 跟住式贴底：布局/离屏高度晚增长时也要停在底部
   }
 
@@ -879,6 +880,16 @@ class PiWebClient {
 
   renderEntry(entry) {
     if (!entry) return;
+    const beforeKids = entry.id ? new Set(this.contentEl.children) : null;
+    this.renderEntryBody(entry);
+    if (beforeKids) {
+      for (const el of this.contentEl.children) {
+        if (!beforeKids.has(el)) el.dataset.entryId = entry.id;
+      }
+    }
+  }
+
+  renderEntryBody(entry) {
     if (entry.type === 'message') {
       this.renderMessage(entry.message);
     } else if (entry.type === 'branch_summary') {
@@ -1558,7 +1569,7 @@ class PiWebClient {
    * 数据来自服务端（`agent_start` / `agent_settled` 两次 `git status` 快照差），
    * 因此能覆盖 bash 里做的修改；非 git 仓库、或本轮没变化时服务端不会发这个事件。
    */
-  renderTurnFiles(data) {
+  renderTurnFiles(data, opts = {}) {
     const files = (data && Array.isArray(data.files) ? data.files : []).filter((f) => f && f.path);
     if (files.length === 0) return;
 
@@ -1629,8 +1640,26 @@ class PiWebClient {
       row.addEventListener('mouseenter', () => this.showDiffPopover(row));
       row.addEventListener('mouseleave', () => this.hideDiffPopover());
     }
-    this.contentEl.appendChild(box);
+    if (opts.afterEntryId) this.insertAfterEntry(opts.afterEntryId, box);
+    else this.contentEl.appendChild(box);
     if (this.followBottom) this.scrollToBottom();
+  }
+
+  /** 插到某个 entry 渲染出的最后一个节点之后；找不到就追加到末尾（历史被裁剪时不丢块）。 */
+  insertAfterEntry(entryId, box) {
+    const nodes = [...this.contentEl.children].filter((el) => el.dataset.entryId === entryId);
+    const last = nodes[nodes.length - 1];
+    if (last) last.after(box);
+    else this.contentEl.appendChild(box);
+  }
+
+  /** 服务端存下来的各轮改动块：按 anchorEntryId 复原到消息流对应位置。 */
+  restoreTurnFiles(blocks) {
+    if (!Array.isArray(blocks) || blocks.length === 0) return;
+    for (const block of blocks) {
+      if (!block || !Array.isArray(block.files) || block.files.length === 0) continue;
+      this.renderTurnFiles({ files: block.files }, { afterEntryId: block.anchorEntryId });
+    }
   }
 
   /** 悬停显示该文件的 diff（浮层不吃鼠标事件，移出即消失）。 */
