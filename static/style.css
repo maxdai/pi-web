@@ -1827,3 +1827,73 @@ a.nav-btn {
   color: var(--dim);
   text-decoration: line-through;
 }
+
+/* 本轮改动文件：+A −D 徽标与悬停 diff 浮层（设计 §30.6） */
+.turn-file-stat {
+  margin-left: auto;
+  padding-left: 10px;
+  flex: 0 0 auto;
+  font-size: 12px;
+}
+
+.turn-file-stat .stat-add {
+  color: var(--bash-mode);
+}
+
+.turn-file-stat .stat-del {
+  color: var(--error);
+  margin-left: 6px;
+}
+
+.turn-file:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+body.theme-light .turn-file:hover {
+  background: rgba(0, 0, 0, 0.04);
+}
+
+#diff-pop {
+  position: fixed;
+  z-index: 60;
+  display: none;
+  max-width: min(780px, 70vw);
+  max-height: 46vh;
+  overflow: hidden;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--code-bg);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+  pointer-events: none; /* 不吃鼠标，移出即消失 */
+}
+
+#diff-pop pre {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre;
+  overflow: hidden;
+}
+
+#diff-pop .diff-add { color: var(--bash-mode); }
+#diff-pop .diff-del { color: var(--error); }
+#diff-pop .diff-hunk { color: var(--accent); }
+#diff-pop .diff-head { color: var(--muted); }
+#diff-pop .diff-ctx { color: var(--dim); }
+
+#diff-pop .diff-more {
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+/* 文件页：跳转到的行短暂高亮（折行模式） */
+#fs-text .fs-line-focus {
+  background: rgba(255, 200, 0, 0.16);
+  outline: 1px solid rgba(255, 200, 0, 0.4);
+  outline-offset: -1px;
+}

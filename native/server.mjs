@@ -424,16 +424,158 @@ async function broadcastTurnFiles() {
   for (const { file, code } of diffGitSnapshots(before.status, after.status)) {
     merged.set(file, displayStatusCode(code));
   }
-  const files = [...merged.entries()]
-    .map(([file, code]) => ({
-      path: file,
-      abs: file.startsWith("/") ? file : `${cwd.replace(/\/$/, "")}/${file}`,
-      code,
-    }))
+  // §30.6：diff 统计 + 首处改动行（两次 diff 各批量取一次，再按文件切分）
+  const paths = [...merged.keys()];
+  const worktreeNum = gitNumstatMap(cwd, ["HEAD"]);
+  const committedNum = before.head && after.head && before.head !== after.head
+    ? gitNumstatMap(cwd, [before.head, after.head])
+    : new Map();
+  const worktreeDiffs = gitDiffChunks(cwd, ["HEAD"], paths);
+  const committedDiffs = before.head && after.head && before.head !== after.head
+    ? gitDiffChunks(cwd, [before.head, after.head], paths)
+    : new Map();
+
+  const files = paths
+    .map((file) => {
+      const code = merged.get(file);
+      const untracked = after.status.get(file) === "??";
+      let add = 0;
+      let del = 0;
+      let hasStat = false;
+      for (const num of [committedNum.get(file), worktreeNum.get(file)]) {
+        if (!num) continue;
+        if (num.add === null || num.del === null) continue; // 二进制
+        add += num.add;
+        del += num.del;
+        hasStat = true;
+      }
+      if (untracked) {
+        // git diff 看不到未跟踪文件：自己数行数
+        try {
+          const full = `${cwd.replace(/\/$/, "")}/${file}`;
+          const size = statSync(full).size;
+          if (size <= 2 * 1024 * 1024) {
+            const body = readFileSync(full, "utf8");
+            add += body.split("\n").length - (body.endsWith("\n") ? 1 : 0);
+            hasStat = true;
+          }
+        } catch {
+          /* 读不到就不显示统计 */
+        }
+      }
+      const parts = [committedDiffs.get(file), worktreeDiffs.get(file)].filter(Boolean);
+      let diffText = parts.join("\n");
+      if (untracked && !diffText) {
+        try {
+          const full = `${cwd.replace(/\/$/, "")}/${file}`;
+          const body = readFileSync(full, "utf8").split("\n").slice(0, 40);
+          diffText = `--- /dev/null\n+++ b/${file}\n@@ -0,0 +1,${body.length} @@\n` +
+            body.map((l) => `+${l}`).join("\n");
+        } catch {
+          /* 忽略 */
+        }
+      }
+      const trimmed = diffText ? truncateDiff(diffText) : null;
+      const line = untracked
+        ? 1
+        : firstChangedLine(worktreeDiffs.get(file)) ?? firstChangedLine(committedDiffs.get(file));
+      return {
+        path: file,
+        abs: file.startsWith("/") ? file : `${cwd.replace(/\/$/, "")}/${file}`,
+        code,
+        add: hasStat ? add : null,
+        del: hasStat ? del : null,
+        line,
+        diff: trimmed ? trimmed.text : null,
+        diffTruncated: trimmed ? trimmed.truncated : false,
+        omitted: trimmed ? trimmed.omitted : 0,
+      };
+    })
     .sort((a, b) => a.path.localeCompare(b.path));
   if (files.length === 0) return;
   log(`[pi-web] turn files: ${files.length} 个（${files.slice(0, 5).map((f) => f.code + " " + f.path).join(", ")}${files.length > 5 ? ", …" : ""}）`);
   broadcast({ type: "turn_files", data: { cwd, files } });
+}
+
+
+// ---- §30.6：diff 徽标 / 首处改动行 ----
+
+/** `git diff --numstat -z --no-renames <args>` → Map(path → {add, del})。 */
+function gitNumstatMap(cwd, args) {
+  const map = new Map();
+  try {
+    const out = execFileSync("git", ["diff", "--numstat", "-z", "--no-renames", ...args], {
+      cwd,
+      encoding: "utf8",
+      timeout: 10000,
+      maxBuffer: 16 * 1024 * 1024,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    for (const rec of out.split("\0")) {
+      if (!rec) continue;
+      const parts = rec.split("\t");
+      if (parts.length < 3) continue;
+      const [a, d, file] = parts;
+      map.set(file, { add: a === "-" ? null : Number(a), del: d === "-" ? null : Number(d) });
+    }
+  } catch {
+    /* 无 diff 或非仓库 */
+  }
+  return map;
+}
+
+/** 批量取 diff 文本并按文件切分（`git diff -U3 <args> -- <files…>`）。 */
+function gitDiffChunks(cwd, args, files) {
+  const chunks = new Map();
+  if (files.length === 0) return chunks;
+  let text = "";
+  try {
+    text = execFileSync("git", ["diff", "-U3", "--no-renames", ...args, "--", ...files], {
+      cwd,
+      encoding: "utf8",
+      timeout: 15000,
+      maxBuffer: 32 * 1024 * 1024,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+  } catch {
+    return chunks;
+  }
+  let current = null;
+  for (const line of text.split("\n")) {
+    const m = /^diff --git a\/(.+?) b\/(.+)$/.exec(line);
+    if (m) {
+      current = { file: m[2], lines: [line] };
+      chunks.set(current.file, current.lines);
+      continue;
+    }
+    if (current) current.lines.push(line);
+  }
+  const out = new Map();
+  for (const [file, lines] of chunks) out.set(file, lines.join("\n"));
+  return out;
+}
+
+/** diff 里第一处改动的**新文件行号**（`@@ -a,b +c,d @@` 的 c）。 */
+function firstChangedLine(chunk) {
+  if (!chunk) return null;
+  const m = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/m.exec(chunk);
+  return m ? Number(m[1]) : null;
+}
+
+/** 截断 diff 文本（80 行 / 4 KB），返回 {text, truncated, omitted}。 */
+function truncateDiff(text) {
+  const MAX_LINES = 80;
+  const MAX_CHARS = 4096;
+  const lines = text.split("\n");
+  let kept = 0;
+  let size = 0;
+  for (const line of lines) {
+    if (kept >= MAX_LINES || size + line.length + 1 > MAX_CHARS) break;
+    kept += 1;
+    size += line.length + 1;
+  }
+  if (kept >= lines.length) return { text, truncated: false, omitted: 0 };
+  return { text: lines.slice(0, kept).join("\n"), truncated: true, omitted: lines.length - kept };
 }
 
 // ------------------------------------------------------------------ 状态构建

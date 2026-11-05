@@ -546,7 +546,7 @@ function isImage(path) {
   return /\.(png|jpe?g|gif|webp|bmp|avif|ico)$/i.test(path);
 }
 
-async function openFile(path) {
+async function openFile(path, line = 0) {
   const anchor = state.selected === path ? captureViewAnchor() : null;
   state.selected = path;
   // URL 跟着文件走：刷新后仍停在这个文件（链接分享/直达也一致）
@@ -597,7 +597,7 @@ async function openFile(path) {
     imageEl.hidden = true;
     // 富文本预览（§29）：md / json / jsonc / jsonl 且用户选择看预览
     if (kind && state.preview && !data.binary) {
-      const ok = await renderPreview(kind, path, data.text || "");
+      const ok = line > 0 ? false : await renderPreview(kind, path, data.text || "");
       if (ok) {
         textEl.hidden = true;
         previewEl.hidden = false;
@@ -609,7 +609,8 @@ async function openFile(path) {
     textEl.hidden = false;
     previewEl.hidden = true;
     renderText(data.text || "");
-    restoreViewAnchor(anchor); // 刷新后回到原来的行
+    if (line > 0) focusLine(line);
+    else restoreViewAnchor(anchor); // 刷新后回到原来的行
     if (data.truncated) showNote(`文件较大，只显示前 ${fmtSize(TEXT_PREVIEW_BYTES)}；完整内容请 download`);
   } catch (err) {
     showNote(`读不了这个文件：${err.message}`);
@@ -657,6 +658,35 @@ function renderText(text) {
     textEl.append(g, body);
   }
   if (lines.length > max) showNote(`文件行数过多，只渲染前 ${max} 行（${wrap ? "折行模式" : "非折行模式"}）；完整内容请 download`);
+}
+
+// ---------------------------------------------------------------- 定位到指定行
+
+/**
+ * 滚到第 N 行（1 基）。
+ * 折行模式：每行是独立元素 → 精确滚动 + 高亮闪烁；
+ * 非折行模式：只有一个行号栏 + 一大块文本 → 按行高估算滚动（不高亮）。
+ */
+function focusLine(line) {
+  if (!(line > 0)) return;
+  if (state.wrap) {
+    const row = textEl.querySelector(`.fs-line[data-line="${line}"]`);
+    if (row) {
+      row.scrollIntoView({ block: "center" });
+      row.classList.add("fs-line-focus");
+      setTimeout(() => row.classList.remove("fs-line-focus"), 2000);
+      return;
+    }
+  }
+  const code = textEl.querySelector(".fs-code") || textEl.querySelector(".fs-linecode");
+  if (!code) return;
+  const total = (textEl.querySelector(".fs-gutter")?.textContent || "").split("\n").length ||
+    textEl.querySelectorAll(".fs-line").length;
+  if (!total) return;
+  const box = textEl.getBoundingClientRect();
+  const lineHeight = code.getBoundingClientRect().height / total;
+  if (!Number.isFinite(lineHeight) || lineHeight <= 0) return;
+  textEl.scrollTop = Math.max(0, (line - 1) * lineHeight - box.height / 2 + lineHeight);
 }
 
 // ---------------------------------------------------------------- 主题（Dark / Light）
@@ -782,4 +812,8 @@ for (const el of document.querySelectorAll(".theme-option")) {
 }
 
 const initialPath = new URLSearchParams(location.search).get("path");
-navigate(initialPath || null);
+const initialLine = Number(new URLSearchParams(location.search).get("line"));
+navigate(initialPath || null).then(() => {
+  // URL 里带 &line=N（来自"本轮改动文件"的链接）→ 打开后直接定位（§30.6）
+  if (initialPath && initialLine > 0 && state.selected) focusLine(initialLine);
+});

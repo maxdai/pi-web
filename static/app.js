@@ -1591,8 +1591,30 @@ class PiWebClient {
         gone.title = `Deleted: ${target}`;
         row.appendChild(gone);
       } else {
-        row.appendChild(this.buildFileLink(target, file.path));
+        // 带行号时点开直接跳到第一处改动（§30.6）
+        const href = `/files?path=${encodeURIComponent(target)}` +
+          (Number.isFinite(file.line) && file.line > 0 ? `&line=${file.line}` : '');
+        const link = this.buildFileLink(target, file.path);
+        link.href = href;
+        link.title = `Open in file browser: ${target}` +
+          (Number.isFinite(file.line) && file.line > 0 ? `（第 ${file.line} 行）` : '');
+        row.appendChild(link);
       }
+      // diff 徽标：绿加红减（二进制等算不出统计时两个都不显示）
+      if (file.add !== null && file.add !== undefined) {
+        const stat = document.createElement('span');
+        stat.className = 'turn-file-stat';
+        const plus = document.createElement('span');
+        plus.className = 'stat-add';
+        plus.textContent = `+${file.add}`;
+        const minus = document.createElement('span');
+        minus.className = 'stat-del';
+        minus.textContent = `−${file.del ?? 0}`;
+        stat.append(plus, minus);
+        row.appendChild(stat);
+      }
+      row.dataset.diff = file.diff || '';
+      row.dataset.diffOmitted = String(file.omitted || 0);
       list.appendChild(row);
     }
 
@@ -1603,8 +1625,60 @@ class PiWebClient {
     });
 
     box.append(head, list);
+    for (const row of list.querySelectorAll('.turn-file')) {
+      row.addEventListener('mouseenter', () => this.showDiffPopover(row));
+      row.addEventListener('mouseleave', () => this.hideDiffPopover());
+    }
     this.contentEl.appendChild(box);
     if (this.followBottom) this.scrollToBottom();
+  }
+
+  /** 悬停显示该文件的 diff（浮层不吃鼠标事件，移出即消失）。 */
+  showDiffPopover(row) {
+    const diff = row.dataset.diff;
+    if (!diff) return;
+    let pop = document.getElementById('diff-pop');
+    if (!pop) {
+      pop = document.createElement('div');
+      pop.id = 'diff-pop';
+      document.body.appendChild(pop);
+    }
+    pop.textContent = '';
+    const pre = document.createElement('pre');
+    for (const line of diff.split('\n')) {
+      const span = document.createElement('span');
+      span.className = line.startsWith('+++') || line.startsWith('---')
+        ? 'diff-head'
+        : line.startsWith('+') ? 'diff-add'
+        : line.startsWith('-') ? 'diff-del'
+        : line.startsWith('@@') ? 'diff-hunk'
+        : 'diff-ctx';
+      span.textContent = line + '\n';
+      pre.appendChild(span);
+    }
+    pop.appendChild(pre);
+    const omitted = Number(row.dataset.diffOmitted || 0);
+    if (omitted > 0) {
+      const more = document.createElement('div');
+      more.className = 'diff-more';
+      more.textContent = `… 还有 ${omitted} 行未显示（打开文件看完整内容）`;
+      pop.appendChild(more);
+    }
+    const r = row.getBoundingClientRect();
+    pop.style.visibility = 'hidden';
+    pop.style.display = 'block';
+    const pr = pop.getBoundingClientRect();
+    let top = r.bottom + 4;
+    if (top + pr.height > window.innerHeight - 8) top = Math.max(8, r.top - pr.height - 4);
+    let left = Math.min(r.left + 24, window.innerWidth - pr.width - 8);
+    pop.style.top = `${Math.round(Math.max(8, top))}px`;
+    pop.style.left = `${Math.round(Math.max(8, left))}px`;
+    pop.style.visibility = 'visible';
+  }
+
+  hideDiffPopover() {
+    const pop = document.getElementById('diff-pop');
+    if (pop) pop.style.display = 'none';
   }
 
   // ------------------------------------------------------------------
