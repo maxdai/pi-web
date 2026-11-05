@@ -368,6 +368,15 @@
   color: #c678dd;
 }
 
+/* 亮色主题：上面两个硬编码色是为暗色选的，亮底下对比度不够 → 换成 One Light 一组的取值 */
+body.theme-light #fs-preview .json-num {
+  color: #986801;
+}
+
+body.theme-light #fs-preview .json-bool {
+  color: #a626a4;
+}
+
 #fs-preview .json-punc {
   color: var(--dim);
 }

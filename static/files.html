@@ -13,6 +13,11 @@
     <button id="fs-toggle-list" class="fs-btn" title="Collapse / expand the file list">«</button>
     <span id="fs-title">Files</span>
     <nav id="fs-crumbs" aria-label="path"></nav>
+    <span id="theme-switch">
+      <span class="theme-option" data-theme="dark">Dark</span>
+      <span class="theme-sep">|</span>
+      <span class="theme-option" data-theme="light">Light</span>
+    </span>
     <span id="fs-tools">
       <input id="fs-filter" type="search" placeholder="filter…" autocomplete="off" spellcheck="false">
       <button id="fs-sort" class="fs-btn" title="Sort by name / modified time">name</button>
@@ -42,7 +47,15 @@
       <div id="fs-note" hidden></div>
     </div>
   </div>
-  <script nonce="__PI_WEB_FS_NONCE__">window.__PI_WEB_FS_TOKEN__ = "__PI_WEB_FS_TOKEN_VALUE__";</script>
+  <script nonce="__PI_WEB_FS_NONCE__">
+    window.__PI_WEB_FS_TOKEN__ = "__PI_WEB_FS_TOKEN_VALUE__";
+    // 主题尽早应用（与主页面共用 localStorage 的 piweb-theme），避免首屏闪一下再切换
+    (function () {
+      var t = localStorage.getItem("piweb-theme");
+      if (t === "bright") t = "light"; // 旧键名迁移
+      document.body.classList.toggle("theme-light", (t || "light") === "light");
+    })();
+  </script>
   <script src="vendor/marked.min.js"></script>
   <script src="sanitize.js"></script>
   <script src="files.js"></script>

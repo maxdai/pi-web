@@ -617,6 +617,23 @@ function renderText(text) {
   if (lines.length > max) showNote(`文件行数过多，只渲染前 ${max} 行（${wrap ? "折行模式" : "非折行模式"}）；完整内容请 download`);
 }
 
+// ---------------------------------------------------------------- 主题（Dark / Light）
+
+/** 与主页面共用 localStorage 的 `piweb-theme`（页面打开时已由内联脚本先应用一次）。 */
+function currentTheme() {
+  const stored = localStorage.getItem("piweb-theme");
+  return stored === "bright" ? "light" : stored || "light";
+}
+
+function applyTheme(name) {
+  const light = name === "light";
+  document.body.classList.toggle("theme-light", light);
+  localStorage.setItem("piweb-theme", light ? "light" : "dark");
+  for (const el of document.querySelectorAll(".theme-option")) {
+    el.classList.toggle("active", el.dataset.theme === (light ? "light" : "dark"));
+  }
+}
+
 // ---------------------------------------------------------------- 事件绑定
 
 el("fs-filter").addEventListener("input", (e) => {
@@ -717,5 +734,10 @@ el("fs-wrap").addEventListener("change", (e) => {
 
 // 默认从**当前会话 cwd** 开始：不带 path 时服务端按会话 cwd 解析（§28.3）
 applySplit();
+applyTheme(currentTheme());
+for (const el of document.querySelectorAll(".theme-option")) {
+  el.addEventListener("click", () => applyTheme(el.dataset.theme));
+}
+
 const initialPath = new URLSearchParams(location.search).get("path");
 navigate(initialPath || null);
