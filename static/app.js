@@ -787,48 +787,9 @@ class PiWebClient {
     return div.innerHTML;
   }
 
+  /** 白名单消毒：实现抽到 static/sanitize.js，与文件浏览器共用（设计 §29.1） */
   sanitizeHtml(html) {
-    const template = document.createElement('template');
-    template.innerHTML = html;
-
-    const allowed = new Set([
-      'P', 'BR', 'STRONG', 'EM', 'CODE', 'PRE', 'BLOCKQUOTE',
-      'UL', 'OL', 'LI', 'A', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6',
-      'TABLE', 'THEAD', 'TBODY', 'TR', 'TH', 'TD', 'HR', 'SPAN', 'DEL', 'DIV',
-    ]);
-    const badTags = ['SCRIPT', 'STYLE', 'IFRAME', 'OBJECT', 'EMBED', 'LINK', 'META', 'FORM', 'INPUT', 'BUTTON', 'TEXTAREA', 'SELECT', 'OPTION'];
-
-    for (const el of [...template.content.querySelectorAll('*')]) {
-      if (badTags.includes(el.tagName)) {
-        el.remove();
-        continue;
-      }
-      if (!allowed.has(el.tagName)) {
-        el.replaceWith(...el.childNodes);
-        continue;
-      }
-      // Clean attributes: only keep safe href/src, remove event handlers
-      for (const attr of [...el.attributes]) {
-        const name = attr.name.toLowerCase();
-        if (name.startsWith('on')) {
-          el.removeAttribute(attr.name);
-          continue;
-        }
-        if (name === 'href' || name === 'src') {
-          const val = attr.value.trim().toLowerCase();
-          const ok = val.startsWith('http://') || val.startsWith('https://') ||
-            val.startsWith('mailto:') || val.startsWith('#') || val.startsWith('/') ||
-            val.startsWith('./') || val.startsWith('../');
-          if (!ok) {
-            el.removeAttribute(attr.name);
-          }
-        } else if (name !== 'class' && name !== 'id' && name !== 'colspan' && name !== 'rowspan' && name !== 'align') {
-          el.removeAttribute(attr.name);
-        }
-      }
-    }
-
-    return template.innerHTML;
+    return window.sanitizeHtml(html);
   }
 
   formatTokens(count) {

@@ -315,3 +315,50 @@
 #fs-note[hidden] {
   display: none;
 }
+
+/* --------------------------------------------------------------------------
+   富文本预览（设计文档 §29）：markdown 套用主界面正文样式，JSON 系列按行着色
+   -------------------------------------------------------------------------- */
+#fs-preview {
+  flex: 1 1 auto;
+  overflow: auto;
+  padding: 10px 14px;
+}
+
+#fs-preview[hidden] {
+  display: none;
+}
+
+.fs-preview-body {
+  max-width: 900px;
+}
+
+.fs-preview-body img {
+  max-width: 100%;
+}
+
+/* JSON / JSONC / JSONL 着色 */
+#fs-preview .json-key {
+  color: var(--accent);
+}
+
+#fs-preview .json-str {
+  color: var(--bash-mode);
+}
+
+#fs-preview .json-num {
+  color: #d19a66;
+}
+
+#fs-preview .json-bool {
+  color: #c678dd;
+}
+
+#fs-preview .json-punc {
+  color: var(--dim);
+}
+
+/* JSONL 里解析失败的行：标红但保留原文 */
+#fs-preview .json-bad {
+  color: var(--error);
+}

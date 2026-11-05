@@ -2388,3 +2388,69 @@ message_update 共 84 个；前 6 个到达时刻 4.02s / 4.02s / 4.02s / 4.09s 
 - 磁盘上的 `.html`/`.svg` 打开时**不会执行**（`text/plain` + nosniff）；
 - 工具块参数与正文 inline code 里的路径可点，新标签打开对应文件；
 - 冒烟 52/52 保持全绿（新增 /files 注入、token、Host 白名单、.html 不可执行四项断言）。
+
+## 29. 文件查看器的富文本预览（2026-11-05 已实现）
+
+**目标**：`.md` 直接看渲染结果，`.json/.jsonc/.jsonl` 看美化+着色的形式；仍可一键切回源码视图。
+
+### 29.1 复用与不引入（已核对本地与 npm）
+
+| 需求 | 决定 | 理由 |
+|---|---|---|
+| Markdown 解析 | **复用 `static/vendor/marked.min.js`（v17.0.1，聊天区已在用）** | 零新增依赖，行为与聊天区一致 |
+| HTML 消毒 | **抽出 `static/sanitize.js`**，聊天区与文件页共用 | 安全关键代码不能有两份实现（两份必然漂移）；不引入 DOMPurify（3.x 单文件 ~22 KB，但会与现有实现并存） |
+| JSONC 容错（注释/尾逗号） | **自写约 40 行预处理**（字符串感知地剥 `//`、`/* */`、尾逗号）后 `JSON.parse` | `jsonc-parser` 包 207 KB 且 UMD/ESM 都是多文件，为这点功能不划算 |
+| JSON 着色 | **自写着色器**（键/字符串/数字/布尔/null/标点） | `highlight.js` 包 5.4 MB、`prismjs` 2 MB，只为一个 JSON 太重 |
+| 通用文件预览组件 | 不采用 | 基本都是 React/SPA 组件，传递依赖与我们的原生页面不匹配 |
+
+**结论：零新增运行时依赖。**
+
+### 29.2 三种形态
+
+| 类型 | preview（默认） | source |
+|---|---|---|
+| `.md` | `marked` 渲染 + 消毒，套用主界面 `.body-text` 样式；相对图片走 `/fs/raw`、相对链接在文件页内跳转、外链新标签 | 现在的行号视图 |
+| `.json` / `.jsonc` | **缩进美化（2 空格）+ 着色**；JSONC 容忍注释与尾逗号；解析失败则回退源码并提示 | 同上 |
+| `.jsonl` / `.ndjson` | **一行一条、不展开**：每行独立着色；某行解析失败就标红并原样显示（行号保持文件真实行号） | 同上 |
+
+切换按钮放在查看器头部（`preview` / `source`），默认 `preview`，选择记忆在 localStorage。
+
+### 29.3 顺带修掉一个真 bug：图片预览取不到
+
+`/fs/*` 要求 `x-pi-web-fs-token` 头，而 `<img src>` 无法带头 → 现有图片预览其实一直 403。
+改为**先 fetch（带头）再 `URL.createObjectURL`** 给 `<img>`，并在关闭/切换时 `revokeObjectURL`；
+markdown 里的相对图片同样走这条路。
+
+### 29.4 验收标准
+
+- `.md`：标题/列表/表格/代码块/链接正常渲染；脚本与事件属性被消毒掉；相对图片显示、相对链接跳转、外链新标签；
+- `.json`：美化+着色；`.jsonc` 带注释与尾逗号也能解析成树；坏 JSON 回退源码并提示；
+- `.jsonl`：**行数不变**（一行一条），合法行着色、非法行标红，行号等于文件行号；
+- `source` 切换后回到行号视图，选择被记住；
+- 图片预览正常显示（fetch+blob）；
+- 冒烟 52/52 保持全绿。
+
+### 29.5 实现记录与实测（2026-11-05）
+
+改动面：新增 `static/sanitize.js`（从 `app.js` 抽出的白名单消毒，聊天区与文件页共用）、
+`static/files.js`（`fileKind` / JSONC 预处理 / JSON 着色 / `renderPreview` / blob 图片）、
+`static/files.html`（`marked` + `sanitize.js`、`#fs-preview`、`preview/source` 按钮）、
+`static/files.css`（预览与着色样式）、`native/fs-browser.mjs`（CSP `img-src` 加 `blob:`）。
+**零新增运行时依赖。**
+
+实测：
+
+| 场景 | 结果 |
+|---|---|
+| `.md` | `<h1>`/表格/代码块正常；`<script>` 被消毒（0 个）；相对链接 → `/files?path=/tmp/fsdemo/data.json`；`../` 归一化正确；相对图片渲染成 blob（`naturalWidth=1`） |
+| `.json` | 11 行美化 + 5 个 key / 4 个数字着色 |
+| `.jsonc` | 带 `//`、`/* */` 与尾逗号仍解析成功（2 key / 4 数字） |
+| `.jsonl` | **4 行输入 → 4 行输出**（不展开）；合法行着色，非法行标红并保留原文，提示"1 行不是合法 JSON" |
+| `source` 切换 | 回到行号视图、再切回预览，选择记忆在 localStorage |
+| 聊天区 markdown | `sanitize.js` 抽取后 `<h1>`/`<strong>` 正常，`onerror` 与 `javascript:` 仍被清除 |
+| 冒烟 | 52/52 |
+
+**过程中的两个真 bug（已修）**：
+1. 图片预览一直取不到：`/fs/*` 要 `x-pi-web-fs-token` 头，而 `<img src>` 无法带头 → 改 fetch + `createObjectURL`；
+2. 加了 blob 后图片仍不显示：页面 CSP 是 `img-src 'self' data:`，**不含 `blob:`** → 补上。
+   另外 markdown 里的相对图片要在挂到 DOM **之前**摘掉 `src`，否则浏览器会先按页面路径请求一次（实测 404 `/pic.png`）。

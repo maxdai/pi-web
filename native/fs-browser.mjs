@@ -108,7 +108,8 @@ export function createFsBrowser({ token, getCwd }) {
           "cache-control": "no-store",
           "x-content-type-options": "nosniff",
           "content-security-policy":
-            `default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'nonce-${nonce}'`,
+            // img-src 必须含 blob:：图片是 fetch（带 token）→ createObjectURL 再给 <img> 的（§29.3）
+            `default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self' 'nonce-${nonce}'`,
         });
         res.end(html.replaceAll("__PI_WEB_FS_TOKEN_VALUE__", token).replaceAll("__PI_WEB_FS_NONCE__", nonce));
       } catch (err) {

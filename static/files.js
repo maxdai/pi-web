@@ -15,6 +15,8 @@ const state = {
   split: Number(localStorage.getItem("piweb-fs-split")) || 0.42, // 列表占左栏比例
   listOpen: localStorage.getItem("piweb-fs-list") !== "0",
   selected: null, // 当前查看的文件
+  preview: localStorage.getItem("piweb-fs-preview") !== "0", // 富文本预览（md/json 系列）
+  objectUrls: [], // 图片 blob URL，切换/关闭时释放
 };
 
 const el = (id) => document.getElementById(id);
@@ -24,6 +26,7 @@ const viewEl = el("fs-view");
 const textEl = el("fs-text");
 const imageEl = el("fs-image");
 const noteEl = el("fs-note");
+const previewEl = el("fs-preview");
 
 function apiHeaders() {
   return { "x-pi-web-fs-token": TOKEN };
@@ -227,6 +230,261 @@ function restoreViewAnchor(anchor) {
   textEl.scrollLeft = anchor.scrollLeft;
 }
 
+
+// ---------------------------------------------------------------- 富文本预览（设计 §29）
+
+/** 按扩展名判断可预览的类型。 */
+function fileKind(path) {
+  const m = /\.([^./\\]+)$/.exec(path || "");
+  const ext = m ? m[1].toLowerCase() : "";
+  if (ext === "md" || ext === "markdown") return "md";
+  if (ext === "json") return "json";
+  if (ext === "jsonc") return "jsonc";
+  if (ext === "jsonl" || ext === "ndjson") return "jsonl";
+  return "";
+}
+
+/** 字符串感知地剥掉 JSONC 的 // 与 /* *\/ 注释（行注释保留换行，行号不变）。 */
+function stripJsonComments(text) {
+  let out = "";
+  let inStr = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    const n = text[i + 1];
+    if (inStr) {
+      out += c;
+      if (c === "\\") {
+        out += n ?? "";
+        i += 1;
+        continue;
+      }
+      if (c === '"') inStr = false;
+      continue;
+    }
+    if (c === '"') {
+      inStr = true;
+      out += c;
+      continue;
+    }
+    if (c === "/" && n === "/") {
+      while (i < text.length && text[i] !== "\n") i += 1;
+      out += "\n";
+      continue;
+    }
+    if (c === "/" && n === "*") {
+      i += 2;
+      while (i < text.length && !(text[i] === "*" && text[i + 1] === "/")) {
+        if (text[i] === "\n") out += "\n";
+        i += 1;
+      }
+      i += 1;
+      continue;
+    }
+    out += c;
+  }
+  return out;
+}
+
+/** 字符串感知地去掉尾逗号（只删 `,` 后面只剩空白再接 `}` / `]` 的情况）。 */
+function dropTrailingCommas(text) {
+  let out = "";
+  let inStr = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inStr) {
+      out += c;
+      if (c === "\\") {
+        out += text[i + 1] ?? "";
+        i += 1;
+        continue;
+      }
+      if (c === '"') inStr = false;
+      continue;
+    }
+    if (c === '"') {
+      inStr = true;
+      out += c;
+      continue;
+    }
+    if (c === ",") {
+      let j = i + 1;
+      while (j < text.length && /\s/.test(text[j])) j += 1;
+      if (text[j] === "}" || text[j] === "]") continue;
+    }
+    out += c;
+  }
+  return out;
+}
+
+const escapeText = (text) =>
+  String(text).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+/** 单行 JSON 着色（键/字符串/数字/布尔/null/标点）。输入是**一整行原始文本**。 */
+function highlightJsonLine(line) {
+  const re = /("(?:[^"\\]|\\.)*")(\s*:)?|(\btrue\b|\bfalse\b|\bnull\b)|(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)|([{}[\],:])/g;
+  let out = "";
+  let last = 0;
+  let m;
+  while ((m = re.exec(line)) !== null) {
+    out += escapeText(line.slice(last, m.index));
+    if (m[1]) {
+      const isKey = Boolean(m[2]);
+      out += `<span class="${isKey ? "json-key" : "json-str"}">${escapeText(m[1])}</span>`;
+      if (m[2]) out += `<span class="json-punc">${escapeText(m[2])}</span>`;
+    } else if (m[3]) {
+      out += `<span class="json-bool">${escapeText(m[3])}</span>`;
+    } else if (m[4]) {
+      out += `<span class="json-num">${escapeText(m[4])}</span>`;
+    } else if (m[5]) {
+      out += `<span class="json-punc">${escapeText(m[5])}</span>`;
+    }
+    last = m.index + m[0].length;
+  }
+  out += escapeText(line.slice(last));
+  return out;
+}
+
+/** 渲染带行号的代码行（每行单独一个 flex 行，行号与折行对齐）。 */
+function renderCodeLines(lines, { html = false, badLines = null } = {}) {
+  const frag = document.createDocumentFragment();
+  lines.forEach((line, i) => {
+    const row = document.createElement("div");
+    row.className = "fs-line";
+    row.dataset.line = String(i + 1);
+    const no = document.createElement("span");
+    no.className = "fs-lineno";
+    no.textContent = String(i + 1);
+    const code = document.createElement("span");
+    code.className = "fs-linecode";
+    if (badLines && badLines.has(i)) code.classList.add("json-bad");
+    if (html) code.innerHTML = line.length ? line : " ";
+    else code.textContent = line.length ? line : " ";
+    row.append(no, code);
+    frag.appendChild(row);
+  });
+  return frag;
+}
+
+/** markdown：渲染 → 消毒 → 相对图片/链接改写。 */
+async function renderMarkdownPreview(container, text, filePath) {
+  const raw = window.marked ? window.marked.parse(text, { breaks: true, gfm: true }) : escapeText(text);
+  const html = window.sanitizeHtml ? window.sanitizeHtml(raw) : raw;
+  const box = document.createElement("div");
+  box.className = "fs-preview-body body-text";
+  box.innerHTML = html;
+
+  // 相对图片先在**挂到 DOM 之前**摘掉 src 并记下真实路径：否则浏览器会立刻按页面路径请求一次
+  // （实测 404 /pic.png），随后我们才换成 blob URL。
+  const baseDir = filePath.replace(/\/[^/]*$/, "");
+  const pendingImgs = [];
+  for (const img of [...box.querySelectorAll("img[src]")]) {
+    const src = img.getAttribute("src");
+    if (!src || /^[a-z][a-z0-9+.-]*:/i.test(src)) continue;
+    img.removeAttribute("src");
+    img.dataset.fsSrc = src.startsWith("/") ? src : resolveRelative(baseDir, src);
+    pendingImgs.push(img);
+  }
+
+  container.textContent = "";
+  container.appendChild(box);
+
+  // 相对链接：在文件页内跳转；外链新标签
+  for (const a of box.querySelectorAll("a[href]")) {
+    const href = a.getAttribute("href");
+    if (!href) continue;
+    if (/^[a-z][a-z0-9+.-]*:/i.test(href)) {
+      a.target = "_blank";
+      a.rel = "noopener";
+      continue;
+    }
+    const target = href.startsWith("/") ? href : resolveRelative(baseDir, href.split("#")[0]);
+    if (target) {
+      a.href = `/files?path=${encodeURIComponent(target)}${href.includes("#") ? href.slice(href.indexOf("#")) : ""}`;
+    }
+  }
+  // 相对图片：走 /fs/raw（带 token → blob，见 §29.3）
+  await Promise.all(
+    pendingImgs.map(async (img) => {
+      const target = img.dataset.fsSrc;
+      if (!target) return;
+      try {
+        img.src = await blobUrlFor(target);
+      } catch {
+        img.replaceWith(document.createTextNode(`[图片加载失败：${target}]`));
+      }
+    }),
+  );
+}
+
+/** 拼接相对路径（../ 与 ./ 归一化）。 */
+function resolveRelative(baseDir, rel) {
+  if (!rel) return "";
+  const parts = baseDir.split("/").filter(Boolean);
+  for (const seg of rel.split("/")) {
+    if (!seg || seg === ".") continue;
+    if (seg === "..") parts.pop();
+    else parts.push(seg);
+  }
+  return "/" + parts.join("/");
+}
+
+/** 图片必须带 token 取，`<img src>` 无法带头 → fetch 成 blob URL（§29.3）。 */
+async function blobUrlFor(path) {
+  const res = await fetch(fileUrl(path), { headers: apiHeaders() });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  state.objectUrls.push(url);
+  return url;
+}
+
+function releaseObjectUrls() {
+  for (const url of state.objectUrls) URL.revokeObjectURL(url);
+  state.objectUrls = [];
+}
+
+/** 预览内容（md / json / jsonc / jsonl）。失败返回 false，交由源码视图兜底。 */
+async function renderPreview(kind, path, text) {
+  releaseObjectUrls();
+  previewEl.textContent = "";
+  if (kind === "md") {
+    await renderMarkdownPreview(previewEl, text, path);
+    return true;
+  }
+  if (kind === "json" || kind === "jsonc") {
+    let parsed;
+    try {
+      const source = kind === "jsonc" ? dropTrailingCommas(stripJsonComments(text)) : text;
+      parsed = JSON.parse(source);
+    } catch (err) {
+      showNote(`JSON 解析失败（${err.message}）—— 已切换到源码视图`);
+      return false;
+    }
+    const pretty = JSON.stringify(parsed, null, 2).split("\n");
+    previewEl.appendChild(renderCodeLines(pretty.map(highlightJsonLine), { html: true }));
+    return true;
+  }
+  if (kind === "jsonl") {
+    // 一行一条，**不展开**：行号 = 文件真实行号
+    const lines = text.replace(/\n$/, "").split("\n");
+    const bad = new Set();
+    const html = lines.map((line, i) => {
+      const trimmed = line.trim();
+      if (!trimmed) return "";
+      try {
+        JSON.parse(trimmed);
+      } catch {
+        bad.add(i);
+      }
+      return highlightJsonLine(line);
+    });
+    previewEl.appendChild(renderCodeLines(html, { html: true, badLines: bad }));
+    if (bad.size > 0) showNote(`${bad.size} 行不是合法 JSON（已标红，原文保留）`);
+    return true;
+  }
+  return false;
+}
+
 function showNote(text) {
   noteEl.hidden = !text;
   noteEl.textContent = text || "";
@@ -237,7 +495,10 @@ function closeView() {
   viewEl.hidden = true;
   applySplit();
   textEl.textContent = "";
+  previewEl.textContent = "";
+  previewEl.hidden = true;
   imageEl.innerHTML = "";
+  releaseObjectUrls();
   showNote("");
 }
 
@@ -253,20 +514,29 @@ async function openFile(path) {
   state.listOpen = false;
   applySplit();
   textEl.textContent = "";
+  previewEl.textContent = "";
+  previewEl.hidden = true;
   imageEl.innerHTML = "";
   showNote("");
   el("fs-view-name").textContent = path;
   el("fs-view-meta").textContent = "";
   el("fs-download").href = fileUrl(path, true);
+  const kind = fileKind(path);
+  updatePreviewToggle(kind);
 
   if (isImage(path)) {
+    releaseObjectUrls();
     textEl.hidden = true;
     imageEl.hidden = false;
     const img = document.createElement("img");
-    img.src = `${fileUrl(path)}&_=${Date.now()}`;
     img.alt = path;
     img.addEventListener("error", () => showNote("图片加载失败（可能不是合法图片）"));
     imageEl.appendChild(img);
+    try {
+      img.src = await blobUrlFor(path); // <img src> 带不了 token → blob（§29.3）
+    } catch (err) {
+      showNote(`图片加载失败：${err.message}`);
+    }
     return;
   }
 
@@ -282,8 +552,20 @@ async function openFile(path) {
       showNote("二进制文件（不预览）—— 用 download 下载");
       return;
     }
-    textEl.hidden = false;
     imageEl.hidden = true;
+    // 富文本预览（§29）：md / json / jsonc / jsonl 且用户选择看预览
+    if (kind && state.preview && !data.binary) {
+      const ok = await renderPreview(kind, path, data.text || "");
+      if (ok) {
+        textEl.hidden = true;
+        previewEl.hidden = false;
+        if (data.truncated) showNote(`文件较大，预览只覆盖前 ${fmtSize(TEXT_PREVIEW_BYTES)}；完整内容请 download`);
+        return;
+      }
+      // 解析失败等 → 落到源码视图
+    }
+    textEl.hidden = false;
+    previewEl.hidden = true;
     renderText(data.text || "");
     restoreViewAnchor(anchor); // 刷新后回到原来的行
     if (data.truncated) showNote(`文件较大，只显示前 ${fmtSize(TEXT_PREVIEW_BYTES)}；完整内容请 download`);
@@ -353,6 +635,23 @@ el("fs-sort").addEventListener("click", () => {
   renderList();
 });
 el("fs-close-view").addEventListener("click", closeView);
+
+/** 预览/源码切换按钮：只在可预览的类型上出现。 */
+function updatePreviewToggle(kind) {
+  const btn = el("fs-preview-toggle");
+  const supported = Boolean(kind);
+  btn.hidden = !supported;
+  if (!supported) return;
+  const inPreview = state.preview;
+  btn.textContent = inPreview ? "source" : "preview";
+  btn.title = inPreview ? "Show the raw text (line numbers)" : "Show the rendered preview";
+}
+
+el("fs-preview-toggle").addEventListener("click", () => {
+  state.preview = !state.preview;
+  localStorage.setItem("piweb-fs-preview", state.preview ? "1" : "0");
+  if (state.selected) openFile(state.selected);
+});
 el("fs-refresh").addEventListener("click", () => {
   if (state.selected) openFile(state.selected); // 重新读盘（文本走 no-store，图片加时间戳破缓存）
 });
