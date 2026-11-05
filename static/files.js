@@ -95,10 +95,10 @@ function currentEntries() {
   return rows;
 }
 
-function renderCrumbs() {
+function renderCrumbs(basePath = state.path) {
   const nav = el("fs-crumbs");
   nav.innerHTML = "";
-  const parts = (state.path || "/").split("/").filter(Boolean);
+  const parts = (basePath || "/").split("/").filter(Boolean);
   const add = (label, target) => {
     const a = document.createElement("a");
     a.href = "#";
@@ -188,7 +188,27 @@ async function navigate(path) {
       await openFile(target);
       return;
     }
-    showNote(`打不开：${err.message}`);
+    // 错误必须显示在**左侧列表区**：早先只写进 #fs-note，而那个提示条在"还没打开文件"时
+    // 整个查看器是隐藏的 → 页面一片空白、没有任何反馈（2026-11-05 用户实测 /files?path=/old）✗
+    const attempted = (err.body && err.body.path) || path || "/";
+    const parent = attempted.replace(/\/[^/]+$/, "") || "/";
+    renderCrumbs(parent);
+    showListError(`打不开：${err.message}`, attempted);
+  }
+}
+
+/** 列表区的错误提示（含尝试过的路径，并给出可回到上级的面包屑）。 */
+function showListError(message, attemptedPath) {
+  listEl.innerHTML = "";
+  const box = document.createElement("div");
+  box.className = "fs-empty fs-error";
+  box.textContent = message;
+  listEl.appendChild(box);
+  if (attemptedPath) {
+    const detail = document.createElement("div");
+    detail.className = "fs-empty fs-error-path";
+    detail.textContent = attemptedPath;
+    listEl.appendChild(detail);
   }
 }
 

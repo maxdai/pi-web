@@ -385,3 +385,13 @@ body.theme-light #fs-preview .json-bool {
 #fs-preview .json-bad {
   color: var(--error);
 }
+
+/* 列表区的错误提示（路径不存在等）——必须可见，不能只写进查看器的 #fs-note */
+.fs-empty.fs-error {
+  color: var(--error);
+}
+
+.fs-empty.fs-error-path {
+  font-family: var(--font-mono);
+  opacity: 0.8;
+}
