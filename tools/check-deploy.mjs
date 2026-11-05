@@ -211,7 +211,11 @@ if (checkInstance) {
       const diskId = sha1File(script).slice(0, 12);
       const liveId = await instanceBuildId(instanceUrl);
       if (!liveId) {
-        console.log(`  注意：实例没有上报 buildId（旧版本？），跳过服务端代码新旧判断`);
+        // 磁盘上的版本会自报 buildId；实例报不出来 = 跑的是更早的服务端代码 → 需要重启
+        bad(
+          "实例没有上报 buildId（跑的是旧服务端代码）",
+          `磁盘版本会自报指纹 ${diskId}，实例未上报；需要重启该实例`,
+        );
       } else if (liveId !== diskId) {
         bad(
           "实例加载的服务端代码与磁盘上的不同（改完没重启）",
