@@ -37,7 +37,11 @@ async function api(path, params = {}) {
   for (const [k, v] of Object.entries(params)) if (v !== undefined && v !== null) url.searchParams.set(k, v);
   const res = await fetch(url, { headers: apiHeaders() });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || `${res.status} ${res.statusText}`);
+  if (!res.ok) {
+    const err = new Error(data.error || `${res.status} ${res.statusText}`);
+    err.body = data; // 服务端会把解析出的绝对路径放在 body.path 里（文件链接要用）
+    throw err;
+  }
   return data;
 }
 
@@ -174,16 +178,29 @@ function joinPath(dir, name) {
 async function navigate(path) {
   closeView();
   try {
-    const data = await api("/fs/list", { path });
-    state.path = data.path;
-    state.entries = data.entries || [];
-    state.truncated = Boolean(data.truncated);
-    history.replaceState(null, "", `/files?path=${encodeURIComponent(state.path)}`);
-    renderCrumbs();
-    renderList();
+    await loadDir(path);
   } catch (err) {
-    showNote(`打不开目录：${err.message}`);
+    // 传入的是**文件**而不是目录：消息流里的路径链接（§28.4）就属于这种，
+    // 早先只调 /fs/list → "not a directory"，链接点了打不开（2026-11-05 用户实测反馈）。
+    const target = err.body && err.body.path;
+    if (err.body && err.body.error === "not a directory" && target) {
+      await loadDir(target.replace(/\/[^/]+$/, "") || "/");
+      await openFile(target);
+      return;
+    }
+    showNote(`打不开：${err.message}`);
   }
+}
+
+/** 只刷新左侧目录列表（不动右侧查看器）。 */
+async function loadDir(path) {
+  const data = await api("/fs/list", { path });
+  state.path = data.path;
+  state.entries = data.entries || [];
+  state.truncated = Boolean(data.truncated);
+  history.replaceState(null, "", `/files?path=${encodeURIComponent(state.path)}`);
+  renderCrumbs();
+  renderList();
 }
 
 
@@ -491,6 +508,9 @@ function showNote(text) {
 }
 
 function closeView() {
+  if (state.selected && state.path) {
+    history.replaceState(null, "", `/files?path=${encodeURIComponent(state.path)}`);
+  }
   state.selected = null;
   viewEl.hidden = true;
   applySplit();
@@ -509,6 +529,8 @@ function isImage(path) {
 async function openFile(path) {
   const anchor = state.selected === path ? captureViewAnchor() : null;
   state.selected = path;
+  // URL 跟着文件走：刷新后仍停在这个文件（链接分享/直达也一致）
+  history.replaceState(null, "", `/files?path=${encodeURIComponent(path)}`);
   viewEl.hidden = false;
   // 打开文件＝要读内容 → 左侧列表自动收起，正文占满整宽（用户点 « / » 仍可随时切换）
   state.listOpen = false;
