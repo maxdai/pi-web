@@ -32,6 +32,7 @@ import { createFsBrowser } from "./fs-browser.mjs";
 import { createRequire } from "node:module";
 import { spawn, execFileSync } from "node:child_process";
 import { readdir, readFile, stat } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { closeSync, existsSync, openSync, readFileSync, readSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { StringDecoder } from "node:string_decoder";
 import { dirname, extname, join, resolve } from "node:path";
@@ -601,6 +602,16 @@ function truncateDiff(text) {
 let bridgeInfo = {};
 
 
+// 自身文件指纹：check-deploy 用它判断"运行中的进程是否加载了最新服务端代码"
+// （比较 mtime 会误报——npm run build 每次都会重写 dist，即使内容没变）。
+const SERVER_BUILD_ID = (() => {
+  try {
+    return createHash("sha1").update(readFileSync(fileURLToPath(import.meta.url))).digest("hex").slice(0, 12);
+  } catch {
+    return null;
+  }
+})();
+
 // ------------------------------------------------------------------ 本轮改动文件（§30）
 
 /** `git status --porcelain -z` 快照：`path → 状态码`；非 git 仓库返回 null。 */
@@ -780,6 +791,7 @@ async function buildState() {
   const cwd = bridgeInfo.cwd ?? session.cwd;
   if (st.sessionId) lastSessionId = String(st.sessionId);
   const state = {
+    buildId: SERVER_BUILD_ID, // 前端不用；check-deploy 用来判断进程是否加载了最新代码
     sessionId: st.sessionId,
     sessionName: st.sessionName ?? session.name,
     // input 能力（["text"] / ["text","image"]）：前端页脚据此标注能否贴图

@@ -15,7 +15,8 @@ const state = {
   split: Number(localStorage.getItem("piweb-fs-split")) || 0.42, // 列表占左栏比例
   listOpen: localStorage.getItem("piweb-fs-list") !== "0",
   selected: null, // 当前查看的文件
-  preview: localStorage.getItem("piweb-fs-preview") !== "0", // 富文本预览（md/json 系列）
+  preview: localStorage.getItem("piweb-fs-preview") !== "0", // 富文本预览偏好（md/json 系列）
+  viewMode: "source", // 当前实际视图：source | preview（带 &line= 时会强制 source）
   objectUrls: [], // 图片 blob URL，切换/关闭时释放
 };
 
@@ -175,7 +176,7 @@ function joinPath(dir, name) {
   return dir === "/" ? `/${name}` : `${dir}/${name}`;
 }
 
-async function navigate(path) {
+async function navigate(path, line = 0) {
   closeView();
   try {
     await loadDir(path);
@@ -185,7 +186,7 @@ async function navigate(path) {
     const target = err.body && err.body.path;
     if (err.body && err.body.error === "not a directory" && target) {
       await loadDir(target.replace(/\/[^/]+$/, "") || "/");
-      await openFile(target);
+      await openFile(target, line);
       return;
     }
     // 错误必须显示在**左侧列表区**：早先只写进 #fs-note，而那个提示条在"还没打开文件"时
@@ -595,10 +596,14 @@ async function openFile(path, line = 0) {
       return;
     }
     imageEl.hidden = true;
-    // 富文本预览（§29）：md / json / jsonc / jsonl 且用户选择看预览
-    if (kind && state.preview && !data.binary) {
+    // 富文本预览（§29）：md / json / jsonc / jsonl 且用户选择看预览；
+    // 带行号跳转时强制源码视图（预览没有行号可定位，§30.6）
+    state.viewMode = "source";
+    if (kind && state.preview && !data.binary && !(line > 0)) {
       const ok = line > 0 ? false : await renderPreview(kind, path, data.text || "");
       if (ok) {
+        state.viewMode = "preview";
+        updatePreviewToggle(kind);
         textEl.hidden = true;
         previewEl.hidden = false;
         if (data.truncated) showNote(`文件较大，预览只覆盖前 ${fmtSize(TEXT_PREVIEW_BYTES)}；完整内容请 download`);
@@ -608,6 +613,7 @@ async function openFile(path, line = 0) {
     }
     textEl.hidden = false;
     previewEl.hidden = true;
+    updatePreviewToggle(kind);
     renderText(data.text || "");
     if (line > 0) focusLine(line);
     else restoreViewAnchor(anchor); // 刷新后回到原来的行
@@ -725,19 +731,20 @@ el("fs-sort").addEventListener("click", () => {
 });
 el("fs-close-view").addEventListener("click", closeView);
 
-/** 预览/源码切换按钮：只在可预览的类型上出现。 */
+/** 预览/源码切换按钮：只在可预览的类型上出现；文案反映**当前实际视图**要切去哪边。 */
 function updatePreviewToggle(kind) {
   const btn = el("fs-preview-toggle");
   const supported = Boolean(kind);
   btn.hidden = !supported;
   if (!supported) return;
-  const inPreview = state.preview;
+  const inPreview = state.viewMode === "preview";
   btn.textContent = inPreview ? "source" : "preview";
   btn.title = inPreview ? "Show the raw text (line numbers)" : "Show the rendered preview";
 }
 
 el("fs-preview-toggle").addEventListener("click", () => {
-  state.preview = !state.preview;
+  // 以"当前实际视图"为准取反：带 &line= 被强制成 source 时，点一下也能正常进预览
+  state.preview = state.viewMode !== "preview";
   localStorage.setItem("piweb-fs-preview", state.preview ? "1" : "0");
   if (state.selected) openFile(state.selected);
 });
@@ -813,7 +820,6 @@ for (const el of document.querySelectorAll(".theme-option")) {
 
 const initialPath = new URLSearchParams(location.search).get("path");
 const initialLine = Number(new URLSearchParams(location.search).get("line"));
-navigate(initialPath || null).then(() => {
-  // URL 里带 &line=N（来自"本轮改动文件"的链接）→ 打开后直接定位（§30.6）
-  if (initialPath && initialLine > 0 && state.selected) focusLine(initialLine);
-});
+// URL 里带 &line=N（来自"本轮改动文件"的链接）→ 直接定位到该行（§30.6）：
+// 行号只对源码视图有意义，所以带行号时强制源码视图（预览没有行号可跳）。
+navigate(initialPath || null, initialLine > 0 ? initialLine : 0);

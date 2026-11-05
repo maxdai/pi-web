@@ -24,11 +24,15 @@ import { createHash } from "node:crypto";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
+import { createRequire } from "node:module";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, "..");
 const REPO_DIST = join(REPO, "pi-sdk-web", "dist");
 const PKG = "@maxdai/pi-web";
+
+// ws 是包内运行时依赖（pi-sdk-web/node_modules），用来读实例的 state.buildId
+const { WebSocket } = createRequire(join(REPO, "pi-sdk-web", "package.json"))("ws");
 
 const args = process.argv.slice(2);
 const checkInstance = !args.includes("--no-instance");
@@ -44,6 +48,41 @@ const bad = (label, detail = "") => {
   console.log(`FAIL  ${label}${detail ? ` — ${detail}` : ""}`);
 };
 
+
+
+/** 文件 sha1。 */
+function sha1File(file) {
+  return createHash("sha1").update(readFileSync(file)).digest("hex");
+}
+
+/** 连实例的 WebSocket，读 state 帧里的 buildId（2 秒超时）。 */
+function instanceBuildId(instanceUrl) {
+  return new Promise((resolve) => {
+    let ws;
+    let done = false;
+    const finish = (v) => {
+      if (done) return;
+      done = true;
+      try {
+        ws?.close();
+      } catch {}
+      resolve(v);
+    };
+    try {
+      ws = new WebSocket(instanceUrl.replace(/^http/, "ws") + "/ws");
+      ws.on("message", (raw) => {
+        try {
+          const frame = JSON.parse(raw.toString());
+          if (frame.type === "state") finish(frame.data?.buildId ?? null);
+        } catch {}
+      });
+      ws.on("error", () => finish(null));
+      setTimeout(() => finish(null), 2000);
+    } catch {
+      finish(null);
+    }
+  });
+}
 
 /** 监听某端口的 PID（没有则 null）。 */
 function listeningPid(port) {
@@ -164,19 +203,22 @@ if (checkInstance) {
     console.log(`实例 ${instanceUrl}：未运行（跳过服务端文件比对；要验"用户实际拿到的文件"，请先起实例）`);
   } else {
     // 服务端代码（*.mjs）改了必须**重启进程**：静态文件每次请求读盘，但进程内代码不会热更新。
+    // 用**内容指纹**判断（比较 mtime 会误报：npm run build 每次都重写 dist，即使内容没变）。
     const port = Number(new URL(instanceUrl).port || 80);
     const pid = listeningPid(port);
     const script = pid ? processScript(pid) : null;
-    const startedAt = pid ? processStartMs(pid) : null;
-    if (script && existsSync(script) && startedAt) {
-      const mtime = statSync(script).mtimeMs;
-      if (mtime > startedAt + 500) {
+    if (script && existsSync(script)) {
+      const diskId = sha1File(script).slice(0, 12);
+      const liveId = await instanceBuildId(instanceUrl);
+      if (!liveId) {
+        console.log(`  注意：实例没有上报 buildId（旧版本？），跳过服务端代码新旧判断`);
+      } else if (liveId !== diskId) {
         bad(
-          "实例加载的服务端代码比磁盘上的旧（改完没重启）",
-          `${script} 更新于 ${new Date(mtime).toLocaleTimeString()}，进程启动于 ${new Date(startedAt).toLocaleTimeString()}；需要重启该实例`,
+          "实例加载的服务端代码与磁盘上的不同（改完没重启）",
+          `进程体内 ${liveId} ≠ 磁盘 ${diskId}（${script}）；需要重启该实例`,
         );
       } else {
-        ok("实例的服务端代码不旧于进程启动时间", new Date(startedAt).toLocaleTimeString());
+        ok("实例加载的服务端代码与磁盘一致", `${liveId}（${script.split("/").pop()}）`);
       }
     }
 
