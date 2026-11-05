@@ -404,8 +404,85 @@ function withNativeCommands(commands) {
   return [...visible, ...NATIVE_COMMANDS.filter((c) => !names.has(c.name))];
 }
 
+/** 本轮开始时的 git 快照（`agent_start` 拍，`agent_settled` 消费）。 */
+let turnGitBefore;
+
+/** 广播本轮改动文件（§30）：没有 git、或本轮没变化就不发。 */
+async function broadcastTurnFiles() {
+  const before = turnGitBefore;
+  turnGitBefore = undefined;
+  if (!before) return; // 非 git 仓库 / 拿不到快照
+  const after = gitStatusMap(session?.cwd);
+  if (!after) return;
+  const cwd = session?.cwd ?? "";
+  const files = diffGitSnapshots(before, after)
+    .map(({ file, code }) => ({
+      path: file,
+      abs: file.startsWith("/") ? file : `${cwd.replace(/\/$/, "")}/${file}`,
+      code: displayStatusCode(code),
+    }))
+    .sort((a, b) => a.path.localeCompare(b.path));
+  if (files.length === 0) return;
+  log(`[pi-web] turn files: ${files.length} 个（${files.slice(0, 5).map((f) => f.code + " " + f.path).join(", ")}${files.length > 5 ? ", …" : ""}）`);
+  broadcast({ type: "turn_files", data: { cwd, files } });
+}
+
 // ------------------------------------------------------------------ 状态构建
 let bridgeInfo = {};
+
+
+// ------------------------------------------------------------------ 本轮改动文件（§30）
+
+/** `git status --porcelain -z` 快照：`path → 状态码`；非 git 仓库返回 null。 */
+function gitStatusMap(cwd) {
+  if (!cwd) return null;
+  try {
+    const out = execFileSync("git", ["status", "--porcelain=v1", "-z", "--untracked-files=all"], {
+      cwd,
+      encoding: "utf8",
+      timeout: 5000,
+      maxBuffer: 8 * 1024 * 1024,
+      stdio: ["ignore", "pipe", "ignore"], // 非 git 目录的 stderr 不要泄漏到日志
+    });
+    const map = new Map();
+    const parts = out.split("\0");
+    for (let i = 0; i < parts.length; i++) {
+      const rec = parts[i];
+      if (!rec || rec.length < 4) continue;
+      const code = rec.slice(0, 2);
+      const file = rec.slice(3);
+      // -z 模式下重命名/复制多带一个原始路径字段
+      if (code[0] === "R" || code[0] === "C") i += 1;
+      map.set(file, code);
+    }
+    return map;
+  } catch {
+    return null;
+  }
+}
+
+/** 状态码 → 列表里显示的单个字母。 */
+function displayStatusCode(code) {
+  const c = String(code ?? "");
+  if (c === "??") return "A";
+  if (c.includes("U") || c === "AA" || c === "DD") return "!";
+  const letter = c.trim()[0] || "?";
+  if (letter === "T") return "M";
+  return letter;
+}
+
+/** 两次快照的差集：本轮新变脏、状态改变、或变回干净（仍算本轮动过）的文件。 */
+function diffGitSnapshots(before, after) {
+  const out = [];
+  for (const [file, code] of after) {
+    const prev = before.get(file);
+    if (prev === undefined || prev !== code) out.push({ file, code });
+  }
+  for (const [file, code] of before) {
+    if (!after.has(file)) out.push({ file, code });
+  }
+  return out;
+}
 
 function gitBranch(cwd) {
   try {
@@ -866,8 +943,14 @@ child.stdout.on("data", (chunk) => {
 
     // 会话事件：原样转发给浏览器
     // 运行态必须在这里记账：晚连/刷新的客户端拿不到 agent_start，只能靠快照恢复指示器
-    if (ev.type === "agent_start") agentActive = true;
-    else if (ev.type === "agent_end" || ev.type === "agent_settled") agentActive = false;
+    if (ev.type === "agent_start") {
+      agentActive = true;
+      turnGitBefore = gitStatusMap(session?.cwd); // §30：本轮开始时的 git 快照
+    } else if (ev.type === "agent_end") agentActive = false;
+    else if (ev.type === "agent_settled") {
+      agentActive = false;
+      void broadcastTurnFiles(); // §30：本轮结束 → 比对快照并广播改动列表
+    }
     // 追加必然发生在当前叶上 → 新条目就是新叶（树导航后仍成立，见设计 §26.8）
     else if (ev.type === "entry_appended" && ev.entry?.id) currentLeafId = ev.entry.id;
     broadcast(ev);

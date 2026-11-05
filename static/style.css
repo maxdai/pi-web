@@ -1761,3 +1761,69 @@ a.nav-btn {
 .file-link:hover {
   text-decoration: underline;
 }
+
+/* --------------------------------------------------------------------------
+   本轮改动文件（设计文档 §30）
+   回合结束后追加在消息流末尾；路径可点（直达 /files），删除的文件划线不建链。
+   -------------------------------------------------------------------------- */
+.turn-files {
+  margin: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--code-bg);
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+}
+
+.turn-files-head {
+  padding: 4px 10px;
+  color: var(--muted);
+  cursor: pointer;
+  user-select: none;
+}
+
+.turn-files-head:hover {
+  color: var(--accent);
+}
+
+.turn-files-list {
+  padding: 0 10px 6px;
+}
+
+.turn-files[data-collapsed='true'] .turn-files-list {
+  display: none;
+}
+
+.turn-file {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 1px 0;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.turn-file-code {
+  flex: 0 0 auto;
+  width: 1.2em;
+  text-align: center;
+  font-weight: 600;
+}
+
+.turn-file-code.code-M { color: var(--warning); }
+.turn-file-code.code-A { color: var(--bash-mode); }
+.turn-file-code.code-D { color: var(--error); }
+.turn-file-code.code-R { color: var(--accent); }
+.turn-file-code.code-C { color: var(--accent); }
+.turn-file-code.code-! { color: var(--error); }
+
+.turn-file .file-link,
+.turn-file-deleted {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.turn-file-deleted {
+  color: var(--dim);
+  text-decoration: line-through;
+}

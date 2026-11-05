@@ -445,6 +445,9 @@ class PiWebClient {
       case 'tree_navigated':
         this.handleTreeNavigated(data.data);
         break;
+      case 'turn_files':
+        this.renderTurnFiles(data.data);
+        break;
       case 'history_page':
         this.prependHistory(data.data);
         break;
@@ -1547,6 +1550,64 @@ class PiWebClient {
   }
 
   // ------------------------------------------------------------------
+  // 本轮改动文件（设计 §30）
+  // ------------------------------------------------------------------
+
+  /**
+   * 回合结束后在消息流末尾追加"本轮修改的文件"。
+   * 数据来自服务端（`agent_start` / `agent_settled` 两次 `git status` 快照差），
+   * 因此能覆盖 bash 里做的修改；非 git 仓库、或本轮没变化时服务端不会发这个事件。
+   */
+  renderTurnFiles(data) {
+    const files = (data && Array.isArray(data.files) ? data.files : []).filter((f) => f && f.path);
+    if (files.length === 0) return;
+
+    const box = document.createElement('div');
+    box.className = 'turn-files';
+    let collapsed = files.length > 5; // 超过 5 个默认折叠
+    box.dataset.collapsed = collapsed ? 'true' : 'false';
+
+    const head = document.createElement('div');
+    head.className = 'turn-files-head';
+    const headText = (isCollapsed) =>
+      `${isCollapsed ? '▸' : '▾'} 本轮修改 ${files.length} 个文件`;
+    head.textContent = headText(collapsed);
+
+    const list = document.createElement('div');
+    list.className = 'turn-files-list';
+    for (const file of files) {
+      const row = document.createElement('div');
+      row.className = 'turn-file';
+      const code = document.createElement('span');
+      code.className = `turn-file-code code-${this.escapeAttr(String(file.code || '?'))}`;
+      code.textContent = file.code || '?';
+      row.appendChild(code);
+      const target = file.abs || file.path;
+      if (file.code === 'D') {
+        // 删除的文件：显示删除线，不建链接（点开也只会 404）
+        const gone = document.createElement('span');
+        gone.className = 'turn-file-deleted';
+        gone.textContent = file.path;
+        gone.title = `Deleted: ${target}`;
+        row.appendChild(gone);
+      } else {
+        row.appendChild(this.buildFileLink(target, file.path));
+      }
+      list.appendChild(row);
+    }
+
+    head.addEventListener('click', () => {
+      collapsed = !collapsed;
+      box.dataset.collapsed = collapsed ? 'true' : 'false';
+      head.textContent = headText(collapsed);
+    });
+
+    box.append(head, list);
+    this.contentEl.appendChild(box);
+    if (this.followBottom) this.scrollToBottom();
+  }
+
+  // ------------------------------------------------------------------
   // 路径联动（设计 §28.4）：消息里的文件路径 → 在文件浏览器里打开
   // ------------------------------------------------------------------
 
@@ -1672,14 +1733,14 @@ class PiWebClient {
     }
   }
 
-  buildFileLink(path) {
+  buildFileLink(path, label) {
     const a = document.createElement('a');
     a.className = 'file-link';
     a.href = `/files?path=${encodeURIComponent(path)}`;
     a.target = '_blank';
     a.rel = 'noopener';
     a.title = `Open in file browser: ${path}`;
-    a.textContent = path;
+    a.textContent = label ?? path;
     return a;
   }
 
