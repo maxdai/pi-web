@@ -59,6 +59,13 @@ function fmtTime(ms) {
 
 const isHidden = (name) => name.startsWith(".");
 
+/** 文本行数（把末尾换行当作结束而不是空行）。 */
+function countLines(text) {
+  if (!text) return 0;
+  const n = text.split("\n").length;
+  return text.endsWith("\n") ? n - 1 : n;
+}
+
 function fileUrl(path, download = false) {
   const url = new URL("/fs/raw", location.origin);
   url.searchParams.set("path", path);
@@ -265,7 +272,10 @@ async function openFile(path) {
 
   try {
     const data = await api("/fs/text", { path });
-    el("fs-view-meta").textContent = `${fmtSize(data.size)}${data.truncated ? ` · 只显示前 ${fmtSize(TEXT_PREVIEW_BYTES)}` : ""}`;
+    const lines = countLines(data.text || "");
+    el("fs-view-meta").textContent =
+      `${fmtSize(data.size)} · ${lines.toLocaleString()} lines` +
+      (data.truncated ? `（前 ${fmtSize(TEXT_PREVIEW_BYTES)}）` : "");
     if (data.binary) {
       textEl.hidden = true;
       imageEl.hidden = true;
