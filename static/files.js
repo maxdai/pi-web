@@ -603,11 +603,11 @@ async function openFile(path, line = 0) {
     }
     imageEl.hidden = true;
     // 视图选择（§29.6）：**默认预览**；带行号跳转强制源码；"切换视图/刷新"这类操作传一次性 pendingMode。
-    const wanted = line > 0 ? "source" : (state.pendingMode || "preview");
+    const wanted = state.pendingMode || "preview"; // 默认预览；&line= 不再强制源码（§29.6）
     state.pendingMode = null;
     state.viewMode = "source";
     if (kind && wanted === "preview" && !data.binary) {
-      const ok = line > 0 ? false : await renderPreview(kind, path, data.text || "");
+      const ok = await renderPreview(kind, path, data.text || "");
       if (ok) {
         state.viewMode = "preview";
         updatePreviewToggle(kind);
@@ -617,6 +617,8 @@ async function openFile(path, line = 0) {
           const sw = pendingSwitch;
           pendingSwitch = null;
           if (!applySwitchAnchor(sw)) applyScrollRatio(sw.ratio);
+        } else if (line > 0) {
+          scrollPreviewToLine(line); // 改动列表的 &line= → 预览里滚到对应块（§29.6）
         } else if (previewRatio !== null) {
           applyScrollRatio(previewRatio);
         }
@@ -912,6 +914,19 @@ function applySwitchAnchor(sw) {
   if (!line) return false;
   focusLine(line, { highlight: false, alignTop: true });
   return true;
+}
+
+/** 预览里滚到第 N 行对应的块（用 data-src-line 标记；没有标记就退回比例）。 */
+function scrollPreviewToLine(line) {
+  const el = previewBlockForLine(line);
+  if (!el) {
+    applyScrollRatio(Math.min(1, Math.max(0, line / Math.max(1, (state.raw || "").split("\n").length))));
+    return;
+  }
+  const offset = el.getBoundingClientRect().top - previewEl.getBoundingClientRect().top + previewEl.scrollTop - 10;
+  previewEl.scrollTop = Math.max(0, Math.round(offset));
+  el.classList.add("fs-block-focus");
+  setTimeout(() => el.classList.remove("fs-block-focus"), 2000);
 }
 
 // ---------------------------------------------------------------- 定位到指定行

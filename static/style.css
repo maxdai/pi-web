@@ -1897,3 +1897,9 @@ body.theme-light .turn-file:hover {
   outline: 1px solid rgba(255, 200, 0, 0.4);
   outline-offset: -1px;
 }
+
+/* 预览里跳到的块短暂高亮（来自改动列表的行号链接，设计 §29.6） */
+#fs-preview .fs-block-focus {
+  background: rgba(255, 200, 0, 0.12);
+  box-shadow: inset 2px 0 0 rgba(255, 200, 0, 0.5);
+}
