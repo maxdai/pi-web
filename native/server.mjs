@@ -412,14 +412,23 @@ async function broadcastTurnFiles() {
   const before = turnGitBefore;
   turnGitBefore = undefined;
   if (!before) return; // 非 git 仓库 / 拿不到快照
-  const after = gitStatusMap(session?.cwd);
-  if (!after) return;
   const cwd = session?.cwd ?? "";
-  const files = diffGitSnapshots(before, after)
-    .map(({ file, code }) => ({
+  const after = gitSnapshot(cwd);
+  if (!after) return;
+  // 先取"本轮内提交过"的文件（改完立刻 commit 时工作区会变干净，只比工作区会漏掉 ✗），
+  // 再用工作区差集覆盖（工作区才是最终状态）。
+  const merged = new Map();
+  for (const { file, code } of gitCommittedChanges(cwd, before.head, after.head)) {
+    merged.set(file, code);
+  }
+  for (const { file, code } of diffGitSnapshots(before.status, after.status)) {
+    merged.set(file, displayStatusCode(code));
+  }
+  const files = [...merged.entries()]
+    .map(([file, code]) => ({
       path: file,
       abs: file.startsWith("/") ? file : `${cwd.replace(/\/$/, "")}/${file}`,
-      code: displayStatusCode(code),
+      code,
     }))
     .sort((a, b) => a.path.localeCompare(b.path));
   if (files.length === 0) return;
@@ -458,6 +467,54 @@ function gitStatusMap(cwd) {
     return map;
   } catch {
     return null;
+  }
+}
+
+/** 完整快照：工作区状态 + 当前 HEAD（用于识别"本轮内改完就提交"）。 */
+function gitSnapshot(cwd) {
+  const status = gitStatusMap(cwd);
+  if (!status) return null;
+  let head = null;
+  try {
+    head = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd,
+      encoding: "utf8",
+      timeout: 5000,
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+  } catch {
+    /* 空仓库（还没有提交）→ head 为 null，只比工作区 */
+  }
+  return { status, head };
+}
+
+/** 本轮内产生的提交：`git diff --name-status` between 两次 HEAD。 */
+function gitCommittedChanges(cwd, fromHead, toHead) {
+  if (!fromHead || !toHead || fromHead === toHead) return [];
+  try {
+    const out = execFileSync("git", ["diff", "--name-status", "-z", fromHead, toHead], {
+      cwd,
+      encoding: "utf8",
+      timeout: 10000,
+      maxBuffer: 8 * 1024 * 1024,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    const parts = out.split("\0").filter(Boolean);
+    const out2 = [];
+    for (let i = 0; i < parts.length; i++) {
+      const code = parts[i];
+      const first = parts[++i];
+      if (!first) continue;
+      if (code[0] === "R" || code[0] === "C") {
+        const second = parts[++i];
+        out2.push({ file: second || first, code: displayStatusCode(code) });
+      } else {
+        out2.push({ file: first, code: displayStatusCode(code) });
+      }
+    }
+    return out2;
+  } catch {
+    return [];
   }
 }
 
@@ -945,7 +1002,7 @@ child.stdout.on("data", (chunk) => {
     // 运行态必须在这里记账：晚连/刷新的客户端拿不到 agent_start，只能靠快照恢复指示器
     if (ev.type === "agent_start") {
       agentActive = true;
-      turnGitBefore = gitStatusMap(session?.cwd); // §30：本轮开始时的 git 快照
+      turnGitBefore = gitSnapshot(session?.cwd); // §30：本轮开始时的 git 快照（工作区 + HEAD）
     } else if (ev.type === "agent_end") agentActive = false;
     else if (ev.type === "agent_settled") {
       agentActive = false;

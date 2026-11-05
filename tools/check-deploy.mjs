@@ -44,6 +44,41 @@ const bad = (label, detail = "") => {
   console.log(`FAIL  ${label}${detail ? ` — ${detail}` : ""}`);
 };
 
+
+/** 监听某端口的 PID（没有则 null）。 */
+function listeningPid(port) {
+  try {
+    const out = execSync(`lsof -ti:${port} -sTCP:LISTEN`, { encoding: "utf8" }).trim();
+    return out ? Number(out.split("\n")[0]) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** 进程启动时间（毫秒）：/proc/<pid>/stat 第 22 字段 + /proc/stat 的 btime。 */
+function processStartMs(pid) {
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+    const rest = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+    const ticks = Number(rest[19]); // starttime（整体第 22 字段，去掉 pid/comm/state 后下标 19）
+    const btime = Number(/btime (\d+)/.exec(readFileSync("/proc/stat", "utf8"))[1]);
+    const hz = Number(execSync("getconf CLK_TCK", { encoding: "utf8" }).trim()) || 100;
+    return btime * 1000 + (ticks * 1000) / hz;
+  } catch {
+    return null;
+  }
+}
+
+/** 进程实际加载的脚本路径（node <script> …）。 */
+function processScript(pid) {
+  try {
+    const parts = readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0").filter(Boolean);
+    return parts.find((p) => p.endsWith(".mjs") || p.endsWith(".js")) ?? null;
+  } catch {
+    return null;
+  }
+}
+
 /** 递归列出 dist 下的文件（相对路径），用于逐文件比对。 */
 function listDist(root) {
   const out = [];
@@ -128,6 +163,23 @@ if (checkInstance) {
   if (!reachable) {
     console.log(`实例 ${instanceUrl}：未运行（跳过服务端文件比对；要验"用户实际拿到的文件"，请先起实例）`);
   } else {
+    // 服务端代码（*.mjs）改了必须**重启进程**：静态文件每次请求读盘，但进程内代码不会热更新。
+    const port = Number(new URL(instanceUrl).port || 80);
+    const pid = listeningPid(port);
+    const script = pid ? processScript(pid) : null;
+    const startedAt = pid ? processStartMs(pid) : null;
+    if (script && existsSync(script) && startedAt) {
+      const mtime = statSync(script).mtimeMs;
+      if (mtime > startedAt + 500) {
+        bad(
+          "实例加载的服务端代码比磁盘上的旧（改完没重启）",
+          `${script} 更新于 ${new Date(mtime).toLocaleTimeString()}，进程启动于 ${new Date(startedAt).toLocaleTimeString()}；需要重启该实例`,
+        );
+      } else {
+        ok("实例的服务端代码不旧于进程启动时间", new Date(startedAt).toLocaleTimeString());
+      }
+    }
+
     for (const [served, local] of SERVED) {
       const res = await fetch(`${instanceUrl}${served}`, { signal: AbortSignal.timeout(3000) }).catch(() => null);
       if (!res || !res.ok) {

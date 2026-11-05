@@ -2492,6 +2492,10 @@ markdown 里的相对图片同样走这条路。
 | `agent_start` | `gitStatusMap(cwd)` → `path → 状态码` 存入 `turnGitBefore` |
 | `agent_settled` | 再拍一次 → 与 before 求差集 → 有变化则 `broadcast({type:"turn_files", files})` |
 
+**"改完立刻提交"也必须算到**（2026-11-05 用户实测踩到）：只比工作区时，模型在一轮里"改文件 + `git commit`"会让工作区回到干净，
+差集为空 → 列表不出现 ✗。因此快照里额外记录 `git rev-parse HEAD`，回合结束时若 HEAD 变了，
+再取 `git diff --name-status <before> <after>` 的文件并合并（工作区差集覆盖提交结果，因为工作区才是最终状态）。
+
 差集规则（`diffGitSnapshots`）：本轮**新变脏**、**状态改变**、或**变回干净**（before 有、after 无）的文件都算本轮动过；
 每轮 2 次 git 调用，仓库量级 10–30 ms，可忽略。非 git 目录、或本轮零变化 → **不发事件**（前端不显示任何东西）。
 
@@ -2524,3 +2528,14 @@ markdown 里的相对图片同样走这条路。
 - 人造 M/A/D 数据 → 状态字母与配色正确，`D` 有删除线且不是链接 ✓
 - 非 git 目录 / 本轮无改动 → 不出现该块 ✓
 - 冒烟 52/52 保持全绿 ✓
+
+
+### 30.5 部署提示（排查用）
+
+服务端代码（`native/server.mjs`）改动**必须重启实例**才生效（静态文件是每请求读盘、进程内代码不会热更新）。
+`tools/check-deploy.mjs` 现在会自动比对"监听进程的启动时间"与"它加载的脚本的 mtime"，不一致时直接 FAIL：
+
+```
+FAIL  实例加载的服务端代码比磁盘上的旧（改完没重启）
+      .../dist/native/server.mjs 更新于 7:04:47 PM，进程启动于 6:54:18 PM；需要重启该实例
+```
