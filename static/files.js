@@ -727,13 +727,18 @@ function currentTopLine() {
   return Math.max(1, Math.min(total, Math.floor(textEl.scrollTop / lineHeight) + 1));
 }
 
-/** 源码视图顶部可见行的文本（太短就往下找一行更有辨识度的）。 */
+/**
+ * 源码视图顶部可见行的文本（往下找几行取更有辨识度的一行）。
+ * 纯符号行（表格分隔线 `|---|---|`、代码围栏等）归一化后没有实质内容，跳过——
+ * 否则会拿 "|" 这种片段去预览里匹配，命中文件最前面的表格 → 看起来"跳回第一行"。
+ */
 function sourceAnchorText(line) {
   if (!line || !state.raw) return "";
   const lines = state.raw.split("\n");
-  for (let i = line - 1; i < Math.min(lines.length, line + 2); i++) {
+  for (let i = line - 1; i < Math.min(lines.length, line + 5); i++) {
     const t = normText(lines[i]);
-    if (t.length >= 8) return t.slice(0, 60);
+    const meaningful = (t.match(/[\p{L}\p{N}]/gu) || []).length;
+    if (meaningful >= 4) return t.slice(0, 60);
   }
   return "";
 }
@@ -753,32 +758,66 @@ function previewAnchorText() {
   return "";
 }
 
-/** 在预览正文里找含该文本的元素（按整块 textContent 匹配，行内 code/加粗把文本切开也能命中）。 */
-function findPreviewElement(needle) {
+/**
+ * 在预览正文里找含该文本的元素（按整块 textContent 匹配，行内 code/加粗把文本切开也能命中）。
+ * 有多处匹配时取**离预期滚动比例最近**的那一处：文档里重复出现的小标题/表格行很常见，
+ * 直接取第一处会让人误以为"跳回第一行"。
+ */
+function findPreviewElement(needle, expectedRatio = 0) {
   const body = previewEl.querySelector(".fs-preview-body");
   if (!body || !needle) return null;
-  const short = needle.slice(0, 12);
-  const blocks = body.querySelectorAll("h1,h2,h3,h4,h5,h6,p,li,pre,td,th,blockquote");
+  const short = needle.slice(0, 24);
+  const blocks = [...body.querySelectorAll("h1,h2,h3,h4,h5,h6,p,li,pre,td,th,blockquote")].filter((el) =>
+    normText(el.textContent).includes(short),
+  );
+  if (blocks.length === 0) {
+    const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT);
+    while (walker.nextNode()) {
+      if (normText(walker.currentNode.nodeValue).includes(short.slice(0, 12))) {
+        return walker.currentNode.parentElement;
+      }
+    }
+    return null;
+  }
+  if (blocks.length === 1) return blocks[0];
+  const max = Math.max(1, previewEl.scrollHeight - previewEl.clientHeight);
+  const wanted = expectedRatio * max;
+  const paneTop = previewEl.getBoundingClientRect().top;
+  let best = blocks[0];
+  let bestDist = Infinity;
   for (const el of blocks) {
-    if (normText(el.textContent).includes(short)) return el;
+    const offset = el.getBoundingClientRect().top - paneTop + previewEl.scrollTop;
+    const dist = Math.abs(offset - wanted);
+    if (dist < bestDist) {
+      bestDist = dist;
+      best = el;
+    }
   }
-  // 兜底：按文本节点找（例如文字不在上述块里）
-  const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT);
-  while (walker.nextNode()) {
-    if (normText(walker.currentNode.nodeValue).includes(short)) return walker.currentNode.parentElement;
-  }
-  return null;
+  return best;
 }
 
-/** 在源码里找含该文本的行号。 */
-function findSourceLine(needle) {
+/** 在源码里找含该文本的行号（多处命中时取离预期比例最近的一行）。 */
+function findSourceLine(needle, expectedRatio = 0) {
   if (!state.raw || !needle) return null;
-  const short = needle.slice(0, 16);
+  const short = needle.slice(0, 24);
   const lines = state.raw.split("\n");
+  const hits = [];
   for (let i = 0; i < lines.length; i++) {
-    if (normText(lines[i]).includes(short)) return i + 1;
+    if (normText(lines[i]).includes(short)) hits.push(i + 1);
   }
-  return null;
+  if (hits.length === 0) return null;
+  if (hits.length === 1) return hits[0];
+  const wanted = expectedRatio * lines.length;
+  let best = hits[0];
+  let bestDist = Infinity;
+  for (const line of hits) {
+    const dist = Math.abs(line - wanted);
+    if (dist < bestDist) {
+      bestDist = dist;
+      best = line;
+    }
+  }
+  return best;
 }
 
 /** 切到新视图后按锚点定位；返回 false 表示锚点不可用（调用方退回比例）。 */
@@ -786,7 +825,7 @@ function applySwitchAnchor(sw) {
   if (!sw) return false;
   if (!previewEl.hidden) {
     if (sw.from !== "source" || !sw.text) return false;
-    const el = findPreviewElement(sw.text);
+    const el = findPreviewElement(sw.text, sw.ratio || 0);
     if (!el) return false;
     const offset = el.getBoundingClientRect().top - previewEl.getBoundingClientRect().top + previewEl.scrollTop - 8;
     previewEl.scrollTop = Math.max(0, Math.round(offset));
@@ -796,7 +835,7 @@ function applySwitchAnchor(sw) {
     // 源码 → 源码（刷新）仍用行锚点
     return false;
   }
-  const line = findSourceLine(sw.text);
+  const line = findSourceLine(sw.text, sw.ratio || 0);
   if (!line) return false;
   focusLine(line, { highlight: false, alignTop: true });
   return true;
