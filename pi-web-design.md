@@ -48,6 +48,12 @@ pi --session <id>
 pii r <name>                # 默认：进入 TUI
 pii r <name> --web          # Web 服务，使用默认端口 4080
 pii r <name> --web <port>   # Web 服务，使用指定端口
+pii --version | -v          # 打印版本（本包 @maxdai/pi-web 的 package.json version）
+pi-web --version | -v       # 同上（pi-web 入口，另有 pi-web list / help）
+
+> 版本探针覆盖三个入口：`pi-web`（native/cli.mjs）、`pii`（native/pii-cli.mjs，npm bin）、
+> `pii`（pii/pii，Python 启动器，直接运行仓库内脚本时用）。三者都读同一个 `package.json` 的 version，
+> 仓库布局与发布布局都能命中；冒烟各有一条断言（共 54 项）。
 ```
 
 ### 2.2 端口语义

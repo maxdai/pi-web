@@ -16,6 +16,7 @@ import { homedir, totalmem } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { getHeapStatistics } from "node:v8";
+import { piWebVersion } from "./version.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SERVER = join(HERE, "server.mjs");
@@ -29,8 +30,15 @@ const DOC = `pi-web - browser Web access for Pi (native engine)
 Usage:
   pi-web r <name> [--port <port>]   Run web mode for the session (default port ${DEFAULT_PORT})
   pi-web list                       List all sessions (name, id, cwd), newest first
+  pi-web --version                  Print the pi-web version
   pi-web help                       Show this help
 `;
+
+// `--version` / `-v`：打印本包版本（升级后排查"装的是不是新版本"最直接的入口）
+if (process.argv.slice(2).some((a) => a === "--version" || a === "-v")) {
+  console.log(`pi-web ${piWebVersion()}`);
+  process.exit(0);
+}
 
 const logInfo = (m) => console.log(m);
 const logError = (m) => console.error(m);

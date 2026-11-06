@@ -53,6 +53,7 @@ const required = [
   "native/session-history.mjs",
   "native/cli.mjs",
   "native/pii-cli.mjs",
+  "native/version.mjs",
   "native/pii",
 ];
 const missing = required.filter((rel) => !existsSync(pkg("dist", rel)));

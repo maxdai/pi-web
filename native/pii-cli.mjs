@@ -20,8 +20,14 @@
  */
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
+import { piWebVersion } from "./version.mjs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+// `--version` / `-v`：直接报本包版本，不必启动 python 启动器
+if (process.argv.slice(2).some((a) => a === "--version" || a === "-v")) {
+    console.log(`pii ${piWebVersion()}`);
+    process.exit(0);
+}
 const piiDir = dirname(fileURLToPath(import.meta.url)); // dist/pi-bin
 const piiScript = join(piiDir, "pii");
 if (!existsSync(piiScript)) {

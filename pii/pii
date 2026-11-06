@@ -8,6 +8,7 @@
                               (runs the native engine: `pi --mode rpc` + injected bridge)
   pii delete <name> Delete all sessions with the given name (asks for confirmation)
   pii delete "(unnamed)"  Delete all sessions without a display name
+  pii --version     Print the pi-web version
 """
 import json
 import os
@@ -205,11 +206,31 @@ def cmd_delete(name):
             sys.exit(1)
 
 
+def _pi_web_version() -> str:
+    """本包版本：仓库布局 `<repo>/pii/pii`、发布布局 `<pkg>/dist/native/pii` 都要命中。"""
+    here = Path(__file__).resolve().parent
+    for cand in (
+        here.parent / "pi-sdk-web" / "package.json",   # 仓库布局
+        here.parent.parent / "package.json",           # 发布布局（dist/native → 包根）
+        here.parent / "package.json",
+    ):
+        try:
+            version = json.loads(cand.read_text()).get("version")
+            if isinstance(version, str) and version:
+                return version
+        except Exception:
+            continue
+    return "dev"
+
+
 def main():
     if len(sys.argv) < 2:
         print(__doc__)
         sys.exit(1)
     cmd = sys.argv[1]
+    if cmd in ("-v", "--version"):
+        print(f"pii {_pi_web_version()}")
+        return
     if cmd in ("help", "-h", "--help"):
         print(__doc__)
         return

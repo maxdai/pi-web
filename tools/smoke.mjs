@@ -34,6 +34,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
 import { request } from "node:http";
+import { execFileSync } from "node:child_process";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const args = process.argv.slice(2);
@@ -703,6 +704,21 @@ check(
     toolRecollapsed: results.collapse.toolRecollapsed,
   }),
 );
+
+// CLI 版本探针（设计 §2）：`pi-web --version` 与 `pii --version` 都要报出本包版本
+const pkgVersion = JSON.parse(readFileSync(join(REPO_ROOT, "pi-sdk-web", "package.json"), "utf8")).version;
+const versionOf = (script) => {
+  try {
+    return execFileSync(process.execPath, [join(REPO_ROOT, "pi-sdk-web", "dist", "native", script), "--version"], {
+      encoding: "utf8",
+      timeout: 15000,
+    }).trim();
+  } catch (err) {
+    return `error: ${err.message}`;
+  }
+};
+check("pi-web --version 报本包版本", versionOf("cli.mjs") === `pi-web ${pkgVersion}`, versionOf("cli.mjs"));
+check("pii --version 报本包版本", versionOf("pii-cli.mjs") === `pii ${pkgVersion}`, versionOf("pii-cli.mjs"));
 
 // 注入节点应已被清理，且全程无新增 pageerror
 check(
