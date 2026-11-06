@@ -215,7 +215,10 @@ class PiWebClient {
     this.historyTotal = 0;       // 会话条目总数
     this.historyLoader = null;   // 顶部「加载更早」控件
     this.historyLoading = false; // 分页请求进行中
-    this.loadedEntryIds = new Set(); // 按 id 去重（防分页与实时帧重复）
+    this.loadedEntryIds = new Set();
+    // entry id → 该条目渲染后的末尾消息节点（§30.7，用于复原"本轮改动"块的位置）
+    this.entryAnchorEl = new Map();
+    this.unknownAnchorCursor = null; // 锚点缺失的块按顺序插到顶部时用
     // 是否"跟随底部"（设计文档 §20.7d）：粘性标记，取代原来每个事件当场算 2px 容差的判断 ——
     // 后者一旦因布局变化（状态区/widget 变高、内容增长）出现缝隙就永久关掉，表现为"每次出现
     // tool output 就脱离底部"（2026-10-15 用户报告）。
@@ -810,6 +813,7 @@ class PiWebClient {
     this.historyTotal = data?.total ?? entries.length;
     this.historyLoading = false;
     this.loadedEntryIds = new Set();
+    this.entryAnchorEl = new Map(); // entry id → 该条目渲染后的末尾消息节点（§30.7）
     // 历史条目都属于**已完成的回合** → 过程块创建即折叠（设计 §27）；
     // 正在跑的那一轮会由随后的实时事件继续展开渲染。
     this.replaying = true;
@@ -880,12 +884,12 @@ class PiWebClient {
 
   renderEntry(entry) {
     if (!entry) return;
-    const beforeKids = entry.id ? new Set(this.contentEl.children) : null;
     this.renderEntryBody(entry);
-    if (beforeKids) {
-      for (const el of this.contentEl.children) {
-        if (!beforeKids.has(el)) el.dataset.entryId = entry.id;
-      }
+    // 记下这条 entry 渲染后"当前最后的消息节点"。不能只给**新建**的顶层节点打标记：
+    // 工具结果等条目是渲染进已存在的 assistant 气泡里的，不会产生新顶层节点，
+    // 于是它们的 id 找不到落点 → 服务端存下的改动块全被追加到末尾（2026-11-06 实测 5 个堆在最后）✗
+    if (entry.id && this.contentEl.lastElementChild) {
+      this.entryAnchorEl.set(entry.id, this.contentEl.lastElementChild);
     }
   }
 
@@ -1647,10 +1651,18 @@ class PiWebClient {
 
   /** 插到某个 entry 渲染出的最后一个节点之后；找不到就追加到末尾（历史被裁剪时不丢块）。 */
   insertAfterEntry(entryId, box) {
-    const nodes = [...this.contentEl.children].filter((el) => el.dataset.entryId === entryId);
-    const last = nodes[nodes.length - 1];
-    if (last) last.after(box);
-    else this.contentEl.appendChild(box);
+    const anchor = this.entryAnchorEl.get(entryId);
+    if (anchor && anchor.isConnected) {
+      anchor.after(box);
+      this.unknownAnchorCursor = null;
+      return;
+    }
+    // 锚点不在已加载的历史窗口里（那一轮早于"加载更早"的范围）→ 放到顶部，并保持先后顺序，
+    // 而不是追加到末尾（追加会让好几轮混在最新消息后面，2026-11-06 用户实测的乱序来源之一）
+    const cursor = this.unknownAnchorCursor;
+    if (cursor && cursor.isConnected) cursor.after(box);
+    else this.contentEl.insertBefore(box, this.contentEl.firstElementChild);
+    this.unknownAnchorCursor = box;
   }
 
   /** 服务端存下来的各轮改动块：按 anchorEntryId 复原到消息流对应位置。 */
