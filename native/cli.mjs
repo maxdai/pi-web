@@ -28,7 +28,8 @@ const DEFAULT_MAX_OLD_SPACE_MB = 4096;
 const DOC = `pi-web - browser Web access for Pi (native engine)
 
 Usage:
-  pi-web r <name> [--port <port>]   Run web mode for the session (default port ${DEFAULT_PORT})
+  pi-web r <name> [--web [port]]    Run web mode for the session (default port ${DEFAULT_PORT})
+  pi-web r <name> [--port <port>]   Same as above, explicit port flag
   pi-web list                       List all sessions (name, id, cwd), newest first
   pi-web --version                  Print the pi-web version
   pi-web help                       Show this help
@@ -162,12 +163,17 @@ function main() {
     let port;
     for (let i = 0; i < rest.length; i++) {
       const arg = rest[i];
-      if (arg === "--port") port = parsePort(rest[++i]);
+      if (arg === "--web") {
+        // `--web` 不带值 → 默认端口；后面紧跟纯数字则当作端口（与 `pii r <name> --web [port]` 一致）
+        if (rest[i + 1] && /^\d+$/.test(rest[i + 1])) port = parsePort(rest[++i]);
+        else port = port ?? DEFAULT_PORT;
+      } else if (arg.startsWith("--web=")) port = parsePort(arg.slice("--web=".length));
+      else if (arg === "--port") port = parsePort(rest[++i]);
       else if (arg.startsWith("--port=")) port = parsePort(arg.slice("--port=".length));
       else if (name === undefined) name = arg;
-      else throw new Error(`unexpected argument: ${arg}\nusage: pi-web r <name> [--port <port>]`);
+      else throw new Error(`unexpected argument: ${arg}\nusage: pi-web r <name> [--web [port]]`);
     }
-    if (!name) throw new Error("usage: pi-web r <name> [--port <port>]");
+    if (!name) throw new Error("usage: pi-web r <name> [--web [port]]");
     cmdResume(name, port ?? DEFAULT_PORT);
     return;
   }

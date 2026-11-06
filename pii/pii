@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """pii - pi session helper.
 
-  pii list          Show all sessions (name, id, cwd), newest first
-  pii list -l       Also show session file paths
-  pii r <name>      Resume the session with the given name via `pi --session <id>`
-  pii r <name> --web [port]   Start web mode (default port 4080)
-                              (runs the native engine: `pi --mode rpc` + injected bridge)
-  pii delete <name> Delete all sessions with the given name (asks for confirmation)
-  pii delete "(unnamed)"  Delete all sessions without a display name
-  pii --version     Print the pi-web version
+  pii list                  List all sessions (name, id, cwd), newest first
+  pii list -l               Also show session file paths
+  pii r <name>              Resume the session in the TUI (`pi --session <id>`)
+  pii r <name> --web        Start web mode on the default port 4080
+  pii r <name> --web <port> Start web mode on the given port
+                            (web mode runs the native engine `pi --mode rpc` + injected bridge)
+  pii delete <name>         Delete all sessions with the given name (asks for confirmation)
+  pii delete "(unnamed)"    Delete all sessions without a display name
+  pii --version             Print the pi-web version
 """
 import json
 import os

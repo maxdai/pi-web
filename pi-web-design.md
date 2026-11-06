@@ -51,6 +51,9 @@ pii r <name> --web <port>   # Web 服务，使用指定端口
 pii --version | -v          # 打印版本（本包 @maxdai/pi-web 的 package.json version）
 pi-web --version | -v       # 同上（pi-web 入口，另有 pi-web list / help）
 
+`pi-web r` 同时接受 `--web [port]`（与 `pii r <name> --web` 一致）和 `--port <port>`；
+帮助文本里两种写法都列出（2026-11-06 用户反馈"pii 的说明里没写 --web"，顺手统一两边）。
+
 > 版本探针覆盖三个入口：`pi-web`（native/cli.mjs）、`pii`（native/pii-cli.mjs，npm bin）、
 > `pii`（pii/pii，Python 启动器，直接运行仓库内脚本时用）。三者都读同一个 `package.json` 的 version，
 > 仓库布局与发布布局都能命中；冒烟各有一条断言（共 54 项）。
