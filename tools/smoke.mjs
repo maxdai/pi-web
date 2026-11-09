@@ -28,11 +28,11 @@
  * 不改动被测会话（测试页面是脚本自己开的无头实例，与你的浏览器无关）。
  */
 import { createRequire } from "node:module";
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { request } from "node:http";
 import { execFileSync } from "node:child_process";
 
@@ -185,6 +185,59 @@ async function checkFileBrowser() {
     raw.status === 200 && !rawType.includes("text/html") && raw.headers.get("x-content-type-options") === "nosniff",
     `${raw.status} ${rawType}`,
   );
+
+  // ---- 写能力（设计 §31）----
+  const noTokenSave = await fetch(`${url}/fs/save`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ path: "/tmp/nope.md", text: "x" }),
+  });
+  check("/fs/save 无 token → 403", noTokenSave.status === 403, `status=${noTokenSave.status}`);
+
+  const gitSave = await fetch(`${url}/fs/save`, {
+    method: "POST",
+    headers: { "x-pi-web-fs-token": token, "content-type": "application/json" },
+    body: JSON.stringify({ path: `${REPO_ROOT}/.git/config`, text: "x" }),
+  });
+  check("/fs/save 写 .git → 403", gitSave.status === 403, `status=${gitSave.status}`);
+
+  const tmpFile = join(tmpdir(), `pi-web-smoke-${process.pid}.md`);
+  writeFileSync(tmpFile, "# smoke\n\n原始内容\n");
+  try {
+    const read1 = await fetch(`${url}/fs/text?path=${encodeURIComponent(tmpFile)}`, {
+      headers: { "x-pi-web-fs-token": token },
+    });
+    const read1Data = await read1.json().catch(() => ({}));
+    check(
+      "/fs/text 返回 sha1 / editable",
+      typeof read1Data.sha1 === "string" && read1Data.editable === true && !read1Data.editReason,
+      `sha1=${String(read1Data.sha1).slice(0, 8)} editable=${read1Data.editable}`,
+    );
+
+    const conflict = await fetch(`${url}/fs/save`, {
+      method: "POST",
+      headers: { "x-pi-web-fs-token": token, "content-type": "application/json" },
+      body: JSON.stringify({ path: tmpFile, text: "stale\n", baseSha1: "deadbeef" }),
+    });
+    check("/fs/save 基线不符 → 409（不覆盖）", conflict.status === 409, `status=${conflict.status}`);
+
+    const saved = await fetch(`${url}/fs/save`, {
+      method: "POST",
+      headers: { "x-pi-web-fs-token": token, "content-type": "application/json" },
+      body: JSON.stringify({ path: tmpFile, text: "# smoke\n\n新内容\n", baseSha1: read1Data.sha1 }),
+    });
+    const savedData = await saved.json().catch(() => ({}));
+    const after = readFileSync(tmpFile, "utf8");
+    check(
+      "/fs/save 正常保存并落盘",
+      saved.status === 200 && savedData.ok === true && after === "# smoke\n\n新内容\n",
+      `status=${saved.status} 内容=${JSON.stringify(after.slice(0, 20))}`,
+    );
+    const leftovers = readdirSync(tmpdir()).filter((f) => f.startsWith(`pi-web-smoke-${process.pid}.md.pi-web-`));
+    check("/fs/save 不留临时文件", leftovers.length === 0, `残留=${leftovers.length}`);
+  } finally {
+    rmSync(tmpFile, { force: true });
+  }
 }
 
 // ---------------------------------------------------------------- 主流程

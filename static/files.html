@@ -33,6 +33,9 @@
       <div id="fs-view-head">
         <span id="fs-view-name"></span>
         <span id="fs-view-meta"></span>
+        <button id="fs-edit" class="fs-btn" title="Edit this file" hidden>edit</button>
+        <button id="fs-save" class="fs-btn" title="Save (Ctrl+S)" hidden>save</button>
+        <button id="fs-revert" class="fs-btn" title="Put back the content from before the last save" hidden>revert</button>
         <button id="fs-preview-toggle" class="fs-btn" title="Toggle preview / source" hidden>preview</button>
         <button id="fs-refresh" class="fs-btn" title="Reload file content">⟳</button>
         <label id="fs-wrap-wrap" title="Wrap long lines">
@@ -42,6 +45,8 @@
         <button id="fs-close-view" class="fs-btn">close</button>
       </div>
       <pre id="fs-text"></pre>
+      <div id="fs-edit-pane" hidden><textarea id="fs-editor" spellcheck="false" autocomplete="off" autocapitalize="off"></textarea></div>
+      <div id="fs-conflict" hidden></div>
       <div id="fs-preview" hidden></div>
       <div id="fs-image"></div>
       <div id="fs-note" hidden></div>

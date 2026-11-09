@@ -395,3 +395,80 @@ body.theme-light #fs-preview .json-bool {
   font-family: var(--font-mono);
   opacity: 0.8;
 }
+
+/* --------------------------------------------------------------------------
+   文件编辑（设计文档 §31）：原生 textarea，无语法高亮
+   -------------------------------------------------------------------------- */
+#fs-edit-pane {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+}
+
+#fs-edit-pane[hidden] {
+  display: none;
+}
+
+#fs-editor {
+  flex: 1 1 auto;
+  width: 100%;
+  min-height: 0;
+  margin: 0;
+  padding: 10px 14px;
+  border: 0;
+  outline: none;
+  resize: none;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.55;
+  tab-size: 2;
+  white-space: pre;
+  overflow: auto;
+}
+
+/* 冲突面板（409）：提示 + 三个按钮 + diff */
+#fs-conflict {
+  flex: 0 0 auto;
+  max-height: 45%;
+  overflow: auto;
+  padding: 8px 12px;
+  border-top: 2px solid var(--error);
+  background: var(--code-bg);
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+}
+
+#fs-conflict[hidden] {
+  display: none;
+}
+
+.fs-conflict-msg {
+  color: var(--error);
+  margin-bottom: 6px;
+}
+
+.fs-conflict-bar {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.fs-conflict-diff {
+  white-space: pre;
+  overflow: auto;
+  max-height: 30vh;
+}
+
+.fs-conflict-diff .diff-add {
+  color: var(--bash-mode);
+}
+
+.fs-conflict-diff .diff-del {
+  color: var(--error);
+}
+
+.fs-conflict-diff .diff-ctx {
+  color: var(--dim);
+}

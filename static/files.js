@@ -17,6 +17,11 @@ const state = {
   selected: null, // 当前查看的文件
   pendingMode: null, // 下一次 openFile 想要的视图（null = 默认预览）
   viewMode: "source", // 当前实际视图：source | preview（带 &line= 时会强制 source）
+  // 编辑（设计 §31）：默认关闭，打开新文件时复位
+  edit: false,
+  baseSha1: null, // 打开/上次保存时磁盘内容的 sha1（冲突检测用）
+  baseText: "", // 与之对应的文本（CRLF 原样）
+  lastSavedText: null, // 上一次保存**之前**的内容（内存里，仅供 revert）
   objectUrls: [], // 图片 blob URL，切换/关闭时释放
 };
 
@@ -28,6 +33,9 @@ const textEl = el("fs-text");
 const imageEl = el("fs-image");
 const noteEl = el("fs-note");
 const previewEl = el("fs-preview");
+const editPaneEl = el("fs-edit-pane");
+const editorEl = el("fs-editor");
+const conflictEl = el("fs-conflict");
 
 function apiHeaders() {
   return { "x-pi-web-fs-token": TOKEN };
@@ -154,7 +162,10 @@ function renderList() {
     row.append(icon, name, size, time);
     row.addEventListener("click", () => {
       if (entry.dir) navigate(joinPath(state.path, entry.name));
-      else openFile(joinPath(state.path, entry.name));
+      else {
+        if (!confirmDiscard("切换文件")) return;
+        openFile(joinPath(state.path, entry.name));
+      }
     });
     listEl.appendChild(row);
   }
@@ -530,6 +541,8 @@ function showNote(text) {
 }
 
 function closeView() {
+  leaveEditor();
+  state.lastSavedText = null;
   if (state.selected && state.path) {
     history.replaceState(null, "", `/files?path=${encodeURIComponent(state.path)}`);
   }
@@ -550,9 +563,15 @@ function isImage(path) {
 
 async function openFile(path, line = 0) {
   state.raw = null;
-  const anchor = state.selected === path ? captureViewAnchor() : null;
+  const sameFile = state.selected === path;
+  if (!sameFile) {
+    // 换文件：编辑态与"上次保存前内容"都复位（默认关闭编辑，§31.1）
+    leaveEditor();
+    state.lastSavedText = null;
+  }
+  const anchor = sameFile ? captureViewAnchor() : null;
   // 预览视图的"刷新"也要保持位置：源码视图用行锚点，预览只能按比例
-  const previewRatio = state.selected === path && !previewEl.hidden ? currentScrollRatio() : null;
+  const previewRatio = sameFile && !previewEl.hidden ? currentScrollRatio() : null;
   state.selected = path;
   // URL 跟着文件走：刷新后仍停在这个文件（链接分享/直达也一致）
   history.replaceState(null, "", `/files?path=${encodeURIComponent(path)}`);
@@ -573,6 +592,9 @@ async function openFile(path, line = 0) {
   updatePreviewToggle(kind);
 
   if (isImage(path)) {
+    state.edit = false;
+    editPaneEl.hidden = true;
+    updateEditControls(null);
     releaseObjectUrls();
     textEl.hidden = true;
     imageEl.hidden = false;
@@ -591,6 +613,9 @@ async function openFile(path, line = 0) {
   try {
     const data = await api("/fs/text", { path });
     state.raw = data.text || ""; // 供内容锚点查找使用（§29.6）
+    state.baseText = data.text || "";
+    state.baseSha1 = data.sha1 ?? null;
+    updateEditControls(data);
     const lines = countLines(data.text || "");
     el("fs-view-meta").textContent =
       `${fmtSize(data.size)} · ${lines.toLocaleString()} lines` +
@@ -602,6 +627,12 @@ async function openFile(path, line = 0) {
       return;
     }
     imageEl.hidden = true;
+    // 编辑态优先：直接进 textarea（§31）
+    if (state.edit) {
+      el("fs-view-meta").textContent = `${fmtSize(data.size)} · ${countLines(state.baseText).toLocaleString()} lines`;
+      enterEditor();
+      return;
+    }
     // 视图选择（§29.6）：**默认预览**；带行号跳转强制源码；"切换视图/刷新"这类操作传一次性 pendingMode。
     const wanted = state.pendingMode || "preview"; // 默认预览；&line= 不再强制源码（§29.6）
     state.pendingMode = null;
@@ -629,6 +660,7 @@ async function openFile(path, line = 0) {
     }
     textEl.hidden = false;
     previewEl.hidden = true;
+    editPaneEl.hidden = true;
     updatePreviewToggle(kind);
     renderText(data.text || "");
     if (line > 0) focusLine(line);
@@ -929,6 +961,243 @@ function scrollPreviewToLine(line) {
   setTimeout(() => el.classList.remove("fs-block-focus"), 2000);
 }
 
+
+// ---------------------------------------------------------------- 文件编辑（设计 §31）
+
+/** 归一化换行后比较，避免 CRLF/LF 差异被当成"有未保存改动"。 */
+const normEol = (text) => String(text ?? "").replace(/\r\n/g, "\n");
+
+/** 是否有未保存改动。 */
+function isDirty() {
+  return state.edit && editorEl.value !== normEol(state.baseText);
+}
+
+/** 更新头部按钮与"● 未保存"标记。 */
+function updateEditControls(data) {
+  const editBtn = el("fs-edit");
+  const canEdit = Boolean(data && data.editable);
+  editBtn.hidden = !canEdit;
+  editBtn.textContent = state.edit ? "done" : "edit";
+  editBtn.title = state.edit ? "Leave edit mode" : data?.editReason ? `不可编辑：${data.editReason}` : "Edit this file";
+  el("fs-save").hidden = !state.edit;
+  el("fs-revert").hidden = !(state.edit && state.lastSavedText !== null);
+  syncEditorMeta();
+}
+
+/** 编辑态下头部显示"当前文本"的大小与行数。 */
+function syncEditorMeta() {
+  if (!state.edit) return;
+  const text = editorEl.value;
+  const bytes = new TextEncoder().encode(text).length;
+  const dirty = isDirty() ? " · ●未保存" : "";
+  el("fs-view-meta").textContent = `${fmtSize(bytes)} · ${countLines(text).toLocaleString()} lines${dirty}`;
+}
+
+/** 进入编辑态（文本已在 state.baseText 里）。 */
+function enterEditor() {
+  textEl.hidden = true;
+  previewEl.hidden = true;
+  imageEl.innerHTML = "";
+  imageEl.hidden = true;
+  conflictEl.hidden = true;
+  conflictEl.textContent = "";
+  editPaneEl.hidden = false;
+  editorEl.value = state.baseText;
+  editorEl.wrap = state.wrap ? "soft" : "off";
+  el("fs-save").hidden = false;
+  el("fs-revert").hidden = state.lastSavedText === null;
+  el("fs-preview-toggle").hidden = true; // 编辑态强制源码视图
+  syncEditorMeta();
+  editorEl.focus();
+}
+
+/** 离开编辑态（不保存）。 */
+function leaveEditor() {
+  editPaneEl.hidden = true;
+  conflictEl.hidden = true;
+  state.edit = false;
+}
+
+/** 有未保存改动时先确认。返回 true 表示可以继续。 */
+function confirmDiscard(action) {
+  if (!isDirty()) return true;
+  return window.confirm(`有未保存的修改，${action}会丢弃它们。继续？`);
+}
+
+/** POST /fs/save。 */
+async function postSave(payload) {
+  const res = await fetch(new URL("/fs/save", location.origin), {
+    method: "POST",
+    headers: { ...apiHeaders(), "content-type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const data = await res.json().catch(() => ({}));
+  return { status: res.status, ok: res.ok, data };
+}
+
+/** 保存当前编辑内容。 */
+async function saveFile() {
+  if (!state.edit || !state.selected) return;
+  const text = editorEl.value;
+  const path = state.selected;
+  el("fs-save").textContent = "saving…";
+  let result;
+  try {
+    result = await postSave({ path, text, baseSha1: state.baseSha1 });
+  } catch (err) {
+    el("fs-save").textContent = "save";
+    showNote(`保存失败：${err.message}`);
+    return;
+  }
+  el("fs-save").textContent = "save";
+  if (result.status === 409) {
+    showConflict(result.data);
+    return;
+  }
+  if (!result.ok) {
+    showNote(`保存失败：${result.data.error || result.status}`);
+    return;
+  }
+  state.lastSavedText = state.baseText;
+  state.baseText = text;
+  state.baseSha1 = result.data.sha1;
+  state.raw = text; // 供行标记等逻辑使用
+  conflictEl.hidden = true;
+  showNote("");
+  syncEditorMeta();
+  el("fs-revert").hidden = false;
+}
+
+/** 冲突面板：重新加载 / 看差异 / 强制覆盖（§31.5）。 */
+function showConflict(disk) {
+  conflictEl.hidden = false;
+  conflictEl.textContent = "";
+
+  const msg = document.createElement("div");
+  msg.className = "fs-conflict-msg";
+  msg.textContent = "文件已被外部修改（可能是 agent 或另一个窗口），你的改动尚未保存。";
+  conflictEl.appendChild(msg);
+
+  const bar = document.createElement("div");
+  bar.className = "fs-conflict-bar";
+  const mkBtn = (label, title, onclick) => {
+    const b = document.createElement("button");
+    b.className = "fs-btn";
+    b.textContent = label;
+    b.title = title;
+    b.addEventListener("click", onclick);
+    return b;
+  };
+  bar.appendChild(
+    mkBtn("重新加载", "丢弃我的改动，加载磁盘上的最新内容", () => {
+      state.baseText = disk.text ?? "";
+      state.baseSha1 = disk.sha1;
+      editorEl.value = state.baseText;
+      conflictEl.hidden = true;
+      syncEditorMeta();
+      showNote("已重新加载磁盘内容");
+    }),
+  );
+  bar.appendChild(
+    mkBtn("看差异", "对比磁盘版本与我的版本", () => renderConflictDiff(disk)),
+  );
+  bar.appendChild(
+    mkBtn("强制覆盖", "用我的版本覆盖磁盘内容", async () => {
+      if (!window.confirm("确定用你的版本覆盖磁盘上的最新内容？")) return;
+      const r = await postSave({ path: state.selected, text: editorEl.value, force: true });
+      if (!r.ok) {
+        showNote(`覆盖失败：${r.data.error || r.status}`);
+        return;
+      }
+      state.lastSavedText = state.baseText;
+      state.baseText = editorEl.value;
+      state.baseSha1 = r.data.sha1;
+      conflictEl.hidden = true;
+      syncEditorMeta();
+      el("fs-revert").hidden = false;
+      showNote("已覆盖磁盘内容");
+    }),
+  );
+  conflictEl.appendChild(bar);
+
+  const diff = document.createElement("div");
+  diff.className = "fs-conflict-diff";
+  conflictEl.appendChild(diff);
+}
+
+/** 行级 diff：裁掉公共前后缀，中间块做 LCS（过大则整块标记）。 */
+function lineDiff(aText, bText) {
+  const a = normEol(aText).split("\n");
+  const b = normEol(bText).split("\n");
+  let start = 0;
+  while (start < a.length && start < b.length && a[start] === b[start]) start += 1;
+  let endA = a.length - 1;
+  let endB = b.length - 1;
+  while (endA >= start && endB >= start && a[endA] === b[endB]) {
+    endA -= 1;
+    endB -= 1;
+  }
+  const midA = a.slice(start, endA + 1);
+  const midB = b.slice(start, endB + 1);
+  const out = [];
+  for (let i = 0; i < start; i++) out.push({ type: "ctx", text: a[i] });
+  if (midA.length <= 400 && midB.length <= 400) {
+    // LCS（DP）
+    const n = midA.length;
+    const m = midB.length;
+    const dp = Array.from({ length: n + 1 }, () => new Uint16Array(m + 1));
+    for (let i = n - 1; i >= 0; i--) {
+      for (let j = m - 1; j >= 0; j--) {
+        dp[i][j] = midA[i] === midB[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+      }
+    }
+    let i = 0;
+    let j = 0;
+    while (i < n && j < m) {
+      if (midA[i] === midB[j]) {
+        out.push({ type: "ctx", text: midA[i] });
+        i += 1;
+        j += 1;
+      } else if (dp[i + 1][j] >= dp[i][j + 1]) {
+        out.push({ type: "del", text: midA[i] });
+        i += 1;
+      } else {
+        out.push({ type: "add", text: midB[j] });
+        j += 1;
+      }
+    }
+    while (i < n) out.push({ type: "del", text: midA[i++] });
+    while (j < m) out.push({ type: "add", text: midB[j++] });
+  } else {
+    for (const line of midA) out.push({ type: "del", text: line });
+    for (const line of midB) out.push({ type: "add", text: line });
+  }
+  for (let i = endA + 1; i < a.length; i++) out.push({ type: "ctx", text: a[i] });
+  return out;
+}
+
+/** 在冲突面板里渲染 diff（磁盘版本 = a，我的版本 = b）。 */
+function renderConflictDiff(disk) {
+  const box = conflictEl.querySelector(".fs-conflict-diff");
+  if (!box) return;
+  box.textContent = "";
+  const rows = lineDiff(disk.text ?? "", editorEl.value);
+  const cap = 600;
+  const shown = rows.slice(0, cap);
+  for (const row of shown) {
+    const line = document.createElement("div");
+    line.className = row.type === "add" ? "diff-add" : row.type === "del" ? "diff-del" : "diff-ctx";
+    line.textContent = (row.type === "add" ? "+" : row.type === "del" ? "-" : " ") + row.text;
+    box.appendChild(line);
+  }
+  if (rows.length > cap) {
+    const more = document.createElement("div");
+    more.className = "diff-ctx";
+    more.textContent = `… 还有 ${rows.length - cap} 行未显示`;
+    box.appendChild(more);
+  }
+}
+
 // ---------------------------------------------------------------- 定位到指定行
 
 /**
@@ -1000,7 +1269,10 @@ el("fs-sort").addEventListener("click", () => {
   el("fs-sort").textContent = state.sort;
   renderList();
 });
-el("fs-close-view").addEventListener("click", closeView);
+el("fs-close-view").addEventListener("click", () => {
+  if (!confirmDiscard("关闭")) return;
+  closeView();
+});
 
 /** 预览/源码切换按钮：只在可预览的类型上出现；文案反映**当前实际视图**要切去哪边。 */
 function updatePreviewToggle(kind) {
@@ -1012,6 +1284,62 @@ function updatePreviewToggle(kind) {
   btn.textContent = inPreview ? "source" : "preview";
   btn.title = inPreview ? "Show the raw text (line numbers)" : "Show the rendered preview";
 }
+
+
+// ---- 编辑入口与快捷键（§31.5）----
+
+el("fs-edit").addEventListener("click", () => {
+  if (state.edit) {
+    if (!confirmDiscard("退出编辑")) return;
+    state.edit = false;
+    leaveEditor();
+    state.pendingMode = "source";
+    if (state.selected) openFile(state.selected);
+    return;
+  }
+  state.edit = true; // 默认关闭，点一次才进（防误触）
+  state.pendingMode = "source"; // 编辑一定用源码视图
+  if (state.selected) openFile(state.selected);
+});
+
+el("fs-save").addEventListener("click", saveFile);
+
+el("fs-revert").addEventListener("click", () => {
+  if (state.lastSavedText === null) return;
+  if (!window.confirm("把内容恢复成上一次保存之前的样子？（还需要再保存才会落盘）")) return;
+  editorEl.value = normEol(state.lastSavedText);
+  state.lastSavedText = null;
+  el("fs-revert").hidden = true;
+  syncEditorMeta();
+});
+
+editorEl.addEventListener("input", syncEditorMeta);
+editorEl.addEventListener("keydown", (e) => {
+  if (e.key === "Tab") {
+    // Tab 插入两个空格（textarea 默认会跳焦点，编辑 markdown 时不方便）
+    e.preventDefault();
+    const start = editorEl.selectionStart;
+    const end = editorEl.selectionEnd;
+    editorEl.value = `${editorEl.value.slice(0, start)}  ${editorEl.value.slice(end)}`;
+    editorEl.selectionStart = editorEl.selectionEnd = start + 2;
+    syncEditorMeta();
+  }
+});
+
+// 未保存就关页面/刷新 → 浏览器确认（防止误丢改动）
+window.addEventListener("beforeunload", (e) => {
+  if (!isDirty()) return;
+  e.preventDefault();
+  e.returnValue = "";
+});
+
+document.addEventListener("keydown", (e) => {
+  if (!state.edit) return;
+  if ((e.ctrlKey || e.metaKey) && (e.key === "s" || e.key === "S")) {
+    e.preventDefault();
+    saveFile();
+  }
+});
 
 el("fs-preview-toggle").addEventListener("click", () => {
   // 以"当前实际视图"为准取反：带 &line= 被强制成 source 时，点一下也能正常进预览
@@ -1025,6 +1353,7 @@ el("fs-preview-toggle").addEventListener("click", () => {
   if (state.selected) openFile(state.selected);
 });
 el("fs-refresh").addEventListener("click", () => {
+  if (!confirmDiscard("刷新")) return;
   state.pendingMode = state.viewMode; // 刷新保持当前视图
   if (state.selected) openFile(state.selected); // 重新读盘（文本走 no-store，图片加时间戳破缓存）
 });
