@@ -472,3 +472,10 @@ body.theme-light #fs-preview .json-bool {
 .fs-conflict-diff .diff-ctx {
   color: var(--dim);
 }
+
+/* 有未保存改动时高亮 save（设计 §31.5） */
+#fs-save.fs-save-dirty {
+  color: var(--accent);
+  border-color: var(--accent);
+  font-weight: 600;
+}

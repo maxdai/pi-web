@@ -977,8 +977,12 @@ function updateEditControls(data) {
   const editBtn = el("fs-edit");
   const canEdit = Boolean(data && data.editable);
   editBtn.hidden = !canEdit;
-  editBtn.textContent = state.edit ? "done" : "edit";
-  editBtn.title = state.edit ? "Leave edit mode" : data?.editReason ? `不可编辑：${data.editReason}` : "Edit this file";
+  editBtn.textContent = state.edit ? "quit edit" : "edit";
+  editBtn.title = state.edit
+    ? "Leave edit mode without saving (unsaved changes are discarded after confirmation)"
+    : data?.editReason
+      ? `不可编辑：${data.editReason}`
+      : "Edit this file";
   el("fs-save").hidden = !state.edit;
   el("fs-revert").hidden = !(state.edit && state.lastSavedText !== null);
   syncEditorMeta();
@@ -989,8 +993,11 @@ function syncEditorMeta() {
   if (!state.edit) return;
   const text = editorEl.value;
   const bytes = new TextEncoder().encode(text).length;
-  const dirty = isDirty() ? " · ●未保存" : "";
-  el("fs-view-meta").textContent = `${fmtSize(bytes)} · ${countLines(text).toLocaleString()} lines${dirty}`;
+  const dirty = isDirty();
+  el("fs-view-meta").textContent =
+    `${fmtSize(bytes)} · ${countLines(text).toLocaleString()} lines` + (dirty ? " · ●未保存" : "");
+  // 未保存时把 save 高亮，一眼看出"该保存了"
+  el("fs-save").classList.toggle("fs-save-dirty", dirty);
 }
 
 /** 进入编辑态（文本已在 state.baseText 里）。 */
@@ -1015,6 +1022,7 @@ function enterEditor() {
 function leaveEditor() {
   editPaneEl.hidden = true;
   conflictEl.hidden = true;
+  el("fs-save").classList.remove("fs-save-dirty");
   state.edit = false;
 }
 
