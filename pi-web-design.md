@@ -2358,6 +2358,19 @@ message_update 共 84 个；前 6 个到达时刻 4.02s / 4.02s / 4.02s / 4.09s 
 
 不用 RPC、不经 Pi —— 纯 Node 标准库读盘。
 
+**路径解析规则**（`resolveTarget`，所有 `/fs/*` 共用）：
+
+| 输入 | 解析为 |
+|---|---|
+| 空 | 会话 cwd |
+| `~` | 家目录 |
+| `~/x/y` | `$HOME/x/y` |
+| `/abs/path` | 原样 |
+| 其它 | 相对会话 cwd |
+
+`~`/`~/` 必须在拼 cwd **之前**处理：早先 `resolve(cwd, "~/.config/gh/hosts.yml")` 得到
+`<cwd>/~/.config/gh/hosts.yml`，消息流里这类路径点开必定 not found（2026-11-13 用户反馈 ✗）。
+
 ### 28.3 页面
 
 - **起始目录 = 当前会话 cwd**（不带 `?path=` 时服务端按会话 cwd 解析）；带 `?path=` 则直达该路径；

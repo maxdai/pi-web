@@ -186,6 +186,13 @@ async function checkFileBrowser() {
     `${raw.status} ${rawType}`,
   );
 
+  // `~` / `~/x` 按家目录解析，不能拼在 cwd 后面（设计 §28.3）
+  const tilde = await fetch(`${url}/fs/list?path=${encodeURIComponent("~")}`, {
+    headers: { "x-pi-web-fs-token": token },
+  });
+  const tildeData = await tilde.json().catch(() => ({}));
+  check("/fs/list 的 ~ 解析为家目录", tilde.status === 200 && tildeData.path === homedir(), `path=${tildeData.path}`);
+
   // ---- 写能力（设计 §31）----
   const noTokenSave = await fetch(`${url}/fs/save`, {
     method: "POST",

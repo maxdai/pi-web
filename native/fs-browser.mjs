@@ -15,6 +15,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { createReadStream, promises as fsp } from "node:fs";
 import { dirname, extname, resolve, sep } from "node:path";
+import { homedir } from "node:os";
 
 /** 文本预览上限：超过只回前 2 MB（页面提示可下载）。 */
 const TEXT_LIMIT = 2 * 1024 * 1024;
@@ -89,6 +90,10 @@ function sendJson(res, status, body) {
 function resolveTarget(rawPath, cwd) {
   const text = String(rawPath ?? "").trim();
   if (!text) return resolve(cwd);
+  // `~` / `~/x` 是 shell 习惯的家目录写法：绝不能当成相对路径拼在 cwd 后面
+  // （早先 resolve(cwd, "~/x") → <cwd>/~/x，消息流里的 `~/.config/...` 打开必失败，2026-11-13 用户反馈 ✗）
+  if (text === "~") return homedir();
+  if (text.startsWith("~/")) return resolve(homedir(), text.slice(2));
   return resolve(text.startsWith("/") ? text : resolve(cwd, text));
 }
 
