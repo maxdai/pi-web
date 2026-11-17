@@ -863,6 +863,8 @@ function applySessionFile(file) {
   session.name = undefined; // 名字随文件重新解析（见 get_sessions）
   session.cwd = readHeaderCwd(file) ?? session.cwd;
   historyIndex = null; // 索引属于旧文件，必须重建（§20）
+  treeScanCache = null; // 骨架缓存同理
+  navLeaf = null; // 导航标记属于旧会话
   log(`[pi-web] session switched → ${session.path}`);
   return true;
 }
@@ -1003,7 +1005,7 @@ function ensureHistoryIndex() {
 }
 
 /** `/tree` 元数据缓存（设计 §26）：按「文件 + 大小」命中；树导航只改内存叶指针、文件不变，
- *  所以叶指针**不进缓存**（见下方 currentLeafId）。 */
+ *  所以叶指针**不进缓存**（见下方 resolveLeafId）。 */
 let treeMetaCache = null;
 
 function ensureTreeMeta() {
@@ -1021,9 +1023,32 @@ function ensureTreeMeta() {
   }
 }
 
-/** 当前叶指针：初始为 null（= 文件最后一条，未导航时等价）；树导航后由桥接上报，
- *  之后每次 `entry_appended` 也跟着推进（追加必然挂在当前叶上）。设计 §26.8。 */
-let currentLeafId = null;
+/**
+ * 树导航后的叶（`{id, size}`），**只在文件没有继续增长时**才算数。设计 §26.8。
+ *
+ * 早先的实现是「事件驱动的常驻叶指针」：树导航时赋值，之后靠 `entry_appended` 推进。
+ * 问题是 Pi 只在**自定义条目**（如 magic-context 的 `context_edit`）追加时才发 `entry_appended`，
+ * 普通消息追加**不发** → 一旦某个自定义条目把指针设住，之后的历史就永远停在那一刻，
+ * 那一轮之后的消息在刷新后全部看不到（2026-11-17 用户实测：01:30 的 context_edit 之后 68 条全丢）。
+ *
+ * 现在的规则更简单也更稳：**当前叶 = 文件最后一条**；只有在「刚导航过、且文件尚未增长」时才用导航目标。
+ * 文件一增长（任何追加都挂在当前叶上）导航标记自动失效。
+ */
+let navLeaf = null;
+
+/** 当前叶 id：导航后文件未增长 → 导航目标；否则 → 文件最后一条。 */
+function resolveLeafId(file, index) {
+  if (!file) return null;
+  if (navLeaf) {
+    try {
+      if (statSync(file).size === navLeaf.size) return navLeaf.id;
+    } catch {
+      /* 读不到大小就当作已增长 */
+    }
+    navLeaf = null;
+  }
+  return index ? lastEntryId(file, index) : null;
+}
 
 /** 树骨架缓存（id → {parentId,start,end}），用于「按路径取历史」。按「文件+大小」命中。 */
 let treeScanCache = null;
@@ -1049,7 +1074,7 @@ function currentPathIds() {
   const scan = file ? ensureTreeScan() : null;
   if (!file || !scan) return null;
   const index = ensureHistoryIndex();
-  const leaf = currentLeafId ?? (index ? lastEntryId(file, index) : null);
+  const leaf = resolveLeafId(file, index);
   if (!leaf) return null;
   const ids = resolvePath(scan.byId, leaf);
   return ids.length > 0 ? ids : null;
@@ -1291,8 +1316,6 @@ child.stdout.on("data", (chunk) => {
       agentActive = false;
       void broadcastTurnFiles(); // §30：本轮结束 → 比对快照并广播改动列表
     }
-    // 追加必然发生在当前叶上 → 新条目就是新叶（树导航后仍成立，见设计 §26.8）
-    else if (ev.type === "entry_appended" && ev.entry?.id) currentLeafId = ev.entry.id;
     broadcast(ev);
     if (STATS_REFRESH_EVENTS.has(ev.type)) void sendStats();
   }
@@ -1578,7 +1601,7 @@ async function handleClientMessage(ws, msg) {
         ws.send(
           JSON.stringify({
             type: "tree",
-            data: { nodes, leafId: currentLeafId ?? lastEntryId(file, index), sessionFile: file },
+            data: { nodes, leafId: resolveLeafId(file, index), sessionFile: file },
           }),
         );
         log(`[pi-web] tree: ${nodes.length} 条（${Date.now() - startedAt}ms）`);
@@ -2003,7 +2026,14 @@ const server = createServer(async (req, res) => {
         // 再通知前端收尾（关窗、回填输入框）——顺序不能反，否则提示行会被重绘清掉。
         const targetId = typeof data.targetId === "string" ? data.targetId : null;
         if (data.ok && !data.cancelled && typeof data.leafId === "string") {
-          currentLeafId = data.leafId;
+          // 记下导航目标与当时的文件大小：之后文件一增长（新消息挂在当前叶上）它就自动失效
+          let size = null;
+          try {
+            size = session?.path ? statSync(session.path).size : null;
+          } catch {
+            /* 读不到就不记录，退回"文件最后一条" */
+          }
+          navLeaf = size === null ? null : { id: data.leafId, size };
           log(`[pi-web] tree navigate → leaf ${data.leafId}`);
           await sendHistory();
           broadcast({

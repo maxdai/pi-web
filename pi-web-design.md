@@ -2194,7 +2194,7 @@ message_update 共 84 个；前 6 个到达时刻 4.02s / 4.02s / 4.02s / 4.09s 
                             → ctx.navigateTree(id, {summarize:false})
                             → 读 ctx.sessionManager.getLeafId() / getEntry(id) 取回填文本
                             → POST /side/tree-nav {ok, leafId, editorText}
-          → 服务端: currentLeafId = leafId → 重发 history（按新路径）→ 广播 tree_navigated
+          → 服务端: navLeaf = {id: leafId, size: 当时的文件大小} → 重发 history（按新路径）→ 广播 tree_navigated
           → 前端: closeModal + 输入框回填（若有）+ 消息区按新路径重绘
 ```
 
@@ -2767,3 +2767,19 @@ md 会照常打开预览，然后用上面建好的 `data-src-line` 标记滚到
 | 未保存时切换文件 / 刷新 / 关闭 | 弹出确认；关页面走 `beforeunload` |
 | 临时文件 | 保存后目录内无 `.pi-web-*.tmp` 残留 |
 | 冒烟 | **60/60**（新增 6 条 `/fs/save` 断言） |
+
+#### 26.8.1 叶指针规则（2026-11-17 修正）
+
+**规则**：当前叶 = **文件最后一条**；只有「刚做过树导航、且文件自那以后没有增长」时，才用导航目标。
+文件一增长（任何追加都挂在当前叶上）导航标记自动失效。
+
+**为什么改**：早先是「事件驱动的常驻叶指针」——树导航时赋值，之后靠 `entry_appended` 推进。
+但 Pi 只在**自定义条目**（如 magic-context 的 `context_edit`）追加时才发 `entry_appended`，
+**普通消息追加不发** → 某个 `context_edit` 把指针设住之后，历史就永远停在那一刻。
+
+实测（用户 2026-11-17 报告“这几条 user message 没显示”）：会话第 2080 条是一个 `context_edit`，
+之后 68 条（含 3 条用户消息）全部从历史里消失；而新起的进程报 `total=2148` 是对的
+（此时指针还是 null），说明是**运行期状态被写死**而不是读文件出错。
+
+修正后：同一会话新进程 `total=2150` 且这三条消息都在尾部窗口内；`resolveLeafId` 的三条分支
+（无导航 / 导航且大小未变 / 导航但文件已增长）已用离线单测覆盖。
