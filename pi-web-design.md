@@ -2783,3 +2783,51 @@ md 会照常打开预览，然后用上面建好的 `data-src-line` 标记滚到
 
 修正后：同一会话新进程 `total=2150` 且这三条消息都在尾部窗口内；`resolveLeafId` 的三条分支
 （无导航 / 导航且大小未变 / 导航但文件已增长）已用离线单测覆盖。
+
+## 32. Pi 上游 `apps/p3`（Pi Roam）评估（2026-11-20，结论：暂不采用，持续观察）
+
+Pi 1.6.0 引入了 `apps/p3`。**结论：现在不采用，也不改动 pi-web；列为"每升几次 Pi 版本就复查一次"的观察项。**
+
+### 32.1 p3 是什么
+
+- 自述："One Pi per person: a server on your machine with a worker per session"，是 **p2（Pi Mobile）的继任者**，基于 Chord v2 重写；
+- **目前 headless（没有页面）**，`@earendil-works/p3` `0.0.1` 且 `private: true`（未发布 npm）；
+- `engines.node >= 26.3.1`（硬门槛，`src/minimum-node.ts` 启动即检查并退出）。
+
+### 32.2 现状盘点（为什么现在用不上）
+
+| 维度 | 事实 |
+|---|---|
+| 已实现 | 服务器 + supervisor（崩溃重启）+ **每会话一个 worker 进程** + owner 一次性登录链接（10 分钟）+ sign-ins/secrets + 数据目录与端口分配 |
+| 内置插件 | 只有 `plugins/sessions`，做会话的 create/rename/archive/restore/list 与状态行 |
+| 是否跑 agent | **没有**：`src/` 与 `plugins/` 中没有任何 `@earendil-works/pi-*` 引用；session worker 目前只是承载 facet 的进程 |
+| 浏览器面 | 无页面；HTTP/WS 由 Chord 组件提供，尚无面向 UI 的转录 API |
+| 路线图 | `docs/slices/`：08 models、09 prompt、10 agents、12 files、13 mcp、14 views、**16 Web and terminal**、18 生命周期、19 workspace … |
+
+底座 `@earendil-works/chord@1.6.0` **已发布**（engines `>=22.19.0`，解包约 12.3 MB），导出含
+`./http` `./workers` `./web` `./react` `./tui` `./surfaces`：`src/web/README.md` 里已有整套浏览器栈
+（`startPage` + WebSocket `/chord` + React 绑定 + 主题 + 多语言 + 插件样式热更新 + CSP nonce 引导脚本）。
+
+### 32.3 决策与理由
+
+| 选项 | 结论 |
+|---|---|
+| 拿 p3 当引擎 | ✗ Node 26 门槛、未发布、**不跑 agent**、无页面/转录 API |
+| 用 p3 的会话管理替代我们的 | ✗ 我们的能力更强（直接读会话文件、树导航、diff、持久化） |
+| pi-web 移植到 Chord | ✗ 等于把 WS+DOM 全重写为 facet/contract 模型，底座仍在每周演进 |
+| **借鉴三个小点子** | ✅ 见 32.4 |
+| **战略** | ⚠️ p3 的终态（服务器 + 每会话 worker + Web/终端客户端）与 pi-web **直接重叠**；等 slice 16 落地后，应评估「pi-web 变成 p3 的插件/页面」而不是继续自建 |
+
+### 32.4 可借鉴、但本轮不动
+
+1. **supervisor 崩溃自动重启**：我们现在的 server 挂了，`pi` 子进程也一起挂——这是真实弱点，约 30 行可补在 `native/server.mjs`（**用户 2026-11-20 决定暂时不动**）；
+2. **owner 一次性链接（限时）**：跨设备访问时比"把 per-process token 写进页面"更稳；
+3. **每会话独立 worker 进程**：将来若做"一服务多会话"，这是参考模型。
+
+### 32.5 复查触发条件
+
+Pi 升版后（尤其大版本）看一眼 `apps/p3/docs/slices/`：
+
+- **slice 08/09/10**（models / prompt / agents）落地 → p3 真的能跑 agent；
+- **slice 16**（Web and terminal）落地 → 与 pi-web 功能重叠，进入"是否转向"的决策；
+- 另外留意 p3 是否去掉 `private`、Node 门槛是否降到 LTS、Chord 是否趋于稳定（1.x 语义冻结）。
