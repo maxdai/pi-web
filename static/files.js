@@ -852,7 +852,25 @@ function sourceAnchorText(line) {
   return "";
 }
 
-/** 预览视图顶部可见块的文本。 */
+/**
+ * 预览视图**顶部可见文字**的锚点。
+ * 块级 textContent 在长段落上会退化成"整段开头"，导致来回切换越切越靠前；
+ * 优先用 caretRangeFromPoint 取视口顶部的精确插入点，再从那里取一段文字。
+ */
+function previewTopText() {
+  const rect = previewEl.getBoundingClientRect();
+  const x = rect.left + Math.min(40, Math.max(8, rect.width / 4));
+  const y = rect.top + 8;
+  const caret = document.caretRangeFromPoint?.(x, y) ?? null;
+  const node = caret?.startContainer ?? null;
+  if (node && node.nodeType === Node.TEXT_NODE) {
+    const rest = normText((node.nodeValue || "").slice(caret.startOffset)).slice(0, 60);
+    if (rest.length >= 8) return rest;
+  }
+  return previewAnchorText();
+}
+
+/** 预览视图顶部可见块的文本（兜底）。 */
 function previewAnchorText() {
   const body = previewEl.querySelector(".fs-preview-body");
   if (!body) return "";
@@ -934,7 +952,14 @@ function applySwitchAnchor(sw) {
   if (!sw) return false;
   if (!previewEl.hidden) {
     if (sw.from !== "source") return false;
-    // ① 行号映射（精确）② 文本匹配 ③ 比例
+    // ① 行文本范围（最精确）② 行号映射到块 ③ 文本匹配 ④ 比例
+    if (sw.line) {
+      const range = rangeForSourceLine(sw.line);
+      if (range) {
+        alignRangeTop(range);
+        return true;
+      }
+    }
     const el = (sw.line && previewBlockForLine(sw.line)) || (sw.text ? findPreviewElement(sw.text, sw.ratio || 0) : null);
     if (!el) return false;
     const offset = el.getBoundingClientRect().top - previewEl.getBoundingClientRect().top + previewEl.scrollTop - 8;
@@ -948,8 +973,31 @@ function applySwitchAnchor(sw) {
   return true;
 }
 
-/** 预览里滚到第 N 行对应的块（用 data-src-line 标记；没有标记就退回比例）。 */
+/**
+ * 预览里定位到第 N 行。
+ *
+ * 块级跳转在这里不够用：长段落（小说正文很常见）会被渲染成**一个巨大的 <p>**，
+ * 高亮整块看起来就是"全文加亮"（2026-11-22 用户实测 ✗）。所以改成**文本范围高亮**：
+ * 用该行的文本在预览里找到对应文字，用 Range 精确框住那一段，再滚动到它。
+ * 找不到文字时退回块级/比例定位。
+ */
 function scrollPreviewToLine(line) {
+  // JSON / JSONL 预览：每行就是带行号的 .fs-line，行号精确对应，直接定位那一行
+  const row = previewEl.querySelector(`.fs-line[data-line="${line}"]`);
+  if (row) {
+    const delta = row.getBoundingClientRect().top - previewEl.getBoundingClientRect().top;
+    previewEl.scrollTop = Math.max(0, Math.round(previewEl.scrollTop + delta - previewEl.clientHeight / 3));
+    row.classList.add("fs-line-focus");
+    setTimeout(() => row.classList.remove("fs-line-focus"), 2500);
+    return;
+  }
+  const range = rangeForSourceLine(line);
+  if (range) {
+    highlightRange(range);
+    scrollRangeIntoView(range);
+    setTimeout(() => clearRangeHighlight(), 2500);
+    return;
+  }
   const el = previewBlockForLine(line);
   if (!el) {
     applyScrollRatio(Math.min(1, Math.max(0, line / Math.max(1, (state.raw || "").split("\n").length))));
@@ -959,6 +1007,108 @@ function scrollPreviewToLine(line) {
   previewEl.scrollTop = Math.max(0, Math.round(offset));
   el.classList.add("fs-block-focus");
   setTimeout(() => el.classList.remove("fs-block-focus"), 2000);
+}
+
+/** 给「源码行 → 预览文本范围」建索引：归一化字符串 + 每个字符的原始位置。 */
+function normalizeWithMap(root) {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  const nodes = [];
+  let text = "";
+  const map = []; // 归一化字符下标 → [nodeIndex, offsetInNode]
+  while (walker.nextNode()) {
+    const node = walker.currentNode;
+    const value = node.nodeValue || "";
+    const nodeIndex = nodes.push(node) - 1;
+    let pendingSpace = false;
+    for (let i = 0; i < value.length; i++) {
+      const ch = value[i];
+      if (/\s/.test(ch)) {
+        pendingSpace = true;
+        continue;
+      }
+      if (/[`*_#>~[\]]/.test(ch)) continue; // 与 normText 一致：去掉 markdown 标记
+      if (pendingSpace && text.length > 0) {
+        text += " ";
+        map.push([nodeIndex, i - 1 < 0 ? 0 : i - 1]);
+      }
+      pendingSpace = false;
+      text += ch;
+      map.push([nodeIndex, i]);
+    }
+  }
+  return { text, map, nodes };
+}
+
+/** 在预览里找到第 N 行文字对应的 DOM Range（优先在该行的块内找，消歧重复段落）。 */
+function rangeForSourceLine(line) {
+  const body = previewEl.querySelector(".fs-preview-body");
+  if (!body || !state.raw) return null;
+  // 目标行可能是空行或只有标记符号 → 顺延 1~2 行取一段有辨识度的文字（改动的上下文就在附近）
+  const lines = state.raw.split("\n");
+  let needle = "";
+  for (let i = line - 1; i < Math.min(lines.length, line + 2); i++) {
+    const candidate = normText(lines[i] ?? "").slice(0, 24);
+    if (candidate.length >= 4) {
+      needle = candidate;
+      break;
+    }
+  }
+  if (!needle) return null;
+  const scopes = [];
+  const block = previewBlockForLine(line);
+  if (block) scopes.push(block);
+  scopes.push(body);
+  for (const scope of scopes) {
+    const { text, map, nodes } = normalizeWithMap(scope);
+    const at = text.indexOf(needle);
+    if (at < 0) continue;
+    const startPos = map[at];
+    const endPos = map[at + needle.length - 1];
+    if (!startPos || !endPos) continue;
+    const range = document.createRange();
+    range.setStart(nodes[startPos[0]], startPos[1]);
+    range.setEnd(nodes[endPos[0]], endPos[1] + 1);
+    return range;
+  }
+  return null;
+}
+
+/** 高亮一个 Range：优先用 CSS Custom Highlight（不改 DOM，最干净）。 */
+function highlightRange(range) {
+  if (typeof CSS !== "undefined" && CSS.highlights && typeof Highlight === "function") {
+    CSS.highlights.set("fs-jump", new Highlight(range));
+    return;
+  }
+  // 兜底：把这段文字包进 <span>（部分浏览器没有 Highlight API）
+  try {
+    const span = document.createElement("span");
+    span.className = "fs-range-focus";
+    range.surroundContents(span);
+  } catch {
+    /* 跨元素边界时 surroundContents 会抛错，忽略即可 */
+  }
+}
+
+function clearRangeHighlight() {
+  if (typeof CSS !== "undefined" && CSS.highlights) CSS.highlights.delete("fs-jump");
+  for (const el of previewEl.querySelectorAll(".fs-range-focus")) el.replaceWith(...el.childNodes);
+}
+
+/** 把 Range 贴到预览顶部（切换视图时用，语义是"从这里开始看"）。 */
+function alignRangeTop(range) {
+  const rect = range.getBoundingClientRect();
+  if (!rect || (rect.width === 0 && rect.height === 0)) return;
+  const paneRect = previewEl.getBoundingClientRect();
+  previewEl.scrollTop = Math.max(0, Math.round(previewEl.scrollTop + rect.top - paneRect.top - 8));
+}
+
+/** 把 Range 滚到视口靠上 1/3 处。 */
+function scrollRangeIntoView(range) {
+  const rect = range.getBoundingClientRect();
+  if (!rect || (rect.width === 0 && rect.height === 0)) return;
+  const paneRect = previewEl.getBoundingClientRect();
+  const delta = rect.top - paneRect.top;
+  previewEl.scrollTop = Math.max(0, Math.round(previewEl.scrollTop + delta - paneRect.height / 3));
 }
 
 
@@ -1354,7 +1504,7 @@ el("fs-preview-toggle").addEventListener("click", () => {
   const useText = state.kind === "md"; // 只有 markdown 两者文本可对应
   const topLine = state.viewMode === "preview" ? null : currentTopLine();
   pendingSwitch = state.viewMode === "preview"
-    ? { from: "preview", text: useText ? previewAnchorText() : "", ratio: currentScrollRatio() }
+    ? { from: "preview", text: useText ? previewTopText() : "", ratio: currentScrollRatio() }
     : { from: "source", line: topLine, text: useText ? sourceAnchorText(topLine) : "", ratio: currentScrollRatio() };
   // 只影响当前文件：不写入偏好，新打开的文件仍默认预览（§29.6）
   state.pendingMode = state.viewMode === "preview" ? "source" : "preview";

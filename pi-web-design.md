@@ -2831,3 +2831,26 @@ Pi 升版后（尤其大版本）看一眼 `apps/p3/docs/slices/`：
 - **slice 08/09/10**（models / prompt / agents）落地 → p3 真的能跑 agent；
 - **slice 16**（Web and terminal）落地 → 与 pi-web 功能重叠，进入"是否转向"的决策；
 - 另外留意 p3 是否去掉 `private`、Node 门槛是否降到 LTS、Chord 是否趋于稳定（1.x 语义冻结）。
+
+### 29.7 预览里按"源码行"高亮（2026-11-22 修正）
+
+用户反馈：从回合改动列表点进去，**整篇文字都被高亮**，而不是落在第一个改动行上。
+
+根因：块级高亮在这个文件上退化了。实测那份 markdown（42 KB / 450 行）被渲染成**只有 2 个块**——
+长段落全被合并成巨型 `<p>`（6,453 字），于是"高亮该行所在的块"就等于高亮大半篇。
+
+改为**文本范围高亮**（`Range` + CSS Custom Highlight，不改 DOM）：
+
+1. 取目标行的归一化文本前 24 字（空行/纯标记行则顺延 1~2 行）；
+2. 建立"归一化字符 → 原始文本节点"的映射（`normalizeWithMap`，与 `normText` 同一套规则：去 markdown 标记、压空白）；
+3. 优先在该行所属块内搜索（消除重复段落歧义），否则全文搜索；
+4. 用 `CSS.highlights.set("fs-jump", new Highlight(range))` 精确框住那一段，滚到视口靠上 1/3；
+   2.5 秒后清除。没有 Highlight API 时退回 `surroundContents` 包 `<span>`；
+5. JSON / JSONL 预览每行本来就是带行号的 `.fs-line` → 直接高亮那一行（不做文本搜索）。
+
+同时修掉切换视图时的"越切越靠前"：原来用**块首 textContent** 当锚点，长段落上永远指回段首；
+现在用 `caretRangeFromPoint` 取视口顶部的**精确文字**，source → preview 也走同一条 Range 路径。
+
+实测（`正文/03_石镜01_破山.md`，第 100 行）：高亮范围 = 「本殿主一样一样说给你听。」他把那手上的水光举着
+（正是该行开头），滚动 1,912 px；切换往返按源码行计 **delta = 0**；JSONL `line=5` 高亮第 5 行；
+`.mjs` 仍走源码视图并高亮第 300 行；冒烟 61/61。

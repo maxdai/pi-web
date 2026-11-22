@@ -1903,3 +1903,21 @@ body.theme-light .turn-file:hover {
   background: rgba(255, 200, 0, 0.12);
   box-shadow: inset 2px 0 0 rgba(255, 200, 0, 0.5);
 }
+
+/* 预览里按"源码行"精确高亮（CSS Custom Highlight，不改 DOM；设计 §29.6） */
+::highlight(fs-jump) {
+  background-color: rgba(255, 200, 0, 0.35);
+}
+
+/* 没有 Highlight API 时的兜底（把文字包进 span） */
+#fs-preview .fs-range-focus {
+  background: rgba(255, 200, 0, 0.35);
+  border-radius: 2px;
+}
+
+/* JSON / JSONL 预览里按行跳转时的高亮 */
+#fs-preview .fs-line-focus {
+  background: rgba(255, 200, 0, 0.16);
+  outline: 1px solid rgba(255, 200, 0, 0.4);
+  outline-offset: -1px;
+}
