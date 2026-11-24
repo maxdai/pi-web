@@ -424,8 +424,18 @@ body.theme-light #fs-preview .json-bool {
   font-size: 13px;
   line-height: 1.55;
   tab-size: 2;
+  /* 折行由 .wrap 控制：CSS 的 white-space 优先级高于 textarea 的 wrap 属性，
+     早先写死 pre 会让「wrap 勾选」在编辑态完全失效（2026-11-24 用户反馈 ✗） */
   white-space: pre;
   overflow: auto;
+}
+
+/* wrap 勾选时软换行 + 长 token 强制断行（与源码视图的折行一致） */
+#fs-editor.wrap {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  overflow-x: hidden;
 }
 
 /* 冲突面板（409）：提示 + 三个按钮 + diff */

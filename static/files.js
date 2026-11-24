@@ -1161,6 +1161,7 @@ function enterEditor() {
   editPaneEl.hidden = false;
   editorEl.value = state.baseText;
   editorEl.wrap = state.wrap ? "soft" : "off";
+  editorEl.classList.toggle("wrap", state.wrap);
   el("fs-save").hidden = false;
   el("fs-revert").hidden = state.lastSavedText === null;
   el("fs-preview-toggle").hidden = true; // 编辑态强制源码视图
@@ -1572,6 +1573,12 @@ if (el("fs-wrap")) el("fs-wrap").checked = state.wrap;
 el("fs-wrap").addEventListener("change", (e) => {
   state.wrap = e.target.checked;
   localStorage.setItem("piweb-fs-wrap", state.wrap ? "1" : "0");
+  if (state.edit) {
+    // 编辑态就地切换，不重新读盘（否则未保存内容会被冲掉）
+    editorEl.wrap = state.wrap ? "soft" : "off";
+    editorEl.classList.toggle("wrap", state.wrap);
+    return;
+  }
   if (state.selected) openFile(state.selected); // 重新渲染正文（行号对齐方式不同）
 });
 
